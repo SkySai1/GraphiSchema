@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local application data
+/data/
+*.sqlite3
+*.sqlite3-*
+*.db
+
+# Swift and application build output
+.build/
+dist/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.tmp
+
+# Local environment configuration
+.env
+.env.*
+!.env.example

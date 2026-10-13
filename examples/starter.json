@@ -1,0 +1,160 @@
+{
+  "schema_version": "1.0",
+  "project": {
+    "id": "project_demo",
+    "title": "Защищённая веб-платформа"
+  },
+  "diagram": {
+    "type": "security_zones",
+    "layout_engine": "dot",
+    "direction": "LR",
+    "layout_mode": "auto",
+    "node_spacing": 0.55,
+    "rank_spacing": 0.8
+  },
+  "containers": [
+    {
+      "id": "dmz",
+      "label": "DMZ",
+      "parent_id": null,
+      "style": {
+        "fill": "#EFF6FF",
+        "stroke": "#93C5FD",
+        "text": "#1D4ED8"
+      }
+    },
+    {
+      "id": "internal",
+      "label": "Внутренний контур",
+      "parent_id": null,
+      "style": {
+        "fill": "#F0FDF4",
+        "stroke": "#86EFAC",
+        "text": "#15803D"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "client",
+      "label": "Пользователь",
+      "description": "Внешний клиент платформы",
+      "kind": "user",
+      "shape": "ellipse",
+      "container_id": null,
+      "style": {
+        "fill": "#FFFFFF",
+        "stroke": "#64748B",
+        "text": "#0F172A",
+        "penwidth": 1.5
+      },
+      "x": null,
+      "y": null
+    },
+    {
+      "id": "waf",
+      "label": "WAF",
+      "description": "Фильтрация HTTP-запросов",
+      "kind": "security",
+      "shape": "hexagon",
+      "container_id": "dmz",
+      "style": {
+        "fill": "#FFF7ED",
+        "stroke": "#F97316",
+        "text": "#9A3412",
+        "penwidth": 1.8
+      },
+      "x": null,
+      "y": null
+    },
+    {
+      "id": "api",
+      "label": "API Gateway",
+      "description": "Маршрутизация запросов приложения",
+      "kind": "gateway",
+      "shape": "box",
+      "container_id": "internal",
+      "style": {
+        "fill": "#FFFFFF",
+        "stroke": "#2563EB",
+        "text": "#0F172A",
+        "penwidth": 1.8
+      },
+      "x": null,
+      "y": null
+    },
+    {
+      "id": "database",
+      "label": "PostgreSQL",
+      "description": "Основное хранилище приложения",
+      "kind": "database",
+      "shape": "cylinder",
+      "container_id": "internal",
+      "style": {
+        "fill": "#F5F3FF",
+        "stroke": "#8B5CF6",
+        "text": "#4C1D95",
+        "penwidth": 1.8
+      },
+      "x": null,
+      "y": null
+    }
+  ],
+  "edges": [
+    {
+      "id": "https",
+      "source": "client",
+      "target": "waf",
+      "label": "HTTPS",
+      "direction": "forward",
+      "style": {
+        "line_style": "solid",
+        "color": "#2563EB",
+        "penwidth": 1.8,
+        "arrowhead": "normal",
+        "arrowtail": "none",
+        "constraint": true,
+        "weight": 1,
+        "minlen": 1
+      }
+    },
+    {
+      "id": "waf_api",
+      "source": "waf",
+      "target": "api",
+      "label": "HTTPS",
+      "direction": "forward",
+      "style": {
+        "line_style": "solid",
+        "color": "#16A34A",
+        "penwidth": 1.8,
+        "arrowhead": "normal",
+        "arrowtail": "none",
+        "constraint": true,
+        "weight": 1,
+        "minlen": 1
+      }
+    },
+    {
+      "id": "api_db",
+      "source": "api",
+      "target": "database",
+      "label": "SQL",
+      "direction": "both",
+      "style": {
+        "line_style": "dashed",
+        "color": "#7C3AED",
+        "penwidth": 1.5,
+        "arrowhead": "normal",
+        "arrowtail": "normal",
+        "constraint": true,
+        "weight": 1,
+        "minlen": 1
+      }
+    }
+  ],
+  "presentation": {
+    "theme": "light",
+    "background": "#FFFFFF"
+  }
+}
