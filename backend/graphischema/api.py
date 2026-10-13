@@ -57,6 +57,7 @@ def health() -> dict[str, str]:
         "status": "ok",
         "app": "GraphiSchema",
         "revision_merge": "three_way_v1",
+        "edge_routing": "graphviz_v1",
         "storage_scope": storage_scope,
     }
 

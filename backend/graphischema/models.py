@@ -39,6 +39,7 @@ class DiagramSettings(StrictModel):
     type: str = "architecture"
     layout_engine: Literal["dot", "neato", "fdp", "sfdp", "twopi", "circo"] = "dot"
     direction: Literal["TB", "LR", "BT", "RL"] = "LR"
+    edge_routing: Literal["straight", "angled", "orthogonal"] = "angled"
     layout_mode: Literal["auto", "manual"] = "auto"
     node_spacing: float = Field(default=0.55, ge=0.1, le=5)
     rank_spacing: float = Field(default=0.8, ge=0.1, le=5)

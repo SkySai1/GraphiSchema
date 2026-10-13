@@ -14,6 +14,12 @@ final class DiagramCanvasView: NSView {
 
     private var diagram: DiagramProject?
     private var diagramLayout: DiagramLayout?
+    private var nodeByID: [String: DiagramNode] = [:]
+    private var containerByID: [String: DiagramContainer] = [:]
+    private var edgeByID: [String: DiagramEdge] = [:]
+    private var layoutNodeByID: [String: LayoutNode] = [:]
+    private var memberPositionsByContainer: [String: [LayoutNode]] = [:]
+    private var orderedContainers: [DiagramContainer] = []
     private var selection: DiagramSelection = .project
     private var scale: CGFloat = 80
     private var offset = NSPoint(x: 24, y: 24)
@@ -56,14 +62,155 @@ final class DiagramCanvasView: NSView {
     func update(diagram: DiagramProject?, layout: DiagramLayout?, selection: DiagramSelection) {
         let wasEmpty = diagramLayout == nil
         self.diagram = diagram
-        diagramLayout = layout
+        if let diagram {
+            let base = layout ?? DiagramLayout(engine: diagram.diagram.layoutEngine, width: 4, height: 2.5,
+                                               minX: 0, minY: 0, nodes: [], edges: [])
+            diagramLayout = layoutWithPendingGeometry(diagram, base: base)
+        } else {
+            diagramLayout = nil
+        }
         self.selection = selection
+        nodeByID = Dictionary(uniqueKeysWithValues: (diagram?.nodes ?? []).map { ($0.id, $0) })
+        containerByID = Dictionary(uniqueKeysWithValues: (diagram?.containers ?? []).map { ($0.id, $0) })
+        edgeByID = Dictionary(uniqueKeysWithValues: (diagram?.edges ?? []).map { ($0.id, $0) })
+        layoutNodeByID = Dictionary(uniqueKeysWithValues: (diagramLayout?.nodes ?? []).map { ($0.id, $0) })
+        rebuildContainerGeometryIndex()
         dragPreview.removeAll()
         nodeSizePreview.removeAll()
         containerPaddingPreview.removeAll()
-        if wasEmpty, layout != nil { shouldFitOnLayout = true }
+        if wasEmpty, diagramLayout != nil { shouldFitOnLayout = true }
         needsDisplay = true
         if shouldFitOnLayout { fitToContent() }
+    }
+
+    private func layoutWithPendingGeometry(_ diagram: DiagramProject, base: DiagramLayout) -> DiagramLayout {
+        let currentIDs = Set(diagram.nodes.map(\.id))
+        var nodes = base.nodes.filter { currentIDs.contains($0.id) }
+        let originalPositions = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
+        var nodeIndexes = Dictionary(uniqueKeysWithValues: nodes.enumerated().map { ($0.element.id, $0.offset) })
+        let horizontal = ["LR", "RL"].contains(diagram.diagram.direction)
+        for node in diagram.nodes {
+            guard let index = nodeIndexes[node.id] else { continue }
+            if diagram.diagram.layoutMode == "manual", let x = node.x, let y = node.y {
+                nodes[index].x = x
+                nodes[index].y = y
+            }
+            if let width = node.width { nodes[index].width = width }
+            if let height = node.height { nodes[index].height = height }
+        }
+
+        var rightExtent = nodes.map { $0.x + $0.width / 2 }.max() ?? 0
+        var bottomExtent = nodes.map { $0.y + $0.height / 2 }.max() ?? 0
+        var lastX = nodes.last?.x
+        var lastY = nodes.last?.y
+        for node in diagram.nodes where nodeIndexes[node.id] == nil {
+            let width = node.width ?? 1.6
+            let height = node.height ?? 0.62
+            let x: Double
+            let y: Double
+            if diagram.diagram.layoutMode == "manual", let manualX = node.x, let manualY = node.y {
+                x = manualX; y = manualY
+            } else if nodes.isEmpty {
+                x = width / 2 + 0.7; y = height / 2 + 0.7
+            } else if horizontal {
+                x = rightExtent + width / 2 + 0.85
+                y = lastY ?? height / 2 + 0.7
+            } else {
+                x = lastX ?? width / 2 + 0.7
+                y = bottomExtent + height / 2 + 0.85
+            }
+            nodeIndexes[node.id] = nodes.count
+            nodes.append(LayoutNode(id: node.id, x: x, y: y, width: width, height: height))
+            rightExtent = max(rightExtent, x + width / 2)
+            bottomExtent = max(bottomExtent, y + height / 2)
+            lastX = x
+            lastY = y
+        }
+
+        let positions = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
+        let existingEdges = Dictionary(uniqueKeysWithValues: base.edges.map { ($0.id, $0) })
+        var edges: [LayoutEdge] = []
+        for edge in diagram.edges {
+            guard let source = positions[edge.source], let target = positions[edge.target] else { continue }
+            if (base.edgeRouting ?? diagram.diagram.edgeRouting) == diagram.diagram.edgeRouting,
+               let oldSource = originalPositions[edge.source], let oldTarget = originalPositions[edge.target],
+               sameGeometry(source, oldSource), sameGeometry(target, oldTarget),
+               let existing = existingEdges[edge.id], existing.source == edge.source, existing.target == edge.target {
+                edges.append(existing)
+                continue
+            }
+            let points = routedPoints(source: source, target: target, routing: diagram.diagram.edgeRouting, horizontal: horizontal)
+            let start = points[0], end = points[points.count - 1]
+            edges.append(LayoutEdge(
+                id: edge.id, source: edge.source, target: edge.target, points: points, label: edge.label,
+                labelX: (start.x + end.x) / 2, labelY: (start.y + end.y) / 2
+            ))
+        }
+        let minX = min(base.minX, nodes.map { $0.x - $0.width / 2 }.min() ?? base.minX)
+        let minY = min(base.minY, nodes.map { $0.y - $0.height / 2 }.min() ?? base.minY)
+        let maxX = max(base.minX + base.width, nodes.map { $0.x + $0.width / 2 }.max() ?? 0)
+        let maxY = max(base.minY + base.height, nodes.map { $0.y + $0.height / 2 }.max() ?? 0)
+        return DiagramLayout(engine: base.engine, edgeRouting: diagram.diagram.edgeRouting, width: maxX - minX,
+                             height: maxY - minY, minX: minX, minY: minY, nodes: nodes, edges: edges)
+    }
+
+    private func sameGeometry(_ first: LayoutNode, _ second: LayoutNode) -> Bool {
+        abs(first.x - second.x) < 0.001 && abs(first.y - second.y) < 0.001
+            && abs(first.width - second.width) < 0.001 && abs(first.height - second.height) < 0.001
+    }
+
+    private func routedPoints(source: LayoutNode, target: LayoutNode, routing: String, horizontal: Bool) -> [LayoutPoint] {
+        let start = clippedPoint(center: source, toward: target)
+        let end = clippedPoint(center: target, toward: source)
+        if routing == "orthogonal" {
+            if horizontal {
+                let middleX = (start.x + end.x) / 2
+                return [start, LayoutPoint(x: middleX, y: start.y), LayoutPoint(x: middleX, y: end.y), end]
+            }
+            let middleY = (start.y + end.y) / 2
+            return [start, LayoutPoint(x: start.x, y: middleY), LayoutPoint(x: end.x, y: middleY), end]
+        }
+        if routing == "angled" {
+            let bend = horizontal
+                ? LayoutPoint(x: (start.x + end.x) / 2, y: start.y)
+                : LayoutPoint(x: start.x, y: (start.y + end.y) / 2)
+            return [start, bend, end]
+        }
+        return [start, end]
+    }
+
+    private func clippedPoint(center: LayoutNode, toward target: LayoutNode) -> LayoutPoint {
+        let dx = target.x - center.x, dy = target.y - center.y
+        guard dx != 0 || dy != 0 else { return LayoutPoint(x: center.x, y: center.y) }
+        let xScale = dx == 0 ? Double.infinity : center.width / 2 / abs(dx)
+        let yScale = dy == 0 ? Double.infinity : center.height / 2 / abs(dy)
+        let factor = min(xScale, yScale)
+        return LayoutPoint(x: center.x + dx * factor, y: center.y + dy * factor)
+    }
+
+    private func rebuildContainerGeometryIndex() {
+        memberPositionsByContainer.removeAll(keepingCapacity: true)
+        guard let diagram else { orderedContainers = []; return }
+        for node in diagram.nodes {
+            guard let position = layoutNodeByID[node.id] else { continue }
+            var parent = node.containerId
+            var visited: Set<String> = []
+            while let id = parent, let container = containerByID[id], visited.insert(id).inserted {
+                memberPositionsByContainer[id, default: []].append(position)
+                parent = container.parentId
+            }
+        }
+        func depth(_ container: DiagramContainer) -> Int {
+            var level = 0
+            var parent = container.parentId
+            var visited: Set<String> = [container.id]
+            while let id = parent, let ancestor = containerByID[id], visited.insert(id).inserted {
+                level += 1
+                parent = ancestor.parentId
+            }
+            return level
+        }
+        orderedContainers = diagram.containers.sorted { depth($0) > depth($1) }
     }
 
     func zoom(by factor: CGFloat) {
@@ -133,7 +280,7 @@ final class DiagramCanvasView: NSView {
         if isReadOnly { return }
         if case .container(let id) = selection,
            let diagram, let layout = diagramLayout,
-           let container = diagram.containers.first(where: { $0.id == id }),
+           let container = containerByID[id],
            let rect = containerScreenRect(id, diagram: diagram, layout: layout) {
             let handle = NSRect(x: rect.maxX - 9, y: rect.maxY - 9, width: 18, height: 18)
             if handle.contains(point) {
@@ -145,9 +292,8 @@ final class DiagramCanvasView: NSView {
             }
         }
         if case .node(let id) = selection,
-           let diagram, let layout = diagramLayout,
-           let node = diagram.nodes.first(where: { $0.id == id }),
-           let position = layout.nodes.first(where: { $0.id == id }) {
+           let node = nodeByID[id],
+           let position = layoutNodeByID[id] {
             let size = nodeSizePreview[id] ?? (node.width ?? position.width, node.height ?? position.height)
             let rect = screenRect(center: NSPoint(x: CGFloat(position.x), y: CGFloat(position.y)),
                                   width: size.width, height: size.height)
@@ -201,7 +347,7 @@ final class DiagramCanvasView: NSView {
             return
         }
         draggingNodeID = node.id
-        guard let position = layout.nodes.first(where: { $0.id == node.id }) else { return }
+        guard let position = layoutNodeByID[node.id] else { return }
         let center = NSPoint(x: CGFloat(position.x), y: CGFloat(position.y))
         let pointer = worldPoint(for: point)
         dragPointerOffset = NSPoint(x: center.x - pointer.x, y: center.y - pointer.y)
@@ -397,9 +543,8 @@ final class DiagramCanvasView: NSView {
 
     private func hitNode(at point: NSPoint, diagram: DiagramProject, layout: DiagramLayout) -> DiagramNode? {
         let world = worldPoint(for: point)
-        let positions = Dictionary(uniqueKeysWithValues: layout.nodes.map { ($0.id, $0) })
         for node in diagram.nodes.reversed() {
-            guard let position = positions[node.id] else { continue }
+            guard let position = layoutNodeByID[node.id] else { continue }
             let center = dragPreview[node.id] ?? NSPoint(x: CGFloat(position.x), y: CGFloat(position.y))
             let size = nodeSizePreview[node.id] ?? (node.width ?? position.width, node.height ?? position.height)
             let width = CGFloat(size.width)
@@ -414,34 +559,19 @@ final class DiagramCanvasView: NSView {
 
     private func hitContainer(at point: NSPoint, diagram: DiagramProject, layout: DiagramLayout) -> String? {
         let world = worldPoint(for: point)
-        let containers = Dictionary(uniqueKeysWithValues: diagram.containers.map { ($0.id, $0) })
-        for container in diagram.containers.sorted(by: {
-            depth(of: $0, containers: containers) > depth(of: $1, containers: containers)
-        }) {
+        for container in orderedContainers {
             if containerWorldRect(container.id, diagram: diagram, layout: layout)?.contains(world) == true { return container.id }
         }
         return nil
     }
 
     private func memberPositions(_ containerID: String, diagram: DiagramProject, layout: DiagramLayout) -> [LayoutNode] {
-        let containers = Dictionary(uniqueKeysWithValues: diagram.containers.map { ($0.id, $0) })
-        let positions = Dictionary(uniqueKeysWithValues: layout.nodes.map { ($0.id, $0) })
-        return diagram.nodes.compactMap { node in
-            guard let position = positions[node.id] else { return nil }
-            var parent = node.containerId
-            while let id = parent, let container = containers[id] {
-                if id == containerID { return position }
-                parent = container.parentId
-            }
-            return nil
-        }
+        memberPositionsByContainer[containerID] ?? []
     }
 
     private func containerWorldRect(_ id: String, diagram: DiagramProject, layout: DiagramLayout) -> NSRect? {
-        guard let container = diagram.containers.first(where: { $0.id == id }),
-              let first = memberPositions(id, diagram: diagram, layout: layout).first
-        else { return nil }
         let nodes = memberPositions(id, diagram: diagram, layout: layout)
+        guard let container = containerByID[id], let first = nodes.first else { return nil }
         let firstCenter = dragPreview[first.id] ?? NSPoint(x: CGFloat(first.x), y: CGFloat(first.y))
         var rect = NSRect(x: firstCenter.x - CGFloat(first.width) / 2, y: firstCenter.y - CGFloat(first.height) / 2,
                           width: CGFloat(first.width), height: CGFloat(first.height))
@@ -492,9 +622,7 @@ final class DiagramCanvasView: NSView {
     }
 
     private func drawContainers(diagram: DiagramProject, layout: DiagramLayout) {
-        let containers = Dictionary(uniqueKeysWithValues: diagram.containers.map { ($0.id, $0) })
-        let ordered = diagram.containers.sorted { depth(of: $0, containers: containers) < depth(of: $1, containers: containers) }
-        for container in ordered {
+        for container in orderedContainers.reversed() {
             guard let rect = containerScreenRect(container.id, diagram: diagram, layout: layout) else { continue }
             let path = NSBezierPath(roundedRect: rect, xRadius: 11, yRadius: 11)
             NSColor(hex: container.style.fill).withAlphaComponent(0.42).setFill()
@@ -512,43 +640,11 @@ final class DiagramCanvasView: NSView {
         }
     }
 
-    private func depth(of container: DiagramContainer, containers: [String: DiagramContainer]) -> Int {
-        var level = 0
-        var parent = container.parentId
-        while let id = parent, let item = containers[id], level < containers.count {
-            level += 1
-            parent = item.parentId
-        }
-        return level
-    }
-
     private func drawEdges(diagram: DiagramProject, layout: DiagramLayout) {
-        let styles = Dictionary(uniqueKeysWithValues: diagram.edges.map { ($0.id, $0) })
         for edgeLayout in layout.edges {
-            guard let edge = styles[edgeLayout.id], edgeLayout.points.count >= 2 else { continue }
-            var worldPoints = edgeLayout.points.map { NSPoint(x: CGFloat($0.x), y: CGFloat($0.y)) }
-            if let sourcePosition = layout.nodes.first(where: { $0.id == edge.source }),
-               let draggedSource = dragPreview[edge.source] {
-                let delta = NSPoint(x: draggedSource.x - CGFloat(sourcePosition.x), y: draggedSource.y - CGFloat(sourcePosition.y))
-                worldPoints[0].x += delta.x
-                worldPoints[0].y += delta.y
-                if worldPoints.count > 2 {
-                    worldPoints[1].x += delta.x
-                    worldPoints[1].y += delta.y
-                }
-            }
-            if let targetPosition = layout.nodes.first(where: { $0.id == edge.target }),
-               let draggedTarget = dragPreview[edge.target] {
-                let delta = NSPoint(x: draggedTarget.x - CGFloat(targetPosition.x), y: draggedTarget.y - CGFloat(targetPosition.y))
-                let last = worldPoints.count - 1
-                worldPoints[last].x += delta.x
-                worldPoints[last].y += delta.y
-                if last > 1 {
-                    worldPoints[last - 1].x += delta.x
-                    worldPoints[last - 1].y += delta.y
-                }
-            }
-            let points = worldPoints.map { screenPoint(for: $0) }
+            guard let edge = edgeByID[edgeLayout.id], edgeLayout.points.count >= 2 else { continue }
+            let points = displayedEdgePoints(edge, geometry: edgeLayout, settings: diagram.diagram).map { screenPoint(for: $0) }
+            guard points.count >= 2 else { continue }
             let path = NSBezierPath()
             let isSelected = selection == .edge(edge.id)
             if isSelected {
@@ -593,9 +689,8 @@ final class DiagramCanvasView: NSView {
     }
 
     private func drawNodes(diagram: DiagramProject, layout: DiagramLayout) {
-        let positions = Dictionary(uniqueKeysWithValues: layout.nodes.map { ($0.id, $0) })
         for node in diagram.nodes {
-            guard let position = positions[node.id] else { continue }
+            guard let position = layoutNodeByID[node.id] else { continue }
             let center = dragPreview[node.id] ?? NSPoint(x: CGFloat(position.x), y: CGFloat(position.y))
             let size = nodeSizePreview[node.id] ?? (node.width ?? position.width, node.height ?? position.height)
             let rect = screenRect(center: center, width: size.width, height: size.height)
@@ -630,9 +725,8 @@ final class DiagramCanvasView: NSView {
 
     private func drawConnectionPreview() {
         guard let sourceID = connectingFromNodeID, let pointer = connectionPointer,
-              let diagram, let layout = diagramLayout,
-              let node = diagram.nodes.first(where: { $0.id == sourceID }),
-              let position = layout.nodes.first(where: { $0.id == sourceID }) else { return }
+              let node = nodeByID[sourceID],
+              let position = layoutNodeByID[sourceID] else { return }
         let size = nodeSizePreview[sourceID] ?? (node.width ?? position.width, node.height ?? position.height)
         let start = screenPoint(for: NSPoint(x: CGFloat(position.x + size.width / 2), y: CGFloat(position.y)))
         let path = NSBezierPath()
@@ -647,45 +741,49 @@ final class DiagramCanvasView: NSView {
         path.stroke()
     }
 
-    private func appendEdgeSegments(_ points: [NSPoint], to path: NSBezierPath) {
-        if points.count >= 4 {
-            var index = 1
-            while index + 2 < points.count {
-                path.curve(to: points[index + 2], controlPoint1: points[index], controlPoint2: points[index + 1])
-                index += 3
-            }
-            if index < points.count { path.line(to: points[points.count - 1]) }
-        } else {
-            for point in points.dropFirst() { path.line(to: point) }
+    private func displayedEdgePoints(_ edge: DiagramEdge, geometry: LayoutEdge, settings: DiagramSettings) -> [NSPoint] {
+        var points = geometry.points
+        let hasPreview = dragPreview[edge.source] != nil || dragPreview[edge.target] != nil
+            || nodeSizePreview[edge.source] != nil || nodeSizePreview[edge.target] != nil
+        if hasPreview, let source = layoutNodeByID[edge.source], let target = layoutNodeByID[edge.target] {
+            points = routedPoints(source: previewPosition(source), target: previewPosition(target),
+                                  routing: settings.edgeRouting, horizontal: ["LR", "RL"].contains(settings.direction))
         }
+        if settings.edgeRouting == "straight", let first = points.first, let last = points.last {
+            points = [first, last]
+        }
+        var result: [NSPoint] = []
+        for point in points {
+            let next = NSPoint(x: CGFloat(point.x), y: CGFloat(point.y))
+            if let last = result.last, hypot(last.x - next.x, last.y - next.y) < 0.00001 { continue }
+            result.append(next)
+        }
+        return result
+    }
+
+    private func previewPosition(_ position: LayoutNode) -> LayoutNode {
+        var result = position
+        if let center = dragPreview[position.id] {
+            result.x = Double(center.x)
+            result.y = Double(center.y)
+        }
+        if let size = nodeSizePreview[position.id] {
+            result.width = size.width
+            result.height = size.height
+        }
+        return result
+    }
+
+    private func appendEdgeSegments(_ points: [NSPoint], to path: NSBezierPath) {
+        for point in points.dropFirst() { path.line(to: point) }
     }
 
     private func hitEdge(at point: NSPoint, diagram: DiagramProject, layout: DiagramLayout) -> String? {
         for edge in layout.edges.reversed() where edge.points.count >= 2 {
-            let points = edge.points.map { screenPoint(for: NSPoint(x: CGFloat($0.x), y: CGFloat($0.y))) }
-            if points.count >= 4 {
-                var start = points[0]
-                var index = 1
-                while index + 2 < points.count {
-                    let c1 = points[index], c2 = points[index + 1], end = points[index + 2]
-                    var previous = start
-                    for step in 1...24 {
-                        let t = CGFloat(step) / 24
-                        let u = 1 - t
-                        let sample = NSPoint(
-                            x: u*u*u*start.x + 3*u*u*t*c1.x + 3*u*t*t*c2.x + t*t*t*end.x,
-                            y: u*u*u*start.y + 3*u*u*t*c1.y + 3*u*t*t*c2.y + t*t*t*end.y
-                        )
-                        if distance(point, toSegmentFrom: previous, to: sample) <= 8 { return edge.id }
-                        previous = sample
-                    }
-                    start = end
-                    index += 3
-                }
-            } else {
-                for pair in zip(points, points.dropFirst()) where distance(point, toSegmentFrom: pair.0, to: pair.1) <= 8 {
-                    return edge.id
-                }
+            guard let modelEdge = edgeByID[edge.id] else { continue }
+            let points = displayedEdgePoints(modelEdge, geometry: edge, settings: diagram.diagram).map { screenPoint(for: $0) }
+            for pair in zip(points, points.dropFirst()) where distance(point, toSegmentFrom: pair.0, to: pair.1) <= 8 {
+                return edge.id
             }
         }
         return nil

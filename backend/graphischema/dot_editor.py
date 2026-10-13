@@ -199,7 +199,7 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
     parser = _Parser(source)
     node_statements, container_statements, edge_statements = parser.parse()
     graph_attrs = parser.graph_attrs
-    _check_attrs(graph_attrs, {"rankdir", "bgcolor", "nodesep", "ranksep", "compound", "pad", "notranslate"}, "графа")
+    _check_attrs(graph_attrs, {"rankdir", "splines", "bgcolor", "nodesep", "ranksep", "compound", "pad", "notranslate"}, "графа")
     if graph_attrs.get("compound", "true").lower() != "true":
         raise DOTEditError("compound=false нельзя сохранить в канонической модели")
     if graph_attrs.get("pad", "0.25") != "0.25":
@@ -298,6 +298,11 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
     if direction not in {"TB", "LR", "BT", "RL"}:
         raise DOTEditError(f"Неподдерживаемый rankdir: {direction!r}")
     candidate_data["diagram"]["direction"] = direction
+    routing = graph_attrs.get("splines", {"straight": "line", "angled": "polyline", "orthogonal": "ortho"}[project.diagram.edge_routing])
+    routing_by_dot = {"line": "straight", "false": "straight", "polyline": "angled", "ortho": "orthogonal"}
+    if routing not in routing_by_dot:
+        raise DOTEditError(f"Неподдерживаемый splines: {routing!r}. Используйте line, polyline или ortho")
+    candidate_data["diagram"]["edge_routing"] = routing_by_dot[routing]
     if "nodesep" in graph_attrs:
         candidate_data["diagram"]["node_spacing"] = _number(graph_attrs["nodesep"], "nodesep")
     if "ranksep" in graph_attrs:

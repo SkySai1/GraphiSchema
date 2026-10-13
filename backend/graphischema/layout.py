@@ -17,6 +17,8 @@ class LayoutError(RuntimeError):
 def compute_layout(project: DiagramProject, timeout: float = 8.0) -> dict[str, object]:
     """Return normalized node and edge geometry in Graphviz inches."""
     engine = "neato" if project.diagram.layout_mode == "manual" else project.diagram.layout_engine
+    if not project.nodes:
+        return _fallback_layout(project, engine=engine)
     binary = shutil.which(engine)
     if not binary:
         return _fallback_layout(project, engine="fallback")
@@ -112,7 +114,8 @@ def _parse_plain(project: DiagramProject, source: str, engine: str) -> dict[str,
         max_y = max([height, *(node["y"] + node["height"] / 2 for node in nodes),
                      *(point["y"] for edge in edges for point in edge["points"])])
         width, height = max_x - min_x, max_y - min_y
-    return {"engine": engine, "width": width, "height": height, "minX": min_x, "minY": min_y,
+    return {"engine": engine, "edgeRouting": project.diagram.edge_routing,
+            "width": width, "height": height, "minX": min_x, "minY": min_y,
             "nodes": nodes, "edges": edges}
 
 
@@ -195,13 +198,12 @@ def _fallback_layout(project: DiagramProject, engine: str) -> dict[str, object]:
         target = positions[edge.target]
         start = _clip_to_node(source, target, by_id[edge.source]["width"], by_id[edge.source]["height"])
         end = _clip_to_node(target, source, by_id[edge.target]["width"], by_id[edge.target]["height"])
-        one_third = ((2 * start[0] + end[0]) / 3, (2 * start[1] + end[1]) / 3)
-        two_thirds = ((start[0] + 2 * end[0]) / 3, (start[1] + 2 * end[1]) / 3)
+        points = route_edge_points(start, end, project.diagram.edge_routing, horizontal)
         edges.append({
             "id": edge.id,
             "source": edge.source,
             "target": edge.target,
-            "points": [{"x": x, "y": y} for x, y in (start, one_third, two_thirds, end)],
+            "points": [{"x": x, "y": y} for x, y in points],
             "label": edge.label,
             "labelX": (start[0] + end[0]) / 2,
             "labelY": (start[1] + end[1]) / 2 + 0.18,
@@ -215,8 +217,27 @@ def _fallback_layout(project: DiagramProject, engine: str) -> dict[str, object]:
     max_y = max([height, *(node["y"] + node["height"] / 2 for node in nodes),
                  *(point["y"] for edge in edges for point in edge["points"])])
     width, height = max_x - min_x, max_y - min_y
-    return {"engine": engine, "width": width, "height": height, "minX": min_x, "minY": min_y,
+    return {"engine": engine, "edgeRouting": project.diagram.edge_routing,
+            "width": width, "height": height, "minX": min_x, "minY": min_y,
             "nodes": nodes, "edges": edges}
+
+
+def route_edge_points(
+    start: tuple[float, float], end: tuple[float, float], routing: str, horizontal: bool
+) -> list[tuple[float, float]]:
+    """Route a provisional/fallback edge in the same coordinate space as its endpoints."""
+    sx, sy = start
+    tx, ty = end
+    if routing == "orthogonal":
+        if horizontal:
+            bend = (sx + tx) / 2
+            return [start, (bend, sy), (bend, ty), end]
+        bend = (sy + ty) / 2
+        return [start, (sx, bend), (tx, bend), end]
+    if routing == "angled":
+        bend = ((sx + tx) / 2, sy) if horizontal else (sx, (sy + ty) / 2)
+        return [start, bend, end]
+    return [start, end]
 
 
 def _clip_to_node(center: tuple[float, float], other: tuple[float, float], width: float, height: float) -> tuple[float, float]:

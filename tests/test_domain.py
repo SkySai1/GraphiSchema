@@ -86,6 +86,16 @@ def test_dot_generation_is_deterministic_and_escapes_labels(project: DiagramProj
     assert '"waf" -> "api"' in dot
 
 
+@pytest.mark.parametrize(("routing", "splines"), [
+    ("straight", 'splines="line"'),
+    ("angled", 'splines="polyline"'),
+    ("orthogonal", 'splines="ortho"'),
+])
+def test_edge_routing_maps_to_graphviz_splines(project: DiagramProject, routing: str, splines: str) -> None:
+    project.diagram.edge_routing = routing
+    assert splines in to_dot(project)
+
+
 def test_quality_validation_reports_disconnected_node(project: DiagramProject) -> None:
     project.nodes.append(DiagramNode(id="orphan", label="Orphan"))
     issues = validate_diagram(project)

@@ -26,6 +26,8 @@ final class AppModel: ObservableObject {
     private var isSaving = false
     private var saveQueued = false
     private var lastSerializedJSON = ""
+    private var cachedJSONProject: DiagramProject?
+    private var cachedPrettyJSON = ""
     private var lastSerializedDOT = ""
     private var dotPreviewSource: String?
     private var proposalBaseRevision: String?
@@ -80,6 +82,14 @@ final class AppModel: ObservableObject {
         guard !isEditingLocked else { return }
         guard var current = diagram else { return }
         current.diagram.direction = value
+        diagram = current
+        changed()
+    }
+
+    func updateEdgeRouting(_ value: String) {
+        guard !isEditingLocked, ["straight", "angled", "orthogonal"].contains(value) else { return }
+        guard var current = diagram, current.diagram.edgeRouting != value else { return }
+        current.diagram.edgeRouting = value
         diagram = current
         changed()
     }
@@ -788,8 +798,12 @@ final class AppModel: ObservableObject {
     }
 
     func prettyJSON(_ value: DiagramProject?) -> String {
-        guard let value, let data = try? encode(value) else { return "" }
-        return String(data: data, encoding: .utf8) ?? ""
+        guard let value else { return "" }
+        if value == cachedJSONProject { return cachedPrettyJSON }
+        guard let data = try? encode(value), let text = String(data: data, encoding: .utf8) else { return "" }
+        cachedJSONProject = value
+        cachedPrettyJSON = text
+        return text
     }
 
     func mergeProject(base: String, local: DiagramProject, remote: DiagramProject) -> DiagramProject? {

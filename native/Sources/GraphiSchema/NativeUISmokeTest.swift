@@ -5,9 +5,11 @@ enum NativeUISmokeTest {
     static func run() {
         _ = NSApplication.shared
         let model = AppModel()
-        let starterURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-            .appendingPathComponent("examples/starter.json")
-        guard let starterData = try? Data(contentsOf: starterURL) else {
+        let candidates = [
+            Bundle.main.resourceURL?.appendingPathComponent("GraphiSchema/examples/starter.json"),
+            URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("examples/starter.json"),
+        ].compactMap { $0 }
+        guard let starterData = candidates.lazy.compactMap({ try? Data(contentsOf: $0) }).first else {
             fatalError("Native UI smoke test cannot load examples/starter.json.")
         }
         let decoder = JSONDecoder()
@@ -107,6 +109,22 @@ enum NativeUISmokeTest {
             if let all = collectionPicker.itemArray.first(where: { ($0.representedObject as? String) == "all" }) {
                 collectionPicker.select(all)
                 _ = NSApp.sendAction(collectionPicker.action!, to: collectionPicker.target, from: collectionPicker)
+                for _ in 0..<12 {
+                    collectionPicker.select(tabler)
+                    _ = NSApp.sendAction(collectionPicker.action!, to: collectionPicker.target, from: collectionPicker)
+                    collectionPicker.select(all)
+                    _ = NSApp.sendAction(collectionPicker.action!, to: collectionPicker.target, from: collectionPicker)
+                }
+                guard let reusedTile = findView(identifier: "palette-item-template:service", in: root),
+                      reusedTile === firstPaletteTile,
+                      let column = reusedTile.superview,
+                      column.constraints.filter({
+                          $0.isActive && $0.firstAttribute == .width && $0.relation == .equal
+                              && ($0.firstItem as? NSView) === reusedTile && ($0.secondItem as? NSView) === column
+                      }).count == 1
+                else {
+                    fatalError("Native UI smoke test failed: repeated collection switches must reuse tiles without accumulating width constraints.")
+                }
             }
         }
         model.selection = .node("waf")
@@ -127,8 +145,10 @@ enum NativeUISmokeTest {
         let fillWell = findView(identifier: "inspector-field-Заливка", in: styleContent) as? NSColorWell
         let borderWell = findView(identifier: "inspector-field-Граница", in: styleContent) as? NSColorWell
         let propertiesScroll = findView(identifier: "inspector-properties-scroll", in: styleContent) as? NSScrollView
+        let nodePropertiesHeight = styleContent.frame.height
         guard styleWindow?.isVisible == true,
               styleWindow?.frame.width ?? 0 >= 440,
+              styleWindow?.frame.height ?? 700 < 650,
               nameField?.isEnabled == true,
               (nameField?.frame.width ?? 0) >= 180,
               (fillWell?.frame.width ?? 0) >= 180,
@@ -138,7 +158,35 @@ enum NativeUISmokeTest {
         else {
             fatalError("Native UI smoke test failed: unusable style layout (visible=\(styleWindow?.isVisible ?? false), window=\(styleWindow?.frame ?? .zero), content=\(styleContent.frame)/\(styleContent.bounds), name=\(nameField?.frame ?? .zero), enabled=\(nameField?.isEnabled ?? false), fill=\(fillWell?.frame ?? .zero), border=\(borderWell?.frame ?? .zero), scrollFrame=\(propertiesScroll?.frame ?? .zero), scroll=\(propertiesScroll?.contentView.bounds ?? .zero)).")
         }
-        if let nameField, let action = nameField.action {
+        model.selection = .project
+        mainWindow.refreshAll()
+        let projectPropertiesHeight = styleWindow?.contentView?.frame.height ?? 0
+        guard let routingPicker = findView(identifier: "inspector-field-Маршрут связей", in: styleContent) as? NSPopUpButton,
+              Set(routingPicker.itemArray.compactMap { $0.representedObject as? String }) == Set(["straight", "angled", "orthogonal"]),
+              projectPropertiesHeight >= 280,
+              projectPropertiesHeight < nodePropertiesHeight
+        else {
+            fatalError("Native UI smoke test failed: project properties must offer straight, angled, and orthogonal edge routes.")
+        }
+        let originalRouting = model.diagram?.diagram.edgeRouting ?? "angled"
+        if let orthogonal = routingPicker.itemArray.first(where: { ($0.representedObject as? String) == "orthogonal" }),
+           let routingAction = routingPicker.action {
+            routingPicker.select(orthogonal)
+            _ = NSApp.sendAction(routingAction, to: routingPicker.target, from: routingPicker)
+            guard model.diagram?.diagram.edgeRouting == "orthogonal", model.jsonDraft.contains("orthogonal") else {
+                fatalError("Native UI smoke test failed: routing actions must update the project and synchronized JSON.")
+            }
+            model.updateEdgeRouting(originalRouting)
+        }
+        model.selection = .edge(starter.edges.first?.id ?? "")
+        mainWindow.refreshAll()
+        guard findView(identifier: "inspector-field-Маршрут всех связей", in: styleContent) is NSPopUpButton else {
+            fatalError("Native UI smoke test failed: selected edge properties must expose the shared routing setting.")
+        }
+        model.selection = .node("waf")
+        mainWindow.refreshAll()
+        if let nameField = findView(identifier: "inspector-field-Название", in: styleContent) as? NSTextField,
+           let action = nameField.action {
             let oldName = model.nodes.first(where: { $0.id == "waf" })?.label ?? "WAF"
             nameField.stringValue = "Inspector smoke edit"
             _ = NSApp.sendAction(action, to: nameField.target, from: nameField)
@@ -161,6 +209,9 @@ enum NativeUISmokeTest {
             mainWindow.refreshAll()
         } else {
             fatalError("Native UI smoke test failed: selected object name must have an active edit action.")
+        }
+        guard findView(identifier: "palette-item-template:service", in: root) === firstPaletteTile else {
+            fatalError("Native UI smoke test failed: changing diagram properties must preserve palette views.")
         }
 
         let historyWindow = VersionHistoryWindowController(model: model, onRestore: {}, onShowDiff: { _ in })
@@ -188,7 +239,7 @@ enum NativeUISmokeTest {
         else {
             fatalError("Native UI smoke test failed: expected editor, style, and Ollama windows.")
         }
-        print("Native UI smoke test passed: bundled SVG collections load dynamically, inspector controls are visible and interactive, version history, populated JSON, chat, and Ollama settings.")
+        print("Native UI smoke test passed: cached SVG collections, compact interactive inspector, three edge routes, version history, synchronized JSON, chat, and Ollama settings.")
     }
 
     private static func findEditorSplit(in view: NSView) -> NSSplitView? {

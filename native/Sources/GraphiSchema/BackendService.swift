@@ -103,6 +103,7 @@ final class BackendService: ObservableObject {
             return payload["app"] == "GraphiSchema"
                 && payload["status"] == "ok"
                 && payload["revision_merge"] == "three_way_v1"
+                && payload["edge_routing"] == "graphviz_v1"
                 && payload["storage_scope"] == "application-support"
         } catch {
             return false

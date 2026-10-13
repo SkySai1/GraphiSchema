@@ -19,9 +19,25 @@ struct DiagramSettings: Codable, Equatable {
     var type: String
     var layoutEngine: String
     var direction: String
+    var edgeRouting: String
     var layoutMode: String
     var nodeSpacing: Double
     var rankSpacing: Double
+
+    enum CodingKeys: String, CodingKey {
+        case type, layoutEngine, direction, edgeRouting, layoutMode, nodeSpacing, rankSpacing
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        type = try values.decode(String.self, forKey: .type)
+        layoutEngine = try values.decode(String.self, forKey: .layoutEngine)
+        direction = try values.decode(String.self, forKey: .direction)
+        edgeRouting = try values.decodeIfPresent(String.self, forKey: .edgeRouting) ?? "angled"
+        layoutMode = try values.decode(String.self, forKey: .layoutMode)
+        nodeSpacing = try values.decode(Double.self, forKey: .nodeSpacing)
+        rankSpacing = try values.decode(Double.self, forKey: .rankSpacing)
+    }
 }
 
 struct DiagramContainer: Codable, Equatable, Identifiable {
@@ -181,6 +197,7 @@ struct OllamaReviewReport: Decodable {
 
 struct DiagramLayout: Decodable, Equatable {
     var engine: String
+    var edgeRouting: String? = nil
     var width: Double
     var height: Double
     var minX: Double
@@ -416,7 +433,7 @@ enum PaletteItem: String, CaseIterable, Identifiable {
     }
 
     func loadIcon() -> NSImage? {
-        PaletteObject.resourceURL(for: iconPath).flatMap(NSImage.init(contentsOf:))
+        PaletteObject.loadCachedIcon(path: iconPath)
     }
 }
 
@@ -431,18 +448,9 @@ struct PaletteObject: Identifiable, Hashable {
     let symbol: String
     let iconPath: String
     let collectionID: String
-
-    func loadIcon() -> NSImage? {
-        Self.resourceURL(for: iconPath).flatMap(NSImage.init(contentsOf:))
-    }
-
-    static func resourceURL(for iconPath: String) -> URL? {
-        objectLibraryRoots()
-            .map { $0.appendingPathComponent(iconPath) }
-            .first(where: { FileManager.default.fileExists(atPath: $0.path) })
-    }
-
-    static func objectLibraryRoots() -> [URL] {
+    private static let iconCache = NSCache<NSString, NSImage>()
+    private static let iconURLCache = NSCache<NSString, NSURL>()
+    private static let libraryRoots: [URL] = {
         var roots: [URL] = []
         if let resourceURL = Bundle.main.resourceURL {
             roots.append(resourceURL.appendingPathComponent("GraphiSchema/resources/object-library", isDirectory: true))
@@ -455,6 +463,49 @@ struct PaletteObject: Identifiable, Hashable {
         roots.append(sourceRoot.appendingPathComponent("resources/object-library", isDirectory: true))
         var seen: Set<String> = []
         return roots.filter { seen.insert($0.standardizedFileURL.path).inserted }
+    }()
+
+    func loadIcon() -> NSImage? {
+        Self.loadCachedIcon(path: iconPath)
+    }
+
+    func loadIconAsync(completion: @escaping (NSImage?) -> Void) {
+        let cacheKey = iconPath as NSString
+        if let cached = Self.iconCache.object(forKey: cacheKey) {
+            completion(cached)
+            return
+        }
+        DispatchQueue.global(qos: .utility).async {
+            let data = Self.resourceURL(for: self.iconPath).flatMap { try? Data(contentsOf: $0) }
+            DispatchQueue.main.async {
+                let image = data.flatMap(NSImage.init(data:))
+                if let image { Self.iconCache.setObject(image, forKey: cacheKey) }
+                completion(image)
+            }
+        }
+    }
+
+    static func loadCachedIcon(path: String) -> NSImage? {
+        let key = path as NSString
+        if let cached = iconCache.object(forKey: key) { return cached }
+        guard let url = resourceURL(for: path), let image = NSImage(contentsOf: url) else { return nil }
+        iconCache.setObject(image, forKey: key)
+        return image
+    }
+
+    static func resourceURL(for iconPath: String) -> URL? {
+        let key = iconPath as NSString
+        if let cached = iconURLCache.object(forKey: key) { return cached as URL }
+        let candidates = objectLibraryRoots()
+            .map { $0.appendingPathComponent(iconPath) }
+        guard let url = candidates.first(where: { FileManager.default.fileExists(atPath: $0.path) })
+        else { return nil }
+        iconURLCache.setObject(url as NSURL, forKey: key)
+        return url
+    }
+
+    static func objectLibraryRoots() -> [URL] {
+        libraryRoots
     }
 }
 

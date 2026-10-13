@@ -20,6 +20,9 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
     private var ollamaWindowController: OllamaAssistantWindowController?
     private var retainedActions: [ControlAction] = []
     private var didSetInitialSplitPositions = false
+    private var lastCanvasDiagram: DiagramProject?
+    private var lastCanvasLayout: DiagramLayout?
+    private var lastCanvasSelection: DiagramSelection?
 
     init(model: AppModel) {
         self.model = model
@@ -43,7 +46,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
     func refreshAll() {
         refreshSidebar()
         refreshInspector()
-        workspace.refresh(model: model)
+        refreshCanvas(force: true)
         codePanel.refresh(model: model)
         refreshHeader()
     }
@@ -176,21 +179,21 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
     }
 
     private func connectModel() {
-        sidebar.onAddNode = { [weak self] item in self?.model.addNode(item); self?.refreshAll() }
-        sidebar.onAddContainer = { [weak self] in self?.model.addContainer(); self?.refreshAll() }
-        sidebar.onAddEdge = { [weak self] in self?.model.addEdge(); self?.refreshAll() }
+        sidebar.onAddNode = { [weak self] item in self?.model.addNode(item) }
+        sidebar.onAddContainer = { [weak self] in self?.model.addContainer() }
+        sidebar.onAddEdge = { [weak self] in self?.model.addEdge() }
         sidebar.onSelect = { [weak self] selection in
             self?.model.selection = selection
             self?.refreshInspector()
             self?.refreshSidebar()
-            if let self { self.workspace.refresh(model: self.model) }
+            if let self { self.refreshCanvas(force: true) }
         }
         workspace.onSelectElement = { [weak self] selection in
             guard let self else { return }
             self.model.selection = selection
             self.refreshInspector()
             self.refreshSidebar()
-            self.workspace.refresh(model: self.model)
+            self.refreshCanvas(force: true)
         }
         workspace.onMoveNode = { [weak self] id, x, y in
             self?.model.moveNode(id, x: x, y: y)
@@ -200,7 +203,6 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
         }
         workspace.onCreateEdge = { [weak self] source, target in
             self?.model.addEdge(from: source, to: target)
-            self?.refreshAll()
         }
         workspace.onMoveContainer = { [weak self] id, x, y in
             self?.model.moveContainer(id, deltaX: x, deltaY: y)
@@ -211,8 +213,6 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
         workspace.onDropPaletteItem = { [weak self] item, x, y, containerID in
             guard let self else { return }
             self.model.addNode(item, at: (x: x, y: y), inContainer: containerID)
-            self.refreshSidebar()
-            self.refreshInspector()
             Task { @MainActor in
                 do { try await self.model.saveNow() }
                 catch { self.showAlert("Не удалось сохранить добавленный объект: \(error.localizedDescription)") }
@@ -255,14 +255,17 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
             self.refreshSidebar()
             self.refreshInspector()
             self.refreshHeader()
-            self.styleInspector?.setInteractionState(isEditingLocked: self.model.isEditingLocked)
+            self.refreshCanvasIfNeeded()
+            if self.styleWindowController?.window?.isVisible == true {
+                self.styleInspector?.setInteractionState(isEditingLocked: self.model.isEditingLocked)
+            }
             self.workspace.refreshCounts(model: self.model)
             self.workspace.setInteractionState(model: self.model)
             self.codePanel.refresh(model: self.model)
         }
         model.onPreviewChange = { [weak self] in
             guard let self else { return }
-            self.workspace.refresh(model: self.model)
+            self.refreshCanvas(force: true)
             self.refreshInspector()
             self.refreshSidebar()
             self.refreshHeader()
@@ -270,13 +273,36 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
         }
         model.onAlert = { [weak self] message in self?.showAlert(message) }
         sidebar.update(model: model)
-        workspace.refresh(model: model)
+        refreshCanvas(force: true)
         codePanel.refresh(model: model)
         refreshHeader()
     }
 
     private func refreshSidebar() { sidebar.update(model: model) }
-    private func refreshInspector() { styleInspector?.update(model: model) }
+    private func refreshInspector() {
+        guard let inspector = styleInspector,
+              let window = styleWindowController?.window,
+              window.isVisible
+        else { return }
+        inspector.update(model: model)
+        let targetHeight = inspector.preferredWindowContentHeight
+        if abs((window.contentView?.frame.height ?? 0) - targetHeight) > 2 {
+            window.setContentSize(NSSize(width: max(440, window.contentView?.frame.width ?? 460), height: targetHeight))
+        }
+    }
+
+    private func refreshCanvasIfNeeded() {
+        guard lastCanvasDiagram != model.diagram || lastCanvasLayout != model.layout || lastCanvasSelection != model.selection else { return }
+        refreshCanvas(force: true)
+    }
+
+    private func refreshCanvas(force: Bool = false) {
+        guard force else { refreshCanvasIfNeeded(); return }
+        workspace.refresh(model: model)
+        lastCanvasDiagram = model.diagram
+        lastCanvasLayout = model.layout
+        lastCanvasSelection = model.selection
+    }
 
     private func refreshHeader() {
         titleField.stringValue = model.diagram?.project.title ?? ""
@@ -322,6 +348,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
             inspector = existing
         } else {
             inspector = InspectorView()
+            inspector.frame = NSRect(x: 0, y: 0, width: 460, height: 420)
             inspector.onDelete = { [weak self] in
                 guard let self else { return }
                 self.model.deleteSelection()
@@ -331,24 +358,26 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
         }
         inspector.update(model: model)
         if let controller = styleWindowController {
+            controller.window?.setContentSize(NSSize(width: max(440, controller.window?.contentView?.frame.width ?? 460), height: inspector.preferredWindowContentHeight))
             controller.showWindow(self)
             controller.window?.makeKeyAndOrderFront(self)
             controller.window?.layoutIfNeeded()
             inspector.layoutSubtreeIfNeeded()
             return
         }
+        let contentHeight = inspector.preferredWindowContentHeight
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 460, height: 700),
+            contentRect: NSRect(x: 0, y: 0, width: 460, height: contentHeight),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "Оформление и свойства"
-        window.minSize = NSSize(width: 440, height: 520)
-        inspector.frame = NSRect(x: 0, y: 0, width: 460, height: 680)
+        window.minSize = NSSize(width: 440, height: 280)
+        inspector.frame = NSRect(x: 0, y: 0, width: 460, height: contentHeight)
         inspector.autoresizingMask = [.width, .height]
         window.contentView = inspector
-        window.setContentSize(NSSize(width: 460, height: 680))
+        window.setContentSize(NSSize(width: 460, height: contentHeight))
         let controller = NSWindowController(window: window)
         styleWindowController = controller
         controller.showWindow(self)
@@ -810,6 +839,7 @@ private final class PaletteItemView: NSView, NSDraggingSource {
     private let detailLabel: NSTextField
     private var pointerDown: NSPoint?
     private var startedDragging = false
+    private var didLoadIcon = false
 
     init(item: PaletteObject) {
         self.item = item
@@ -820,7 +850,7 @@ private final class PaletteItemView: NSView, NSDraggingSource {
         wantsLayer = true
         layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
         layer?.cornerRadius = 7
-        iconView.image = item.loadIcon() ?? NSImage(systemSymbolName: item.symbol, accessibilityDescription: item.title)
+        iconView.image = NSImage(systemSymbolName: item.symbol, accessibilityDescription: item.title)
         iconView.contentTintColor = .controlAccentColor
         iconView.imageScaling = .scaleProportionallyDown
         let labels = NSStackView(views: [titleLabel, detailLabel])
@@ -846,6 +876,16 @@ private final class PaletteItemView: NSView, NSDraggingSource {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override func viewWillDraw() {
+        super.viewWillDraw()
+        guard !didLoadIcon, !visibleRect.isEmpty else { return }
+        didLoadIcon = true
+        item.loadIconAsync { [weak self] image in
+            guard let self, let image else { return }
+            self.iconView.image = image
+        }
+    }
 
     override func mouseDown(with event: NSEvent) {
         guard !isEditingLocked else { return }
@@ -891,11 +931,16 @@ private final class SidebarView: NSView {
 
     private let scrollView = NSScrollView()
     private let stack = NSStackView()
+    private let paletteStack = NSStackView()
+    private let contentStack = NSStackView()
     private let searchField = NSSearchField()
     private let collectionPicker = NSPopUpButton(frame: .zero, pullsDown: false)
     private var selectedCollectionID = "all"
-    private var searchWidthInstalled = false
-    private var collectionWidthInstalled = false
+    private var lastPaletteFingerprint: String?
+    private var lastContentFingerprint: String?
+    private var lastPaletteLockState: Bool?
+    private var paletteItemViews: [String: PaletteItemView] = [:]
+    private var widthConstraints: [ObjectIdentifier: NSLayoutConstraint] = [:]
     private var actions: [ControlAction] = []
     private weak var currentModel: AppModel?
 
@@ -907,6 +952,14 @@ private final class SidebarView: NSView {
         stack.spacing = 5
         stack.edgeInsets = NSEdgeInsets(top: 14, left: 12, bottom: 12, right: 12)
         stack.translatesAutoresizingMaskIntoConstraints = false
+        for column in [paletteStack, contentStack] {
+            column.orientation = .vertical
+            column.alignment = .leading
+            column.spacing = 5
+            column.translatesAutoresizingMaskIntoConstraints = false
+            stack.addArrangedSubview(column)
+            column.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -24).isActive = true
+        }
         searchField.placeholderString = "Найти объект…"
         searchField.sendsSearchStringImmediately = true
         searchField.target = self
@@ -932,62 +985,104 @@ private final class SidebarView: NSView {
 
     func update(model: AppModel) {
         currentModel = model
+        let query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).localizedLowercase
+        let selectionKey: String
+        switch model.selection {
+        case .project: selectionKey = "project"
+        case .node(let id): selectionKey = "node:\(id)"
+        case .container(let id): selectionKey = "container:\(id)"
+        case .edge(let id): selectionKey = "edge:\(id)"
+        }
+        func encoded(_ value: String) -> String { "\(value.utf8.count):\(value)" }
+        let paletteFingerprint = "\(selectedCollectionID)|\(query)"
+        let contentFingerprint = [
+            selectionKey, String(model.isEditingLocked),
+            model.containers.map { encoded($0.id) + encoded($0.label) + encoded($0.style.stroke) }.joined(),
+            model.nodes.map { encoded($0.id) + encoded($0.label) + encoded($0.style.stroke) }.joined(),
+            model.edges.map { encoded($0.id) + encoded($0.label) + encoded($0.source) + encoded($0.target) + encoded($0.style.color) }.joined(),
+        ].joined(separator: "|")
+        if lastPaletteLockState != model.isEditingLocked {
+            lastPaletteLockState = model.isEditingLocked
+            for itemView in paletteItemViews.values {
+                itemView.isEditingLocked = model.isEditingLocked
+            }
+        }
+        let paletteChanged = paletteFingerprint != lastPaletteFingerprint
+        if paletteChanged {
+            lastPaletteFingerprint = paletteFingerprint
+            rebuildPalette(model: model, query: query)
+        }
+        let contentChanged = contentFingerprint != lastContentFingerprint
+        if contentChanged {
+            lastContentFingerprint = contentFingerprint
+            rebuildContent(model: model)
+        }
+        if !contentChanged && !paletteChanged { return }
+        needsLayout = true
+        layoutSubtreeIfNeeded()
+    }
+
+    private func rebuildPalette(model: AppModel, query: String) {
+        clearArrangedSubviews(from: paletteStack)
         actions.removeAll()
-        stack.removeAllArrangedSubviews()
         if let selected = collectionPicker.itemArray.first(where: { ($0.representedObject as? String) == selectedCollectionID }) {
             collectionPicker.select(selected)
         }
-        addArranged(section("КОЛЛЕКЦИЯ ОБЪЕКТОВ"))
-        addArranged(collectionPicker)
-        addArranged(searchField)
-        addArranged(hint("Нажмите или перетащите объект на холст"))
-        let query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).localizedLowercase
+        addArranged(section("КОЛЛЕКЦИЯ ОБЪЕКТОВ"), to: paletteStack)
+        addArranged(collectionPicker, to: paletteStack)
+        addArranged(searchField, to: paletteStack)
+        addArranged(hint("Нажмите или перетащите объект на холст"), to: paletteStack)
         let paletteItems = (PaletteLibrary.collection(id: selectedCollectionID)?.objects ?? []).filter {
             query.isEmpty || $0.title.localizedLowercase.contains(query) || $0.detail.localizedLowercase.contains(query) || $0.kind.localizedLowercase.contains(query)
         }
-        addArranged(section("ОБЪЕКТЫ · \(paletteItems.count)"))
+        addArranged(section("ОБЪЕКТЫ · \(paletteItems.count)"), to: paletteStack)
         for item in paletteItems {
-            let paletteItem = PaletteItemView(item: item)
+            let paletteItem = paletteItemViews[item.id] ?? PaletteItemView(item: item)
+            paletteItemViews[item.id] = paletteItem
             paletteItem.isEditingLocked = model.isEditingLocked
-            paletteItem.onClick = { [weak self] in self?.onAddNode?(item) }
-            addArranged(paletteItem)
+            if paletteItem.onClick == nil { paletteItem.onClick = { [weak self] in self?.onAddNode?(item) } }
+            addArranged(paletteItem, to: paletteStack)
         }
-        if paletteItems.isEmpty { addArranged(hint("Объекты не найдены")) }
-        addArranged(separator())
-        addArranged(section("ДЕЙСТВИЯ"))
+        if paletteItems.isEmpty { addArranged(hint("Объекты не найдены"), to: paletteStack) }
+    }
+
+    private func rebuildContent(model: AppModel) {
+        clearArrangedSubviews(from: contentStack)
+        actions.removeAll()
+        addArranged(separator(), to: contentStack)
+        addArranged(section("ДЕЙСТВИЯ"), to: contentStack)
         let addContainer = actionButton("Добавить контейнер", symbol: "rectangle.3.group") { [weak self] in self?.onAddContainer?() }
         addContainer.isEnabled = !model.isEditingLocked
-        addArranged(addContainer)
+        addArranged(addContainer, to: contentStack)
         let addEdge = actionButton("Добавить связь", symbol: "arrow.up.right", key: "e") { [weak self] in self?.onAddEdge?() }
         addEdge.isEnabled = !model.isEditingLocked
-        addArranged(addEdge)
-        addArranged(separator())
-        addArranged(section("КОНТЕЙНЕРЫ · \(model.containers.count)"))
-        if model.containers.isEmpty { addArranged(hint("Нет контейнеров")) }
+        addArranged(addEdge, to: contentStack)
+        addArranged(separator(), to: contentStack)
+        addArranged(section("КОНТЕЙНЕРЫ · \(model.containers.count)"), to: contentStack)
+        if model.containers.isEmpty { addArranged(hint("Нет контейнеров"), to: contentStack) }
         for container in model.containers {
-            addArranged(elementButton(container.label, symbol: "rectangle.dashed", color: NSColor(hex: container.style.stroke), selected: model.selection == .container(container.id)) { [weak self] in self?.onSelect?(.container(container.id)) })
+            addArranged(elementButton(container.label, symbol: "rectangle.dashed", color: NSColor(hex: container.style.stroke), selected: model.selection == .container(container.id)) { [weak self] in self?.onSelect?(.container(container.id)) }, to: contentStack)
         }
-        addArranged(separator())
-        addArranged(section("КОМПОНЕНТЫ · \(model.nodes.count)"))
-        if model.nodes.isEmpty { addArranged(hint("Нет компонентов")) }
+        addArranged(separator(), to: contentStack)
+        addArranged(section("КОМПОНЕНТЫ · \(model.nodes.count)"), to: contentStack)
+        if model.nodes.isEmpty { addArranged(hint("Нет компонентов"), to: contentStack) }
         for node in model.nodes {
-            addArranged(elementButton(node.label, symbol: "square", color: NSColor(hex: node.style.stroke), selected: model.selection == .node(node.id)) { [weak self] in self?.onSelect?(.node(node.id)) })
+            addArranged(elementButton(node.label, symbol: "square", color: NSColor(hex: node.style.stroke), selected: model.selection == .node(node.id)) { [weak self] in self?.onSelect?(.node(node.id)) }, to: contentStack)
         }
-        addArranged(separator())
-        addArranged(section("СВЯЗИ · \(model.edges.count)"))
-        if model.edges.isEmpty { addArranged(hint("Нет связей")) }
+        addArranged(separator(), to: contentStack)
+        addArranged(section("СВЯЗИ · \(model.edges.count)"), to: contentStack)
+        if model.edges.isEmpty { addArranged(hint("Нет связей"), to: contentStack) }
+        let nodeLabels = Dictionary(uniqueKeysWithValues: model.nodes.map { ($0.id, $0.label) })
         for edge in model.edges {
-            let source = model.nodes.first(where: { $0.id == edge.source })?.label ?? edge.source
-            let target = model.nodes.first(where: { $0.id == edge.target })?.label ?? edge.target
+            let source = nodeLabels[edge.source] ?? edge.source
+            let target = nodeLabels[edge.target] ?? edge.target
             let title = edge.label.isEmpty ? "\(source) → \(target)" : edge.label
-            addArranged(elementButton(title, symbol: "arrow.right", color: NSColor(hex: edge.style.color), selected: model.selection == .edge(edge.id)) { [weak self] in self?.onSelect?(.edge(edge.id)) })
+            addArranged(elementButton(title, symbol: "arrow.right", color: NSColor(hex: edge.style.color), selected: model.selection == .edge(edge.id)) { [weak self] in self?.onSelect?(.edge(edge.id)) }, to: contentStack)
         }
-        addArranged(separator())
+        addArranged(separator(), to: contentStack)
         let local = makeLabel("●  Данные и backend остаются локально", size: 9, weight: .medium, color: NSColor(hex: "#3F8064"))
         local.lineBreakMode = .byWordWrapping
-        addArranged(local)
-        needsLayout = true
-        layoutSubtreeIfNeeded()
+        addArranged(local, to: contentStack)
     }
 
     override func layout() {
@@ -1013,26 +1108,23 @@ private final class SidebarView: NSView {
         if let currentModel { update(model: currentModel) }
     }
 
-    private func addArranged(_ view: NSView) {
-        stack.addArrangedSubview(view)
-        if view === searchField {
-            if !searchWidthInstalled {
-                searchField.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -24).isActive = true
-                searchWidthInstalled = true
-            }
-        } else if view === collectionPicker {
-            if !collectionWidthInstalled {
-                collectionPicker.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -24).isActive = true
-                collectionWidthInstalled = true
-            }
-        } else {
-            view.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -24).isActive = true
+    private func addArranged(_ view: NSView, to column: NSStackView) {
+        column.addArrangedSubview(view)
+        let constraint = view.widthAnchor.constraint(equalTo: column.widthAnchor)
+        widthConstraints[ObjectIdentifier(view)] = constraint
+        constraint.isActive = true
+    }
+
+    private func clearArrangedSubviews(from column: NSStackView) {
+        for view in column.arrangedSubviews {
+            widthConstraints.removeValue(forKey: ObjectIdentifier(view))?.isActive = false
         }
+        column.removeAllArrangedSubviews()
     }
 
     private func documentHeight(for stack: NSStackView) -> CGFloat {
         let viewsHeight = stack.arrangedSubviews.reduce(CGFloat.zero) { total, view in
-            total + max(view.fittingSize.height, view.frame.height)
+            total + (view is NSStackView ? documentHeight(for: view as! NSStackView) : max(view.fittingSize.height, view.frame.height))
         }
         let spacing = stack.spacing * CGFloat(max(0, stack.arrangedSubviews.count - 1))
         return viewsHeight + spacing + stack.edgeInsets.top + stack.edgeInsets.bottom
@@ -1123,7 +1215,7 @@ private final class WorkspaceView: NSView {
         cancelProposalButton.isHidden = !hasProposal
         applyProposalButton.isEnabled = hasProposal
         cancelProposalButton.isEnabled = hasProposal
-        styleButton.isEnabled = model.selection != .project && !model.isEditingLocked
+        styleButton.isEnabled = !model.isEditingLocked
         if let proposal {
             footer.stringValue = "Предложение · \(proposal.changes.entries.count) изменений · проверьте и примените или отмените"
             footer.toolTip = proposal.changes.entries.joined(separator: "\n")
@@ -1141,7 +1233,7 @@ private final class WorkspaceView: NSView {
 
     func setInteractionState(model: AppModel) {
         canvasView.isReadOnly = model.isEditingLocked
-        styleButton.isEnabled = model.selection != .project && !model.isEditingLocked
+        styleButton.isEnabled = !model.isEditingLocked
         if model.activeProposal == nil {
             if model.jsonDraftIsDirty {
                 footer.stringValue = "JSON не применён · проверьте код и нажмите «Применить JSON»"
@@ -1443,6 +1535,13 @@ private final class JSONCodePanelView: NSView, NSTextViewDelegate {
             applyJSONButton.isEnabled = false
             return
         }
+        if currentModel?.jsonDraftIsDirty != true {
+            statusLabel.stringValue = currentModel?.diagram == nil
+                ? "Ожидание локального backend…" : "Синхронизировано с холстом"
+            statusLabel.textColor = .secondaryLabelColor
+            applyJSONButton.isEnabled = false
+            return
+        }
         guard let data = codeTextView.string.data(using: .utf8) else {
             statusLabel.stringValue = "JSON: текст невозможно прочитать"
             statusLabel.textColor = .systemRed
@@ -1477,6 +1576,12 @@ private final class InspectorView: NSView {
     private var editableControls: [NSControl] = []
     private var isEditingLocked = false
     private var deleteButton: NSButton?
+    private var displayedDiagram: DiagramProject?
+    private var displayedSelection: DiagramSelection?
+
+    var preferredWindowContentHeight: CGFloat {
+        min(620, max(280, documentHeight(for: stack) + 63))
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -1486,20 +1591,17 @@ private final class InspectorView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     func update(model: AppModel) {
+        if displayedDiagram == model.diagram && displayedSelection == model.selection {
+            setInteractionState(isEditingLocked: model.isEditingLocked)
+            return
+        }
+        displayedDiagram = model.diagram
+        displayedSelection = model.selection
         actions.removeAll()
         editableControls.removeAll()
         isEditingLocked = model.isEditingLocked
         stack.removeAllArrangedSubviews()
-        let delete = makeButton("Удалить", symbol: "trash") { [weak self] _ in self?.onDelete?() }
-        delete.isBordered = false
-        delete.contentTintColor = .systemRed
-        delete.isEnabled = model.selection != .project && !model.isEditingLocked
-        deleteButton = delete
-        let top = NSStackView(views: [title, NSView(), delete])
-        top.orientation = .horizontal
-        top.alignment = .centerY
-        top.spacing = 4
-        addFullWidth(top)
+        deleteButton?.isEnabled = model.selection != .project && !model.isEditingLocked
         addFullWidth(separator())
 
         switch model.selection {
@@ -1510,6 +1612,7 @@ private final class InspectorView: NSView {
             addPopup("Направление", value: model.diagram?.diagram.direction ?? "LR", choices: [
                 ("LR", "Слева направо"), ("TB", "Сверху вниз"), ("RL", "Справа налево"), ("BT", "Снизу вверх"),
             ]) { value in model.updateDirection(value) }
+            addEdgeRouting(model: model, label: "Маршрут связей")
             addSection("КОМПОНОВКА")
             let engine = model.diagram?.diagram.layoutMode == "manual"
                 ? "neato (ручной)"
@@ -1582,6 +1685,7 @@ private final class InspectorView: NSView {
                 addPopup("Стиль линии", value: item.style.lineStyle, choices: [
                     ("solid", "Сплошная"), ("dashed", "Пунктирная"), ("dotted", "Точечная"), ("bold", "Жирная"),
                 ]) { value in model.editEdge(id) { $0.style.lineStyle = value } }
+                addEdgeRouting(model: model, label: "Маршрут всех связей")
                 addColor("Цвет", value: item.style.color) { color in model.editEdge(id) { $0.style.color = color } }
                 addReadOnly("ID", value: item.id)
             }
@@ -1600,15 +1704,13 @@ private final class InspectorView: NSView {
     }
 
     private func build() {
-        widthAnchor.constraint(greaterThanOrEqualToConstant: 440).isActive = true
-        heightAnchor.constraint(greaterThanOrEqualToConstant: 520).isActive = true
         heading.font = .systemFont(ofSize: 8, weight: .bold)
         heading.textColor = .secondaryLabelColor
         heading.stringValue = "СВОЙСТВА"
         title.font = .systemFont(ofSize: 14, weight: .bold)
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 12
+        stack.spacing = 9
         stack.edgeInsets = NSEdgeInsets(top: 14, left: 14, bottom: 14, right: 14)
         stack.translatesAutoresizingMaskIntoConstraints = false
         scrollView.documentView = stack
@@ -1616,8 +1718,17 @@ private final class InspectorView: NSView {
         scrollView.hasVerticalScroller = true
         scrollView.drawsBackground = false
         scrollView.autoresizingMask = [.width, .height]
+        let delete = makeButton("Удалить", symbol: "trash") { [weak self] _ in self?.onDelete?() }
+        delete.isBordered = false
+        delete.contentTintColor = .systemRed
+        deleteButton = delete
+        let titleRow = NSStackView(views: [title, NSView(), delete])
+        titleRow.orientation = .horizontal
+        titleRow.alignment = .centerY
+        titleRow.spacing = 4
         header.addArrangedSubview(heading)
-        header.addArrangedSubview(title)
+        header.addArrangedSubview(titleRow)
+        titleRow.widthAnchor.constraint(equalTo: header.widthAnchor).isActive = true
         header.orientation = .vertical
         header.alignment = .leading
         header.spacing = 4
@@ -1640,16 +1751,43 @@ private final class InspectorView: NSView {
     }
 
     private func documentHeight(for stack: NSStackView) -> CGFloat {
-        let viewsHeight = stack.arrangedSubviews.reduce(CGFloat.zero) { total, view in
-            total + max(view.fittingSize.height, view.frame.height)
+        let heights = stack.arrangedSubviews.map(measuredHeight)
+        let contentHeight: CGFloat
+        if stack.orientation == .vertical {
+            contentHeight = heights.reduce(0, +)
+        } else {
+            contentHeight = heights.max() ?? 0
         }
-        let spacing = stack.spacing * CGFloat(max(0, stack.arrangedSubviews.count - 1))
-        return viewsHeight + spacing + stack.edgeInsets.top + stack.edgeInsets.bottom
+        let spacing = stack.orientation == .vertical
+            ? stack.spacing * CGFloat(max(0, stack.arrangedSubviews.count - 1)) : 0
+        return contentHeight + spacing + stack.edgeInsets.top + stack.edgeInsets.bottom
+    }
+
+    private func measuredHeight(_ view: NSView) -> CGFloat {
+        if let nestedStack = view as? NSStackView {
+            return documentHeight(for: nestedStack)
+        }
+        let constrainedHeight = view.constraints
+            .filter { $0.firstAttribute == .height && $0.relation == .equal }
+            .map(\.constant)
+            .max() ?? 0
+        let height = max(view.fittingSize.height, view.intrinsicContentSize.height, constrainedHeight)
+        if height > 0 { return height }
+        if view is NSColorWell { return 26 }
+        if view is NSControl { return 22 }
+        if view is NSBox { return 1 }
+        return 0
     }
 
     private func addSection(_ text: String) {
         let label = makeLabel(text, size: 8, weight: .bold, color: .secondaryLabelColor)
         addFullWidth(label)
+    }
+
+    private func addEdgeRouting(model: AppModel, label: String) {
+        addPopup(label, value: model.diagram?.diagram.edgeRouting ?? "angled", choices: [
+            ("straight", "Прямые"), ("angled", "Косые ломаные"), ("orthogonal", "Прямоугольные"),
+        ]) { value in model.updateEdgeRouting(value) }
     }
 
     private func addText(_ label: String, value: String, changed: @escaping (String) -> Void) {

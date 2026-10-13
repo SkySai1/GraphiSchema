@@ -30,6 +30,25 @@ def test_fallback_svg_is_deterministic(project: DiagramProject) -> None:
     assert render_fallback_svg(project) == render_fallback_svg(project)
 
 
+@pytest.mark.parametrize(("routing", "segments"), [
+    ("straight", 1),
+    ("angled", 2),
+    ("orthogonal", 3),
+])
+def test_fallback_svg_respects_edge_routing(project: DiagramProject, routing: str, segments: int) -> None:
+    edge = project.edges[0]
+    edge.style.color = "#123ABC"
+    project.diagram.edge_routing = routing
+
+    svg = ElementTree.fromstring(render_fallback_svg(project))
+    path = next(
+        item for item in svg.iter()
+        if item.tag.endswith("path") and item.get("fill") == "none" and item.get("stroke") == "#123ABC"
+    )
+
+    assert path.get("d", "").count(" L ") == segments
+
+
 def test_fallback_svg_reflects_custom_node_dimensions(project: DiagramProject) -> None:
     project.nodes[0].shape = "box"
     project.nodes[0].width = 4.0

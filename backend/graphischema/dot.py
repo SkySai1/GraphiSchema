@@ -53,6 +53,7 @@ def to_dot(project: DiagramProject) -> str:
     lines = [f"digraph {graph_name} {{"]
     graph_attrs = [
         f"rankdir={quote(project.diagram.direction)}",
+        f"splines={quote({'straight': 'line', 'angled': 'polyline', 'orthogonal': 'ortho'}[project.diagram.edge_routing])}",
         f"bgcolor={quote(project.presentation.background)}",
         f"nodesep={project.diagram.node_spacing}",
         f"ranksep={project.diagram.rank_spacing}",

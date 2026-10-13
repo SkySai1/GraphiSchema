@@ -9,6 +9,7 @@ import subprocess
 from collections import defaultdict, deque
 
 from .dot import to_dot
+from .layout import _clip_to_node, route_edge_points
 from .models import DiagramNode, DiagramProject
 
 
@@ -190,13 +191,18 @@ def render_fallback_svg(project: DiagramProject) -> str:
         sy += source_h / 2
         tx += target_w / 2
         ty += target_h / 2
+        source_center, target_center = (sx, sy), (tx, ty)
+        sx, sy = _clip_to_node(source_center, target_center, source_w, source_h)
+        tx, ty = _clip_to_node(target_center, source_center, target_w, target_h)
+        points = route_edge_points((sx, sy), (tx, ty), project.diagram.edge_routing, horizontal)
         color = edge.style.color
         dash = {"dashed": "8 6", "dotted": "2 6", "solid": "", "bold": ""}[edge.style.line_style]
         dash_attr = f' stroke-dasharray="{dash}"' if dash else ""
         marker_id = f"arrow-{edge.id}"
         marker = f' marker-end="url(#{marker_id})"' if edge.direction in {"forward", "both"} and edge.style.arrowhead != "none" else ""
         start = f' marker-start="url(#{marker_id})"' if edge.direction == "both" and edge.style.arrowtail != "none" else ""
-        output.append(f'<path d="M {sx:.1f} {sy:.1f} L {tx:.1f} {ty:.1f}" fill="none" stroke="{color}" stroke-width="{edge.style.penwidth:.1f}"{dash_attr}{start}{marker}/>')
+        path_data = "M " + " L ".join(f"{x:.1f} {y:.1f}" for x, y in points)
+        output.append(f'<path d="{path_data}" fill="none" stroke="{color}" stroke-width="{edge.style.penwidth:.1f}"{dash_attr}{start}{marker}/>')
         if edge.label:
             mx, my = (sx + tx) / 2, (sy + ty) / 2 - 7
             output.append(f'<text x="{mx:.1f}" y="{my:.1f}" text-anchor="middle" fill="{text_muted}" font-family="Arial,sans-serif" font-size="11">{html.escape(edge.label)}</text>')
