@@ -8,6 +8,7 @@ final class BackendService: ObservableObject {
     private(set) var baseURL: URL?
 
     private let preferredPort = 8765
+    private let isStartupSmoke = ProcessInfo.processInfo.arguments.contains("--startup-smoke-test")
     private var process: Process?
     private(set) var projectRoot: URL?
 
@@ -19,7 +20,7 @@ final class BackendService: ObservableObject {
         }
         let preferredAddress = URL(string: "http://127.0.0.1:\(preferredPort)")!
 
-        if await respondsToHealthCheck(at: preferredAddress) {
+        if !isStartupSmoke, await respondsToHealthCheck(at: preferredAddress) {
             baseURL = preferredAddress
             isReady = true
             status = "Backend готов"
@@ -44,7 +45,9 @@ final class BackendService: ObservableObject {
         do {
             let support = try applicationSupportDirectory()
             let environment = support.appendingPathComponent("backend-venv", isDirectory: true)
-            let dataDirectory = support.appendingPathComponent("projects", isDirectory: true)
+            let dataDirectory = isStartupSmoke
+                ? FileManager.default.temporaryDirectory.appendingPathComponent("graphischema-startup-\(UUID().uuidString)", isDirectory: true)
+                : support.appendingPathComponent("projects", isDirectory: true)
             try FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
 
             let server = Process()
@@ -64,6 +67,9 @@ final class BackendService: ObservableObject {
             server.environment = environmentVariables
             server.standardOutput = FileHandle.nullDevice
             server.standardError = FileHandle.nullDevice
+            if isStartupSmoke {
+                server.terminationHandler = { _ in try? FileManager.default.removeItem(at: dataDirectory) }
+            }
             try server.run()
             process = server
 
@@ -104,6 +110,8 @@ final class BackendService: ObservableObject {
                 && payload["status"] == "ok"
                 && payload["revision_merge"] == "three_way_v1"
                 && payload["edge_routing"] == "graphviz_v1"
+                && payload["canvas_geometry"] == "icon_ports_v1"
+                && payload["prompt_templates"] == "jinja_v1"
                 && payload["storage_scope"] == "application-support"
         } catch {
             return false

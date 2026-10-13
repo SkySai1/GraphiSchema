@@ -12,6 +12,7 @@ final class OllamaAssistantWindowController: NSWindowController {
     private let systemPromptView = NSTextView()
     private let statusLabel = NSTextField(labelWithString: "Настройки применяются только к локальному endpoint.")
     private var actions: [AssistantButtonAction] = []
+    private var variablesWindow: PromptVariablesWindowController?
 
     init(model: AppModel) {
         self.model = model
@@ -27,6 +28,7 @@ final class OllamaAssistantWindowController: NSWindowController {
         super.init(window: window)
         buildInterface()
         loadPreferences()
+        AppTheme.configure(window)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -74,7 +76,7 @@ final class OllamaAssistantWindowController: NSWindowController {
             field.widthAnchor.constraint(equalToConstant: field === contextField ? 72 : 58).isActive = true
         }
 
-        let promptHeading = NSTextField(labelWithString: "СИСТЕМНЫЙ ПРОМПТ")
+        let promptHeading = NSTextField(labelWithString: "СИСТЕМНЫЙ ПРОМПТ · JINJA: {{ graphviz_attributes }}")
         promptHeading.font = .systemFont(ofSize: 9, weight: .bold)
         promptHeading.textColor = .secondaryLabelColor
         systemPromptView.isRichText = false
@@ -102,7 +104,11 @@ final class OllamaAssistantWindowController: NSWindowController {
         actionsRow.alignment = .centerY
         actionsRow.spacing = 12
 
-        [heading, endpointRow, modelRow, settingsRow, promptHeading, promptScroll, actionsRow].forEach { form.addArrangedSubview($0) }
+        let variables = button("Переменные…", symbol: "curlybraces") { [weak self] in self?.showVariables() }
+        variables.identifier = NSUserInterfaceItemIdentifier("ollama-prompt-variables")
+        let promptRow = NSStackView(views: [promptHeading, NSView(), variables])
+        promptRow.orientation = .horizontal; promptRow.spacing = 8
+        [heading, endpointRow, modelRow, settingsRow, promptRow, promptScroll, actionsRow].forEach { form.addArrangedSubview($0) }
         NSLayoutConstraint.activate([
             form.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 22),
             form.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -22),
@@ -112,10 +118,17 @@ final class OllamaAssistantWindowController: NSWindowController {
             modelRow.widthAnchor.constraint(equalTo: form.widthAnchor),
             settingsRow.widthAnchor.constraint(equalTo: form.widthAnchor),
             promptScroll.widthAnchor.constraint(equalTo: form.widthAnchor),
+            promptRow.widthAnchor.constraint(equalTo: form.widthAnchor),
             actionsRow.widthAnchor.constraint(equalTo: form.widthAnchor),
             statusLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 250),
         ])
         statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+    }
+
+    func showVariables() {
+        if let existing = variablesWindow { existing.showWindow(nil); existing.window?.makeKeyAndOrderFront(nil); return }
+        let controller = PromptVariablesWindowController(model: model) { [weak self] in self?.systemPromptView.string ?? "" }
+        variablesWindow = controller; controller.showWindow(nil)
     }
 
     private func loadPreferences() {

@@ -13,6 +13,15 @@ final class AppLifecycle: NSObject, NSApplicationDelegate {
         Task {
             await model.bootstrap()
             controller.refreshAll()
+            if ProcessInfo.processInfo.arguments.contains("--startup-smoke-test") {
+                let passed = model.backend.isReady && model.diagram != nil && model.layout != nil && model.alertMessage == nil
+                let message = passed
+                    ? "Native startup smoke test passed: bundled backend, compatible health, project decoding, Graphviz layout and native window.\n"
+                    : "Native startup smoke test failed: \(model.status), \(model.backend.status), \(model.alertMessage ?? "no details")\n"
+                (passed ? FileHandle.standardOutput : FileHandle.standardError).write(Data(message.utf8))
+                model.backend.stop()
+                NSApp.terminate(nil)
+            }
         }
     }
 

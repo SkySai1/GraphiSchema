@@ -64,7 +64,8 @@ final class OllamaChatPanelView: NSView {
     private func build() {
         identifier = NSUserInterfaceItemIdentifier("ollama-chat-panel")
         wantsLayer = true
-        layer?.backgroundColor = NSColor(hex: "#F1F4F8").cgColor
+        layer?.name = "theme-surface-panel"
+        layer?.backgroundColor = AppTheme.surface("panel").cgColor
         layer?.cornerRadius = 8
 
         transcript.isEditable = false

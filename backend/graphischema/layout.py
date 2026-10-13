@@ -8,6 +8,7 @@ import subprocess
 from collections import defaultdict, deque
 
 from .models import DiagramProject
+from .geometry import normalize_edges
 
 
 class LayoutError(RuntimeError):
@@ -18,10 +19,10 @@ def compute_layout(project: DiagramProject, timeout: float = 8.0) -> dict[str, o
     """Return normalized node and edge geometry in Graphviz inches."""
     engine = "neato" if project.diagram.layout_mode == "manual" else project.diagram.layout_engine
     if not project.nodes:
-        return _fallback_layout(project, engine=engine)
+        return normalize_edges(project, _fallback_layout(project, engine=engine))
     binary = shutil.which(engine)
     if not binary:
-        return _fallback_layout(project, engine="fallback")
+        return normalize_edges(project, _fallback_layout(project, engine="fallback"))
 
     command = [binary]
     if project.diagram.layout_mode == "manual":
@@ -42,7 +43,7 @@ def compute_layout(project: DiagramProject, timeout: float = 8.0) -> dict[str, o
         raise LayoutError("Graphviz превысил время ожидания компоновки.") from exc
     if result.returncode != 0:
         raise LayoutError(f"Graphviz не смог рассчитать геометрию: {result.stderr.strip()[-1000:]}")
-    return _parse_plain(project, result.stdout, engine)
+    return normalize_edges(project, _parse_plain(project, result.stdout, engine))
 
 
 def _parse_plain(project: DiagramProject, source: str, engine: str) -> dict[str, object]:

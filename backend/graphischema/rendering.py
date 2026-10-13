@@ -8,7 +8,6 @@ import shutil
 import subprocess
 from collections import defaultdict, deque
 
-from .dot import to_dot
 from .layout import _clip_to_node, route_edge_points
 from .models import DiagramNode, DiagramProject
 
@@ -19,56 +18,38 @@ class LayoutError(RuntimeError):
 
 def render_svg(project: DiagramProject, timeout: float = 8.0) -> tuple[str, str]:
     """Return (svg, engine). Graphviz is preferred; fallback is local and deterministic."""
-    engine = "neato" if project.diagram.layout_mode == "manual" else project.diagram.layout_engine
-    binary = shutil.which(engine)
-    if binary:
-        command = [binary]
-        if project.diagram.layout_mode == "manual":
-            command.append("-n2")
-        command.append("-Tsvg")
-        try:
-            result = subprocess.run(
-                command, input=to_dot(project), text=True,
-                capture_output=True, check=False, timeout=timeout,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise LayoutError("Graphviz превысил время ожидания.") from exc
-        if result.returncode != 0:
-            detail = result.stderr.strip()[-1000:]
-            raise LayoutError(f"Graphviz не смог построить диаграмму: {detail}")
-        return result.stdout, engine
-    return render_fallback_svg(project), "fallback"
+    from .layout import compute_layout, LayoutError as GeometryError
+    from .scene_renderer import render_scene
+    try:
+        layout = compute_layout(project, timeout)
+    except GeometryError as exc:
+        raise LayoutError(str(exc)) from exc
+    return render_scene(project, layout), layout["engine"]
 
 
 def render_png(project: DiagramProject, scale: float = 1.0, background: str = "#FFFFFF", timeout: float = 20.0) -> tuple[bytes, str]:
-    """Render a PNG through Graphviz using a caller-selected resolution and background."""
+    """Rasterize the common SVG scene at the requested resolution and background."""
     if not 0.5 <= scale <= 4:
         raise LayoutError("Масштаб PNG должен быть от 0.5 до 4.")
     if background != "transparent" and not re.fullmatch(r"#[0-9a-fA-F]{6}", background):
         raise LayoutError("Фон PNG должен быть transparent или цветом #RRGGBB.")
-    engine = "neato" if project.diagram.layout_mode == "manual" else project.diagram.layout_engine
-    binary = shutil.which(engine)
+    from .layout import compute_layout, LayoutError as GeometryError
+    from .scene_renderer import render_scene
+    binary = shutil.which("rsvg-convert")
     if not binary:
-        raise LayoutError("Для экспорта PNG требуется установленный Graphviz.")
-
-    command = [binary]
-    if project.diagram.layout_mode == "manual":
-        command.append("-n2")
-    command.extend([f"-Gdpi={96 * scale:g}", f"-Gbgcolor={background}", "-Tpng"])
+        raise LayoutError("Для экспорта PNG требуется rsvg-convert (brew install librsvg).")
     try:
-        result = subprocess.run(
-            command,
-            input=to_dot(project).encode("utf-8"),
-            capture_output=True,
-            check=False,
-            timeout=timeout,
-        )
+        layout = compute_layout(project, timeout)
+        svg = render_scene(project, layout, background=background)
+        result = subprocess.run([binary, "--zoom", str(scale)], input=svg.encode("utf-8"),
+                                capture_output=True, check=False, timeout=timeout)
+    except GeometryError as exc:
+        raise LayoutError(str(exc)) from exc
     except subprocess.TimeoutExpired as exc:
-        raise LayoutError("Graphviz превысил время ожидания экспорта PNG.") from exc
+        raise LayoutError("Превышено время ожидания экспорта PNG.") from exc
     if result.returncode != 0:
-        detail = result.stderr.decode("utf-8", errors="replace").strip()[-1000:]
-        raise LayoutError(f"Graphviz не смог экспортировать PNG: {detail}")
-    return result.stdout, engine
+        raise LayoutError("Не удалось экспортировать PNG: " + result.stderr.decode("utf-8", errors="replace")[-1000:])
+    return result.stdout, layout["engine"]
 
 
 def _ranks(project: DiagramProject) -> dict[str, int]:
@@ -102,6 +83,11 @@ def _ranks(project: DiagramProject) -> dict[str, int]:
 
 def render_fallback_svg(project: DiagramProject) -> str:
     """Render a readable small diagram without external binaries or network access."""
+    if any(n.icon for n in project.nodes) or any(e.waypoints or e.routing or e.source_port != "auto" or e.target_port != "auto" for e in project.edges):
+        from .layout import _fallback_layout
+        from .geometry import normalize_edges
+        from .scene_renderer import render_scene
+        return render_scene(project, normalize_edges(project, _fallback_layout(project, "fallback")))
     nodes = project.nodes
     by_id = {node.id: node for node in nodes}
     rank = _ranks(project)

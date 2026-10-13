@@ -57,7 +57,7 @@ find "$BUNDLED_PROJECT/backend/graphischema" -type d -name __pycache__ -prune -e
 find "$BUNDLED_PROJECT/backend/graphischema" -type f -name '*.py[co]' -delete
 cp "$ROOT/examples/starter.json" "$BUNDLED_PROJECT/examples/starter.json"
 cp -R "$ROOT/resources/object-library" "$BUNDLED_PROJECT/resources/object-library"
-cp "$ROOT/pyproject.toml" "$ROOT/uv.lock" "$ROOT/README.md" "$BUNDLED_PROJECT/"
+cp "$ROOT/pyproject.toml" "$ROOT/uv.lock" "$ROOT/README.md" "$ROOT/requirements.txt" "$BUNDLED_PROJECT/"
 cp "$ROOT/LICENSE" "$RESOURCES/LICENSE"
 
 cat > "$CONTENTS/Info.plist" <<'PLIST'
@@ -84,6 +84,10 @@ if command -v dot >/dev/null 2>&1; then
   dot -V
 else
   echo "Предупреждение: Graphviz dot не найден; backend использует локальный SVG fallback."
+fi
+
+if ! command -v rsvg-convert >/dev/null 2>&1; then
+  echo "Предупреждение: для PNG-экспорта установите librsvg: brew install librsvg."
 fi
 
 APP_SUPPORT="$HOME/Library/Application Support/GraphiSchema"

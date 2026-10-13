@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from dataclasses import dataclass, field
 
@@ -235,7 +236,7 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
                 all_node_statements[node_id] = NodeStatement(None, {})
     for node_id, statement in all_node_statements.items():
         attrs = statement.attrs
-        allowed = {"label", "shape", "style", "fillcolor", "color", "fontcolor", "penwidth", "tooltip", "pos", "fontname", "fontsize", "margin", "fixedsize", "width", "height"}
+        allowed = {"label", "shape", "style", "fillcolor", "color", "fontcolor", "penwidth", "tooltip", "pos", "fontname", "fontsize", "margin", "fixedsize", "width", "height", "gs_icon"}
         _check_attrs(attrs, allowed, f"узла {node_id}")
         old = existing_nodes.get(node_id)
         _require_value(attrs, "style", "filled,rounded", f"узла {node_id}")
@@ -257,6 +258,7 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
             "description": description,
             "kind": old.kind if old else "service",
             "shape": attrs.get("shape", old.shape if old else "box"),
+            "icon": attrs.get("gs_icon", old.icon if old else None),
             "container_id": statement.parent_id,
             "style": {
                 "fill": attrs.get("fillcolor", old.style.fill if old else "#FFFFFF"),
@@ -329,7 +331,7 @@ def _build_edges(project: DiagramProject, statements: list[EdgeStatement]) -> li
     result = []
     for index, statement in enumerate(statements):
         attrs = statement.attrs
-        _check_attrs(attrs, {"label", "color", "style", "penwidth", "arrowhead", "arrowtail", "dir", "constraint", "weight", "minlen", "fontname", "fontsize"}, f"связи {statement.source} -> {statement.target}")
+        _check_attrs(attrs, {"label", "color", "style", "penwidth", "arrowhead", "arrowtail", "dir", "constraint", "weight", "minlen", "fontname", "fontsize", "headport", "tailport", "gs_source_port", "gs_target_port", "gs_routing", "gs_waypoints"}, f"связи {statement.source} -> {statement.target}")
         _require_value(attrs, "fontname", "Arial", "связи")
         _require_value(attrs, "fontsize", "9", "связи")
         old_candidates = old_by_pair.get((statement.source, statement.target), [])
@@ -348,12 +350,22 @@ def _build_edges(project: DiagramProject, statements: list[EdgeStatement]) -> li
         constraint = attrs.get("constraint", str(old.style.constraint if old else True)).lower()
         if constraint not in {"true", "false"}:
             raise DOTEditError(f"constraint должен быть true или false, получено {constraint!r}")
+        if ("headport" in attrs and "gs_target_port" in attrs) or ("tailport" in attrs and "gs_source_port" in attrs):
+            raise DOTEditError("Укажите одну привязку на каждом конце связи: порт Graphviz либо вершину фигуры.")
+        try:
+            waypoints = json.loads(attrs["gs_waypoints"]) if "gs_waypoints" in attrs else [p.model_dump() for p in old.waypoints] if old else []
+        except (ValueError, TypeError) as exc:
+            raise DOTEditError("gs_waypoints должен быть JSON-массивом координат.") from exc
         result.append({
             "id": edge_id,
             "source": statement.source,
             "target": statement.target,
             "label": label,
             "direction": direction,
+            "source_port": attrs.get("gs_source_port", attrs.get("tailport", old.source_port if old else "auto")),
+            "target_port": attrs.get("gs_target_port", attrs.get("headport", old.target_port if old else "auto")),
+            "routing": attrs.get("gs_routing", old.routing if old else None),
+            "waypoints": waypoints,
             "style": {
                 "line_style": line_style,
                 "color": attrs.get("color", old.style.color if old else "#64748B"),

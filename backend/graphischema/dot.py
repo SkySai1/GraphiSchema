@@ -1,6 +1,7 @@
 """Stable conversion from the canonical model to Graphviz DOT."""
 
 from __future__ import annotations
+import json
 
 from .models import DiagramContainer, DiagramNode, DiagramProject
 
@@ -21,6 +22,8 @@ def _node_statement(node: DiagramNode, manual_layout: bool) -> str:
         "penwidth": str(node.style.penwidth),
         "tooltip": quote(node.description or node.kind),
     }
+    if node.icon:
+        attrs["gs_icon"] = quote(node.icon)
     if node.width is not None and node.height is not None:
         attrs["fixedsize"] = "true"
         attrs["width"] = str(node.width)
@@ -98,6 +101,17 @@ def to_dot(project: DiagramProject) -> str:
             "weight": str(style.weight),
             "minlen": str(style.minlen),
         }
+        for key, port in (("tailport", edge.source_port), ("headport", edge.target_port)):
+            if port in {"n", "ne", "e", "se", "s", "sw", "w", "nw"}:
+                attrs[key] = quote(port)
+        if edge.source_port.startswith("vertex:"):
+            attrs["gs_source_port"] = quote(edge.source_port)
+        if edge.target_port.startswith("vertex:"):
+            attrs["gs_target_port"] = quote(edge.target_port)
+        if edge.routing:
+            attrs["gs_routing"] = quote(edge.routing)
+        if edge.waypoints:
+            attrs["gs_waypoints"] = quote(json.dumps([p.model_dump() for p in edge.waypoints], separators=(",", ":")))
         rendered = ", ".join(f"{key}={value}" for key, value in attrs.items())
         lines.append(f"    {quote(edge.source)} -> {quote(edge.target)} [{rendered}];")
     lines.append("}")

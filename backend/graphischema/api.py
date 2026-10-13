@@ -31,6 +31,7 @@ from .ollama import (
 from .rendering import LayoutError as RenderError, render_png, render_svg
 from .storage import ProjectStore, RevisionConflict, VersionNotFound
 from .validation import validate_diagram
+from .prompt_templates import DEFAULT_VARIABLES, PromptPreviewRequest, PromptTemplateError, render_system_prompt
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -58,6 +59,8 @@ def health() -> dict[str, str]:
         "app": "GraphiSchema",
         "revision_merge": "three_way_v1",
         "edge_routing": "graphviz_v1",
+        "canvas_geometry": "icon_ports_v1",
+        "prompt_templates": "jinja_v1",
         "storage_scope": storage_scope,
     }
 
@@ -66,6 +69,19 @@ def health() -> dict[str, str]:
 def get_diagram() -> dict[str, Any]:
     project = STORE.load()
     return {"diagram": project.model_dump(mode="json"), "revision": STORE.revision(project)}
+
+
+@app.get("/api/ollama/variables/defaults")
+def prompt_variables_defaults() -> dict[str, Any]:
+    return {"variables": DEFAULT_VARIABLES}
+
+
+@app.post("/api/ollama/prompt/preview")
+def preview_system_prompt(request: PromptPreviewRequest) -> dict[str, str]:
+    try:
+        return {"prompt": render_system_prompt(request.system_prompt, request.variables)}
+    except PromptTemplateError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.put("/api/diagram")

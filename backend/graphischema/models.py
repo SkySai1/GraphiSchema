@@ -89,6 +89,7 @@ class DiagramNode(StrictModel):
     description: str = Field(default="", max_length=1000)
     kind: str = Field(default="service", min_length=1, max_length=48)
     shape: Literal["box", "ellipse", "cylinder", "diamond", "hexagon", "cloud"] = "box"
+    icon: str | None = None
     container_id: str | None = None
     style: NodeStyle = Field(default_factory=NodeStyle)
     x: float | None = None
@@ -96,10 +97,21 @@ class DiagramNode(StrictModel):
     width: float | None = Field(default=None, ge=0.5, le=10)
     height: float | None = Field(default=None, ge=0.5, le=10)
 
+    @field_validator("icon")
+    @classmethod
+    def valid_icon(cls, value: str | None) -> str | None:
+        from .geometry import icon_library
+        if value is not None and value not in icon_library():
+            raise ValueError("Icon must refer to a bundled collection figure")
+        return value
+
     @model_validator(mode="after")
     def validate_size(self) -> DiagramNode:
         if (self.width is None) != (self.height is None):
             raise ValueError("Node width and height must be set together")
+        if self.icon and self.width is None:
+            from .geometry import icon_size
+            self.width, self.height = icon_size(self.icon)
         return self
 
     @field_validator("id", "container_id")
@@ -126,6 +138,11 @@ class EdgeStyle(StrictModel):
         return _validate_color(value)
 
 
+class RoutePoint(StrictModel):
+    x: float = Field(ge=-1000, le=1000, allow_inf_nan=False)
+    y: float = Field(ge=-1000, le=1000, allow_inf_nan=False)
+
+
 class DiagramEdge(StrictModel):
     id: str
     source: str
@@ -133,6 +150,17 @@ class DiagramEdge(StrictModel):
     label: str = Field(default="", max_length=160)
     direction: Literal["forward", "both", "none"] = "forward"
     style: EdgeStyle = Field(default_factory=EdgeStyle)
+    source_port: str = "auto"
+    target_port: str = "auto"
+    routing: Literal["straight", "angled", "orthogonal"] | None = None
+    waypoints: list[RoutePoint] = Field(default_factory=list, max_length=32)
+
+    @field_validator("source_port", "target_port")
+    @classmethod
+    def valid_port(cls, value: str) -> str:
+        if value not in {"auto", "n", "ne", "e", "se", "s", "sw", "w", "nw"} and not re.fullmatch(r"vertex:(0|[1-9][0-9]{0,2})", value):
+            raise ValueError("Attachment must be auto, a compass side, or vertex:<index>")
+        return value
 
     @field_validator("id", "source", "target")
     @classmethod
@@ -181,6 +209,10 @@ class DiagramProject(StrictModel):
                 raise ValueError(f"Edge '{edge.id}' references missing source '{edge.source}'")
             if edge.target not in nodes:
                 raise ValueError(f"Edge '{edge.id}' references missing target '{edge.target}'")
+            from .geometry import vertices
+            for node_id, port in ((edge.source, edge.source_port), (edge.target, edge.target_port)):
+                if port.startswith("vertex:") and int(port.split(":")[1]) >= len(vertices(nodes[node_id])):
+                    raise ValueError(f"Edge '{edge.id}' references a missing figure vertex")
 
         for container in self.containers:
             visited: set[str] = set()

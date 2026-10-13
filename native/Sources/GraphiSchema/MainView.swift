@@ -18,6 +18,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
     private var redoButton: NSButton?
     private var importButton: NSButton?
     private var ollamaWindowController: OllamaAssistantWindowController?
+    private var themeButton: NSButton?
     private var retainedActions: [ControlAction] = []
     private var didSetInitialSplitPositions = false
     private var lastCanvasDiagram: DiagramProject?
@@ -39,6 +40,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
         window.contentView = rootView
         buildInterface()
         connectModel()
+        AppTheme.configure(window)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -53,7 +55,8 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
 
     private func buildInterface() {
         rootView.wantsLayer = true
-        rootView.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        rootView.layer?.name = "theme-surface-window"
+        rootView.layer?.backgroundColor = AppTheme.surface("window").cgColor
 
         let header = buildHeader()
         let divider = NSBox()
@@ -163,6 +166,12 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
         let pngButton = makeButton("PNG", symbol: "photo") { [weak self] _ in self?.exportPNG() }
         let historyButton = makeButton("История", symbol: "clock.arrow.circlepath") { [weak self] _ in self?.showHistory() }
         let ollamaButton = makeButton("Настройки ИИ", symbol: "gearshape") { [weak self] _ in self?.showOllamaAssistant() }
+        let theme = makeButton("", symbol: "moon.circle") { [weak self] _ in
+            guard let self else { return }
+            self.model.updateTheme(self.model.diagram?.presentation.theme == "dark" ? "light" : "dark")
+        }
+        theme.imagePosition = .imageOnly; theme.toolTip = "Переключить дневную/ночную тему"
+        theme.identifier = NSUserInterfaceItemIdentifier("theme-toggle"); themeButton = theme
         undoButton = makeButton("Отменить", symbol: "arrow.uturn.backward") { [weak self] _ in self?.performHistoryCommand(redo: false) }
         redoButton = makeButton("Повторить", symbol: "arrow.uturn.forward") { [weak self] _ in self?.performHistoryCommand(redo: true) }
         undoButton?.keyEquivalent = "z"
@@ -171,7 +180,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
         redoButton?.keyEquivalentModifierMask = [.command, .shift]
         let saveButton = makeButton("Сохранить", symbol: "checkmark.circle.fill", prominent: true) { [weak self] _ in self?.saveProject() }
 
-        let stack = NSStackView(views: [brand, titleStack, status, importButton!, exportButton, pngButton, historyButton, ollamaButton, undoButton!, redoButton!, saveButton])
+        let stack = NSStackView(views: [brand, titleStack, status, theme, importButton!, exportButton, pngButton, historyButton, ollamaButton, undoButton!, redoButton!, saveButton])
         stack.orientation = .horizontal
         stack.alignment = .centerY
         stack.spacing = 12
@@ -200,6 +209,9 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
         }
         workspace.onResizeNode = { [weak self] id, width, height in
             self?.model.editNode(id) { $0.width = width; $0.height = height }
+        }
+        workspace.onSetEdgeWaypoints = { [weak self] id, points, positions in
+            self?.model.setEdgeWaypoints(id, points: points, positions: positions)
         }
         workspace.onCreateEdge = { [weak self] source, target in
             self?.model.addEdge(from: source, to: target)
@@ -308,6 +320,8 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
         titleField.stringValue = model.diagram?.project.title ?? ""
         statusLabel.stringValue = model.status
         statusLabel.toolTip = model.backend.status
+        AppTheme.apply(dark: model.diagram?.presentation.theme == "dark")
+        themeButton?.isEnabled = !model.isEditingLocked
         importButton?.isEnabled = !model.isEditingLocked
         undoButton?.isEnabled = model.history.canUndo && !model.isEditingLocked
         redoButton?.isEnabled = model.history.canRedo && !model.isEditingLocked
@@ -377,6 +391,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
         inspector.frame = NSRect(x: 0, y: 0, width: 460, height: contentHeight)
         inspector.autoresizingMask = [.width, .height]
         window.contentView = inspector
+        AppTheme.configure(window)
         window.setContentSize(NSSize(width: 460, height: contentHeight))
         let controller = NSWindowController(window: window)
         styleWindowController = controller
@@ -430,6 +445,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
             return
         }
         let panel = NSOpenPanel()
+        panel.appearance = NSApp.appearance
         panel.allowedContentTypes = [.json]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
@@ -460,6 +476,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
                 catch { showAlert("Экспорт отменён: проект не сохранён. \(error.localizedDescription)"); return }
             }
             let panel = NSSavePanel()
+            panel.appearance = NSApp.appearance
             panel.allowedContentTypes = [.json]
             panel.nameFieldStringValue = "graphischema-project.json"
             panel.beginSheetModal(for: window!) { response in
@@ -501,6 +518,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
         options.spacing = 9
 
         let alert = NSAlert()
+        alert.window.appearance = NSApp.appearance
         alert.messageText = "Экспорт диаграммы в PNG"
         alert.informativeText = "Выберите разрешение и фон изображения."
         alert.accessoryView = options
@@ -513,6 +531,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
             let scale = scales[min(max(scalePopup.indexOfSelectedItem, 0), scales.count - 1)]
             let background = backgrounds[min(max(backgroundPopup.indexOfSelectedItem, 0), backgrounds.count - 1)]
             let panel = NSSavePanel()
+            panel.appearance = NSApp.appearance
             panel.allowedContentTypes = [.png]
             panel.nameFieldStringValue = "graphischema-diagram.png"
             panel.beginSheetModal(for: self.window!) { saveResponse in
@@ -632,6 +651,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
             if !details.isEmpty { lines.append("\(title): \(details.joined(separator: "; "))") }
         }
         let alert = NSAlert()
+        alert.window.appearance = NSApp.appearance
         alert.messageText = "Отличия от версии «\(diff.versionTitle)»"
         alert.informativeText = lines.isEmpty ? "Изменений нет." : lines.joined(separator: "\n")
         alert.alertStyle = .informational
@@ -643,6 +663,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
 
     private func showAlert(_ message: String) {
         let alert = NSAlert()
+        alert.window.appearance = NSApp.appearance
         alert.messageText = "GraphiSchema"
         alert.informativeText = message
         alert.alertStyle = .warning
@@ -676,6 +697,7 @@ final class VersionHistoryWindowController: NSWindowController, NSTableViewDataS
         window.minSize = NSSize(width: 620, height: 380)
         super.init(window: window)
         buildInterface()
+        AppTheme.configure(window)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -806,6 +828,7 @@ final class VersionHistoryWindowController: NSWindowController, NSTableViewDataS
         guard versions.indices.contains(row) else { return }
         let version = versions[row]
         let alert = NSAlert()
+        alert.window.appearance = NSApp.appearance
         alert.messageText = "Восстановить выбранную версию?"
         alert.informativeText = "Текущий проект будет сохранён в истории, затем его состояние заменится выбранным снимком."
         alert.addButton(withTitle: "Восстановить")
@@ -848,7 +871,8 @@ private final class PaletteItemView: NSView, NSDraggingSource {
         super.init(frame: .zero)
         identifier = NSUserInterfaceItemIdentifier("palette-item-\(item.id)")
         wantsLayer = true
-        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        layer?.name = "theme-surface-control"
+        layer?.backgroundColor = AppTheme.surface("control").cgColor
         layer?.cornerRadius = 7
         iconView.image = NSImage(systemSymbolName: item.symbol, accessibilityDescription: item.title)
         iconView.contentTintColor = .controlAccentColor
@@ -1144,6 +1168,10 @@ private final class SidebarView: NSView {
         button.isBordered = false
         button.alignment = .left
         button.contentTintColor = selected ? .controlAccentColor : color
+        button.attributedTitle = NSAttributedString(string: title, attributes: [
+            .foregroundColor: NSColor.labelColor,
+            .font: button.font ?? NSFont.systemFont(ofSize: 11),
+        ])
         if selected { button.wantsLayer = true; button.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.1).cgColor; button.layer?.cornerRadius = 5 }
         return button
     }
@@ -1169,6 +1197,7 @@ private final class WorkspaceView: NSView {
     var onMoveNode: ((String, Double, Double) -> Void)?
     var onResizeNode: ((String, Double, Double) -> Void)?
     var onCreateEdge: ((String, String) -> Void)?
+    var onSetEdgeWaypoints: ((String, [RoutePoint], [LayoutNode]) -> Void)?
     var onMoveContainer: ((String, Double, Double) -> Void)?
     var onResizeContainer: ((String, Double) -> Void)?
     var onDropPaletteItem: ((PaletteObject, Double, Double, String?) -> Void)?
@@ -1204,6 +1233,7 @@ private final class WorkspaceView: NSView {
         updateCanvasStatus(model)
         let proposal = model.activeProposal
         canvasView.isReadOnly = model.isEditingLocked
+        canvasView.inverseTrackpad = model.inverseTrackpad
         canvasView.update(
             diagram: proposal?.diagram ?? model.diagram,
             layout: proposal?.layout ?? model.layout,
@@ -1233,6 +1263,7 @@ private final class WorkspaceView: NSView {
 
     func setInteractionState(model: AppModel) {
         canvasView.isReadOnly = model.isEditingLocked
+        canvasView.inverseTrackpad = model.inverseTrackpad
         styleButton.isEnabled = !model.isEditingLocked
         if model.activeProposal == nil {
             if model.jsonDraftIsDirty {
@@ -1265,7 +1296,8 @@ private final class WorkspaceView: NSView {
 
     private func build() {
         wantsLayer = true
-        layer?.backgroundColor = NSColor(hex: "#F5F7FA").cgColor
+        layer?.name = "theme-surface-window"
+        layer?.backgroundColor = AppTheme.surface("window").cgColor
 
         header.orientation = .horizontal
         header.alignment = .centerY
@@ -1292,6 +1324,7 @@ private final class WorkspaceView: NSView {
         canvasView.onSelect = { [weak self] selection in self?.onSelectElement?(selection) }
         canvasView.onMoveNode = { [weak self] id, x, y in self?.onMoveNode?(id, x, y) }
         canvasView.onResizeNode = { [weak self] id, width, height in self?.onResizeNode?(id, width, height) }
+        canvasView.onSetEdgeWaypoints = { [weak self] id, points, positions in self?.onSetEdgeWaypoints?(id, points, positions) }
         canvasView.onCreateEdge = { [weak self] source, target in self?.onCreateEdge?(source, target) }
         canvasView.onMoveContainer = { [weak self] id, x, y in self?.onMoveContainer?(id, x, y) }
         canvasView.onResizeContainer = { [weak self] id, padding in self?.onResizeContainer?(id, padding) }
@@ -1336,7 +1369,8 @@ private final class WorkspaceView: NSView {
         footer.font = .systemFont(ofSize: 9)
         footer.textColor = .tertiaryLabelColor
         header.wantsLayer = true
-        header.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        header.layer?.name = "theme-surface-window"
+        header.layer?.backgroundColor = AppTheme.surface("window").cgColor
         let separator = NSBox()
         separator.boxType = .separator
         [header, separator, content, footer].forEach {
@@ -1417,7 +1451,8 @@ private final class JSONCodePanelView: NSView, NSTextViewDelegate {
     private func build() {
         identifier = NSUserInterfaceItemIdentifier("diagram-code-editor")
         wantsLayer = true
-        layer?.backgroundColor = NSColor(hex: "#F8FAFC").cgColor
+        layer?.name = "theme-surface-panel"
+        layer?.backgroundColor = AppTheme.surface("panel").cgColor
         modeControl.selectedSegment = 0
         modeControl.segmentStyle = .rounded
         modeControl.widthAnchor.constraint(equalToConstant: 150).isActive = true
@@ -1428,16 +1463,16 @@ private final class JSONCodePanelView: NSView, NSTextViewDelegate {
         codeTextView.isAutomaticQuoteSubstitutionEnabled = false
         codeTextView.isAutomaticDashSubstitutionEnabled = false
         codeTextView.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        codeTextView.textColor = NSColor(hex: "#D6DEEC")
-        codeTextView.backgroundColor = NSColor(hex: "#111827")
-        codeTextView.insertionPointColor = .white
+        codeTextView.textColor = .labelColor
+        codeTextView.backgroundColor = .textBackgroundColor
+        codeTextView.insertionPointColor = .labelColor
         codeTextView.textContainerInset = NSSize(width: 10, height: 10)
         codeTextView.delegate = self
         codeScroll.documentView = codeTextView
         codeScroll.hasVerticalScroller = true
         codeScroll.hasHorizontalScroller = true
         codeScroll.drawsBackground = true
-        codeScroll.backgroundColor = NSColor(hex: "#111827")
+        codeScroll.backgroundColor = .textBackgroundColor
 
         let formatAction = ControlAction { [weak self] _ in self?.onFormatJSON?() }
         let validateAction = ControlAction { [weak self] _ in self?.onValidateJSON?() }
@@ -1578,6 +1613,8 @@ private final class InspectorView: NSView {
     private var deleteButton: NSButton?
     private var displayedDiagram: DiagramProject?
     private var displayedSelection: DiagramSelection?
+    private var figureCollectionID: String?
+    private var figureNodeID: String?
 
     var preferredWindowContentHeight: CGFloat {
         min(620, max(280, documentHeight(for: stack) + 63))
@@ -1613,6 +1650,8 @@ private final class InspectorView: NSView {
                 ("LR", "Слева направо"), ("TB", "Сверху вниз"), ("RL", "Справа налево"), ("BT", "Снизу вверх"),
             ]) { value in model.updateDirection(value) }
             addEdgeRouting(model: model, label: "Маршрут связей")
+            addPopup("Тема", value: model.diagram?.presentation.theme ?? "light", choices: [("light", "Дневная"), ("dark", "Ночная")]) { model.updateTheme($0) }
+            addPopup("Тачпад", value: model.inverseTrackpad ? "inverse" : "system", choices: [("inverse", "Инверсная навигация"), ("system", "Системная навигация")]) { model.inverseTrackpad = $0 == "inverse" }
             addSection("КОМПОНОВКА")
             let engine = model.diagram?.diagram.layoutMode == "manual"
                 ? "neato (ручной)"
@@ -1631,10 +1670,19 @@ private final class InspectorView: NSView {
                 addPopup("Контейнер", value: node.containerId ?? "", choices: [("", "Без контейнера")] + model.containers.map { ($0.id, $0.label) }) { value in
                     model.editNode(id) { $0.containerId = value.isEmpty ? nil : value }
                 }
-                addPopup("Форма", value: node.shape, choices: [
-                    ("box", "Карточка"), ("ellipse", "Эллипс"), ("cylinder", "Цилиндр"),
-                    ("diamond", "Ромб"), ("hexagon", "Шестиугольник"), ("cloud", "Облако"),
-                ]) { value in model.editNode(id) { $0.shape = value } }
+                if figureNodeID != id {
+                    figureNodeID = id
+                    figureCollectionID = PaletteLibrary.allObjects.first(where: { $0.iconPath == node.icon })?.collectionID ?? "templates"
+                }
+                addPopup("Коллекция", value: figureCollectionID ?? "templates", choices: PaletteLibrary.collections.map { ($0.id, $0.title) }) { [weak self] value in
+                    self?.figureCollectionID = value
+                    self?.displayedDiagram = nil
+                    self?.update(model: model)
+                }
+                let figures = PaletteLibrary.collection(id: figureCollectionID ?? "templates")?.objects ?? []
+                addPopup("Фигура", value: figures.first(where: { $0.iconPath == node.icon })?.id ?? "", choices: [("", "Выберите фигуру…")] + figures.map { ($0.id, $0.title) }) { value in
+                    if let figure = PaletteLibrary.object(id: value) { model.replaceFigure(id, with: figure) }
+                }
                 if model.diagram?.diagram.layoutMode == "manual" {
                     addText("X координата", value: node.x.map { String(format: "%.3f", $0) } ?? "") { value in
                         guard let coordinate = Double(value) else { return }
@@ -1677,15 +1725,26 @@ private final class InspectorView: NSView {
                 addSection("СОЕДИНЕНИЕ")
                 addText("Подпись", value: item.label) { value in model.editEdge(id) { $0.label = value } }
                 let nodes = model.nodes.map { ($0.id, $0.label) }
-                addPopup("Источник", value: item.source, choices: nodes) { value in model.editEdge(id) { $0.source = value } }
-                addPopup("Цель", value: item.target, choices: nodes) { value in model.editEdge(id) { $0.target = value } }
+                addPopup("Источник", value: item.source, choices: nodes) { value in model.editEdge(id) { $0.source = value; $0.sourcePort = "auto" } }
+                addPopup("Цель", value: item.target, choices: nodes) { value in model.editEdge(id) { $0.target = value; $0.targetPort = "auto" } }
                 addPopup("Направление", value: item.direction, choices: [
                     ("forward", "Односторонняя"), ("both", "Двусторонняя"), ("none", "Без стрелок"),
                 ]) { value in model.editEdge(id) { $0.direction = value } }
                 addPopup("Стиль линии", value: item.style.lineStyle, choices: [
                     ("solid", "Сплошная"), ("dashed", "Пунктирная"), ("dotted", "Точечная"), ("bold", "Жирная"),
                 ]) { value in model.editEdge(id) { $0.style.lineStyle = value } }
-                addEdgeRouting(model: model, label: "Маршрут всех связей")
+                addPopup("Маршрут этой связи", value: item.routing ?? "", choices: [("", "Как у диаграммы"), ("straight", "Прямая"), ("angled", "Косая ломаная"), ("orthogonal", "Прямоугольная")]) { value in model.editEdge(id) { $0.routing = value.isEmpty ? nil : value } }
+                addPopup("Привязка источника", value: item.sourcePort, choices: CanvasGeometry.portChoices(model.nodes.first { $0.id == item.source })) { value in model.editEdge(id) { $0.sourcePort = value } }
+                addPopup("Привязка цели", value: item.targetPort, choices: CanvasGeometry.portChoices(model.nodes.first { $0.id == item.target })) { value in model.editEdge(id) { $0.targetPort = value } }
+                addPopup("Наконечник", value: item.style.arrowhead, choices: ["normal", "vee", "none", "diamond", "dot", "box", "crow", "tee"].map { ($0, $0) }) { value in model.editEdge(id) { $0.style.arrowhead = value } }
+                addPopup("Хвост", value: item.style.arrowtail, choices: ["none", "normal", "vee", "diamond", "dot", "box", "crow", "tee"].map { ($0, $0) }) { value in model.editEdge(id) { $0.style.arrowtail = value } }
+                addText("Толщина", value: String(item.style.penwidth)) { value in
+                    if let width = Double(value), (0.5...10).contains(width) { model.editEdge(id) { $0.style.penwidth = width } }
+                }
+                let resetRoute = makeButton("Сбросить точки пути", symbol: "arrow.counterclockwise") { _ in model.editEdge(id) { $0.waypoints = [] } }
+                resetRoute.identifier = NSUserInterfaceItemIdentifier("inspector-reset-route")
+                editableControls.append(resetRoute); addFullWidth(resetRoute)
+                addReadOnly("Точки пути", value: "\(item.waypoints.count) · двойной щелчок по линии добавляет точку")
                 addColor("Цвет", value: item.style.color) { color in model.editEdge(id) { $0.style.color = color } }
                 addReadOnly("ID", value: item.id)
             }
@@ -1814,6 +1873,9 @@ private final class InspectorView: NSView {
         for (key, title) in choices {
             popup.addItem(withTitle: title)
             popup.lastItem?.representedObject = key
+            if label == "Фигура", let item = PaletteLibrary.object(id: key) {
+                popup.lastItem?.image = CanvasGeometry.thumbnail(icon: item.iconPath)
+            }
         }
         if let selected = popup.itemArray.first(where: { ($0.representedObject as? String) == value }) { popup.select(selected) }
         popup.font = .systemFont(ofSize: 10)
@@ -1824,7 +1886,7 @@ private final class InspectorView: NSView {
     }
 
     private func addColor(_ label: String, value: String, changed: @escaping (String) -> Void) {
-        let well = NSColorWell()
+        let well = ThemedColorWell()
         well.identifier = NSUserInterfaceItemIdentifier("inspector-field-\(label)")
         well.color = NSColor(hex: value)
         addField(label, control: well) { sender in changed((sender as? NSColorWell)?.color.hexRGB ?? value) }
