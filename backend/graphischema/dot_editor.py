@@ -235,13 +235,17 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
                 all_node_statements[node_id] = NodeStatement(None, {})
     for node_id, statement in all_node_statements.items():
         attrs = statement.attrs
-        allowed = {"label", "shape", "style", "fillcolor", "color", "fontcolor", "penwidth", "tooltip", "pos", "fontname", "fontsize", "margin"}
+        allowed = {"label", "shape", "style", "fillcolor", "color", "fontcolor", "penwidth", "tooltip", "pos", "fontname", "fontsize", "margin", "fixedsize", "width", "height"}
         _check_attrs(attrs, allowed, f"узла {node_id}")
         old = existing_nodes.get(node_id)
         _require_value(attrs, "style", "filled,rounded", f"узла {node_id}")
         _require_value(attrs, "fontname", "Arial", f"узла {node_id}")
         _require_value(attrs, "fontsize", "10", f"узла {node_id}")
         _require_value(attrs, "margin", "0.16,0.1", f"узла {node_id}")
+        if "width" in attrs or "height" in attrs or "fixedsize" in attrs:
+            _require_value(attrs, "fixedsize", "true", f"узла {node_id}")
+            if "width" not in attrs or "height" not in attrs:
+                raise DOTEditError(f"Для узла {node_id} задайте width и height вместе.")
         tooltip = attrs.get("tooltip", old.description or old.kind if old else "")
         description = old.description if old and tooltip == (old.description or old.kind) else tooltip
         position = _position(attrs["pos"], node_id) if "pos" in attrs else None
@@ -262,6 +266,8 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
             },
             "x": position[0] if position else old.x if old else None,
             "y": position[1] if position else old.y if old else None,
+            "width": _number(attrs["width"], f"width узла {node_id}") if "width" in attrs else old.width if old else None,
+            "height": _number(attrs["height"], f"height узла {node_id}") if "height" in attrs else old.height if old else None,
         })
 
     if explicit_positions:

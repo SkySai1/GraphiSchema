@@ -21,6 +21,10 @@ def _node_statement(node: DiagramNode, manual_layout: bool) -> str:
         "penwidth": str(node.style.penwidth),
         "tooltip": quote(node.description or node.kind),
     }
+    if node.width is not None and node.height is not None:
+        attrs["fixedsize"] = "true"
+        attrs["width"] = str(node.width)
+        attrs["height"] = str(node.height)
     if manual_layout and node.x is not None and node.y is not None:
         attrs["pos"] = quote(f"{node.x * 72:.4f},{node.y * 72:.4f}!")
     rendered = ", ".join(f"{key}={value}" for key, value in attrs.items())

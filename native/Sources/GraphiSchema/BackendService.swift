@@ -60,6 +60,7 @@ final class BackendService: ObservableObject {
             environmentVariables["PATH"] = (extraPaths + [environmentVariables["PATH"] ?? "/usr/bin:/bin"]).joined(separator: ":")
             environmentVariables["UV_PROJECT_ENVIRONMENT"] = environment.path
             environmentVariables["GRAPHI_SCHEMA_DATA_DIR"] = dataDirectory.path
+            environmentVariables["PYTHONDONTWRITEBYTECODE"] = "1"
             server.environment = environmentVariables
             server.standardOutput = FileHandle.nullDevice
             server.standardError = FileHandle.nullDevice
@@ -99,7 +100,10 @@ final class BackendService: ObservableObject {
                   httpResponse.statusCode == 200,
                   let payload = try JSONSerialization.jsonObject(with: data) as? [String: String]
             else { return false }
-            return payload["app"] == "GraphiSchema" && payload["status"] == "ok"
+            return payload["app"] == "GraphiSchema"
+                && payload["status"] == "ok"
+                && payload["revision_merge"] == "three_way_v1"
+                && payload["storage_scope"] == "application-support"
         } catch {
             return false
         }

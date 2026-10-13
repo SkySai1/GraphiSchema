@@ -112,19 +112,37 @@ def render_fallback_svg(project: DiagramProject) -> str:
     for node in nodes:
         buckets[rank[node.id]].append(node)
     positions: dict[str, tuple[float, float]] = {}
-    card_w, card_h, gap, margin = 190.0, 84.0, 46.0, 44.0
+    card_sizes = {
+        node.id: (
+            (node.width / 2.5 * 190.0) if node.width is not None else 190.0,
+            (node.height / 0.62 * 84.0) if node.height is not None else 84.0,
+        )
+        for node in nodes
+    }
+    margin = 44.0
+    rank_widths = {key: max((card_sizes[node.id][0] for node in items), default=190.0) for key, items in buckets.items()}
+    rank_heights = {key: max((card_sizes[node.id][1] for node in items), default=84.0) for key, items in buckets.items()}
+    rank_offsets: dict[int, float] = {}
+    cursor = margin
+    for rank_value in range(max_rank + 1):
+        rank_offsets[rank_value] = cursor
+        cursor += (rank_widths.get(rank_value, 190.0) if horizontal else rank_heights.get(rank_value, 84.0)) + 46.0
     for rank_value in sorted(buckets):
         column = sorted(buckets[rank_value], key=lambda node: nodes.index(node))
         rank_slot = max_rank - rank_value if reverse_rank else rank_value
-        for index, node in enumerate(column):
+        stack_offset = margin
+        for node in column:
+            card_w, card_h = card_sizes[node.id]
             if horizontal:
-                positions[node.id] = (margin + rank_slot * (card_w + gap), margin + index * (card_h + gap))
+                positions[node.id] = (rank_offsets[rank_slot], stack_offset)
+                stack_offset += card_h + 46.0
             else:
-                positions[node.id] = (margin + index * (card_w + gap), margin + rank_slot * (card_h + gap))
+                positions[node.id] = (stack_offset, rank_offsets[max_rank - rank_slot])
+                stack_offset += card_w + 46.0
 
     if positions:
-        max_x = max(x for x, _ in positions.values()) + card_w + margin
-        max_y = max(y for _, y in positions.values()) + card_h + margin
+        max_x = max(x + card_sizes[node_id][0] for node_id, (x, _) in positions.items()) + margin
+        max_y = max(y + card_sizes[node_id][1] for node_id, (_, y) in positions.items()) + margin
     else:
         max_x, max_y = 480.0, 250.0
 
@@ -155,8 +173,8 @@ def render_fallback_svg(project: DiagramProject) -> str:
             continue
         left = min(x for x, _ in contained) - 22
         top = min(y for _, y in contained) - 34
-        right = max(x for x, _ in contained) + card_w + 22
-        bottom = max(y for _, y in contained) + card_h + 22
+        right = max(positions[node_id][0] + card_sizes[node_id][0] for node_id in descendants[container.id] if node_id in positions) + 22
+        bottom = max(positions[node_id][1] + card_sizes[node_id][1] for node_id in descendants[container.id] if node_id in positions) + 22
         style = container.style
         output.append(f'<rect x="{left:.1f}" y="{top:.1f}" width="{right-left:.1f}" height="{bottom-top:.1f}" rx="12" fill="{style.fill}" stroke="{style.stroke}" stroke-width="1.5"/>')
         output.append(f'<text x="{left+12:.1f}" y="{top+21:.1f}" fill="{style.text}" font-family="Arial,sans-serif" font-size="13" font-weight="700">{html.escape(container.label)}</text>')
@@ -166,10 +184,12 @@ def render_fallback_svg(project: DiagramProject) -> str:
         target = by_id[edge.target]
         sx, sy = positions[source.id]
         tx, ty = positions[target.id]
-        sx += card_w / 2
-        sy += card_h / 2
-        tx += card_w / 2
-        ty += card_h / 2
+        source_w, source_h = card_sizes[source.id]
+        target_w, target_h = card_sizes[target.id]
+        sx += source_w / 2
+        sy += source_h / 2
+        tx += target_w / 2
+        ty += target_h / 2
         color = edge.style.color
         dash = {"dashed": "8 6", "dotted": "2 6", "solid": "", "bold": ""}[edge.style.line_style]
         dash_attr = f' stroke-dasharray="{dash}"' if dash else ""
@@ -183,6 +203,7 @@ def render_fallback_svg(project: DiagramProject) -> str:
 
     for node in nodes:
         x, y = positions[node.id]
+        card_w, card_h = card_sizes[node.id]
         style = node.style
         common = f'fill="{style.fill}" stroke="{style.stroke}" stroke-width="{style.penwidth:.1f}"'
         if node.shape == "ellipse":
@@ -197,7 +218,8 @@ def render_fallback_svg(project: DiagramProject) -> str:
             output.append(f'<path d="M{x:.1f} {y+10:.1f} C{x:.1f} {y-4:.1f}, {x+card_w:.1f} {y-4:.1f}, {x+card_w:.1f} {y+10:.1f} L{x+card_w:.1f} {y+card_h-10:.1f} C{x+card_w:.1f} {y+card_h+4:.1f}, {x:.1f} {y+card_h+4:.1f}, {x:.1f} {y+card_h-10:.1f} Z" {common}/>')
             output.append(f'<path d="M{x:.1f} {y+10:.1f} C{x:.1f} {y+24:.1f}, {x+card_w:.1f} {y+24:.1f}, {x+card_w:.1f} {y+10:.1f}" fill="none" stroke="{style.stroke}" stroke-width="{style.penwidth:.1f}"/>')
         elif node.shape == "cloud":
-            output.append(f'<path d="M{x+30:.1f} {y+67:.1f} C{x+8:.1f} {y+67:.1f}, {x+8:.1f} {y+42:.1f}, {x+26:.1f} {y+37:.1f} C{x+25:.1f} {y+13:.1f}, {x+57:.1f} {y+6:.1f}, {x+73:.1f} {y+23:.1f} C{x+91:.1f} {y+2:.1f}, {x+132:.1f} {y+11:.1f}, {x+134:.1f} {y+34:.1f} C{x+165:.1f} {y+27:.1f}, {x+183:.1f} {y+48:.1f}, {x+162:.1f} {y+67:.1f} Z" {common}/>')
+            sx, sy = card_w / 190.0, card_h / 84.0
+            output.append(f'<path d="M{x+30*sx:.1f} {y+67*sy:.1f} C{x+8*sx:.1f} {y+67*sy:.1f}, {x+8*sx:.1f} {y+42*sy:.1f}, {x+26*sx:.1f} {y+37*sy:.1f} C{x+25*sx:.1f} {y+13*sy:.1f}, {x+57*sx:.1f} {y+6*sy:.1f}, {x+73*sx:.1f} {y+23*sy:.1f} C{x+91*sx:.1f} {y+2*sy:.1f}, {x+132*sx:.1f} {y+11*sy:.1f}, {x+134*sx:.1f} {y+34*sy:.1f} C{x+165*sx:.1f} {y+27*sy:.1f}, {x+183*sx:.1f} {y+48*sy:.1f}, {x+162*sx:.1f} {y+67*sy:.1f} Z" {common}/>')
         else:
             output.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{card_w:.1f}" height="{card_h:.1f}" rx="10" {common}/>')
         output.append(f'<text x="{x+14:.1f}" y="{y+31:.1f}" fill="{style.text}" font-family="Arial,sans-serif" font-size="14" font-weight="700">{html.escape(node.label)}</text>')

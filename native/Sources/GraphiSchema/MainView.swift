@@ -3,29 +3,34 @@ import ObjectiveC
 import UniformTypeIdentifiers
 
 @MainActor
-final class MainWindowController: NSWindowController {
+final class MainWindowController: NSWindowController, NSSplitViewDelegate {
     private let model: AppModel
     private let rootView = NSView()
     private let sidebar = SidebarView()
     private let workspace = WorkspaceView()
-    private let inspector = InspectorView()
+    private let codePanel = JSONCodePanelView()
+    private var styleInspector: InspectorView?
+    private var styleWindowController: NSWindowController?
+    private var historyWindowController: VersionHistoryWindowController?
     private let titleField = NSTextField(string: "")
     private let statusLabel = NSTextField(labelWithString: "Подключение…")
     private var undoButton: NSButton?
     private var redoButton: NSButton?
+    private var importButton: NSButton?
     private var ollamaWindowController: OllamaAssistantWindowController?
     private var retainedActions: [ControlAction] = []
+    private var didSetInitialSplitPositions = false
 
     init(model: AppModel) {
         self.model = model
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1480, height: 900),
+            contentRect: NSRect(x: 0, y: 0, width: 1580, height: 920),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "GraphiSchema"
-        window.minSize = NSSize(width: 1120, height: 700)
+        window.minSize = NSSize(width: 1280, height: 720)
         window.center()
         super.init(window: window)
         window.contentView = rootView
@@ -39,6 +44,7 @@ final class MainWindowController: NSWindowController {
         refreshSidebar()
         refreshInspector()
         workspace.refresh(model: model)
+        codePanel.refresh(model: model)
         refreshHeader()
     }
 
@@ -52,13 +58,12 @@ final class MainWindowController: NSWindowController {
         let split = NSSplitView()
         split.isVertical = true
         split.dividerStyle = .thin
+        split.delegate = self
         split.addArrangedSubview(sidebar)
         split.addArrangedSubview(workspace)
-        split.addArrangedSubview(inspector)
-        sidebar.widthAnchor.constraint(equalToConstant: 205).isActive = true
-        sidebar.widthAnchor.constraint(greaterThanOrEqualToConstant: 175).isActive = true
-        inspector.widthAnchor.constraint(equalToConstant: 300).isActive = true
-        inspector.widthAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true
+        split.addArrangedSubview(codePanel)
+        sidebar.setContentCompressionResistancePriority(.required, for: .horizontal)
+        codePanel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         [header, divider, split].forEach {
             $0.translatesAutoresizingMaskIntoConstraints = false
@@ -77,7 +82,27 @@ final class MainWindowController: NSWindowController {
             split.topAnchor.constraint(equalTo: divider.bottomAnchor),
             split.bottomAnchor.constraint(equalTo: rootView.bottomAnchor),
         ])
-        split.setPosition(205, ofDividerAt: 0)
+        sidebar.widthAnchor.constraint(greaterThanOrEqualToConstant: 225).isActive = true
+        codePanel.widthAnchor.constraint(greaterThanOrEqualToConstant: 380).isActive = true
+    }
+
+    func splitViewDidResizeSubviews(_ notification: Notification) {
+        guard !didSetInitialSplitPositions,
+              let splitView = notification.object as? NSSplitView,
+              splitView.bounds.width > 1000 else { return }
+        didSetInitialSplitPositions = true
+        splitView.setPosition(250, ofDividerAt: 0)
+        splitView.setPosition(splitView.bounds.width - 420, ofDividerAt: 1)
+    }
+
+    func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposedMinimumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
+        if dividerIndex == 0 { return 225 }
+        return splitView.subviews[0].frame.width + splitView.dividerThickness + 600
+    }
+
+    func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposedMaximumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
+        if dividerIndex == 0 { return 310 }
+        return splitView.bounds.width - 380 - splitView.dividerThickness
     }
 
     private func buildHeader() -> NSView {
@@ -130,11 +155,11 @@ final class MainWindowController: NSWindowController {
         status.spacing = 7
         status.widthAnchor.constraint(greaterThanOrEqualToConstant: 130).isActive = true
 
-        let importButton = makeButton("Импорт", symbol: "square.and.arrow.down") { [weak self] _ in self?.importJSON() }
+        importButton = makeButton("Импорт", symbol: "square.and.arrow.down") { [weak self] _ in self?.importJSON() }
         let exportButton = makeButton("Экспорт", symbol: "square.and.arrow.up") { [weak self] _ in self?.exportJSON() }
         let pngButton = makeButton("PNG", symbol: "photo") { [weak self] _ in self?.exportPNG() }
         let historyButton = makeButton("История", symbol: "clock.arrow.circlepath") { [weak self] _ in self?.showHistory() }
-        let ollamaButton = makeButton("Ollama", symbol: "sparkles") { [weak self] _ in self?.showOllamaAssistant() }
+        let ollamaButton = makeButton("Настройки ИИ", symbol: "gearshape") { [weak self] _ in self?.showOllamaAssistant() }
         undoButton = makeButton("Отменить", symbol: "arrow.uturn.backward") { [weak self] _ in self?.performHistoryCommand(redo: false) }
         redoButton = makeButton("Повторить", symbol: "arrow.uturn.forward") { [weak self] _ in self?.performHistoryCommand(redo: true) }
         undoButton?.keyEquivalent = "z"
@@ -143,7 +168,7 @@ final class MainWindowController: NSWindowController {
         redoButton?.keyEquivalentModifierMask = [.command, .shift]
         let saveButton = makeButton("Сохранить", symbol: "checkmark.circle.fill", prominent: true) { [weak self] _ in self?.saveProject() }
 
-        let stack = NSStackView(views: [brand, titleStack, status, importButton, exportButton, pngButton, historyButton, ollamaButton, undoButton!, redoButton!, saveButton])
+        let stack = NSStackView(views: [brand, titleStack, status, importButton!, exportButton, pngButton, historyButton, ollamaButton, undoButton!, redoButton!, saveButton])
         stack.orientation = .horizontal
         stack.alignment = .centerY
         stack.spacing = 12
@@ -151,13 +176,14 @@ final class MainWindowController: NSWindowController {
     }
 
     private func connectModel() {
-        sidebar.onAddNode = { [weak self] in self?.model.addNode(); self?.refreshAll() }
+        sidebar.onAddNode = { [weak self] item in self?.model.addNode(item); self?.refreshAll() }
         sidebar.onAddContainer = { [weak self] in self?.model.addContainer(); self?.refreshAll() }
         sidebar.onAddEdge = { [weak self] in self?.model.addEdge(); self?.refreshAll() }
         sidebar.onSelect = { [weak self] selection in
             self?.model.selection = selection
             self?.refreshInspector()
             self?.refreshSidebar()
+            if let self { self.workspace.refresh(model: self.model) }
         }
         workspace.onSelectElement = { [weak self] selection in
             guard let self else { return }
@@ -169,63 +195,166 @@ final class MainWindowController: NSWindowController {
         workspace.onMoveNode = { [weak self] id, x, y in
             self?.model.moveNode(id, x: x, y: y)
         }
+        workspace.onResizeNode = { [weak self] id, width, height in
+            self?.model.editNode(id) { $0.width = width; $0.height = height }
+        }
+        workspace.onCreateEdge = { [weak self] source, target in
+            self?.model.addEdge(from: source, to: target)
+            self?.refreshAll()
+        }
         workspace.onMoveContainer = { [weak self] id, x, y in
             self?.model.moveContainer(id, deltaX: x, deltaY: y)
         }
         workspace.onResizeContainer = { [weak self] id, padding in
             self?.model.editContainer(id) { $0.padding = padding }
         }
-        workspace.onSelectTab = { [weak self] tab in self?.selectTab(tab) }
-        workspace.onApplyJSON = { [weak self] in self?.applyJSON() }
-        workspace.onJSONChange = { [weak self] value in self?.model.jsonDraft = value }
-        workspace.onDOTChange = { [weak self] value in self?.model.updateDOTDraft(value) }
-        workspace.onPreviewDOT = { [weak self] in
+        workspace.onDropPaletteItem = { [weak self] item, x, y, containerID in
+            guard let self else { return }
+            self.model.addNode(item, at: (x: x, y: y), inContainer: containerID)
+            self.refreshSidebar()
+            self.refreshInspector()
+            Task { @MainActor in
+                do { try await self.model.saveNow() }
+                catch { self.showAlert("Не удалось сохранить добавленный объект: \(error.localizedDescription)") }
+            }
+        }
+        workspace.onShowStyle = { [weak self] in self?.showStyleWindow() }
+        workspace.onConfigureOllama = { [weak self] in self?.showOllamaAssistant() }
+        workspace.onOllamaMessage = { [weak self] prompt, mode in self?.runOllamaPrompt(prompt, mode: mode) }
+        workspace.onDeleteSelection = { [weak self] in
+            guard let self else { return }
+            self.model.deleteSelection()
+            self.refreshAll()
+        }
+        workspace.onApplyProposal = { [weak self] in self?.applyProposalFromChat() }
+        workspace.onCancelProposal = { [weak self] in
+            guard let self else { return }
+            self.model.cancelCurrentProposal()
+            self.workspace.appendChatMessage(role: "Ассистент", text: "Предложение отменено. Проект и его версия не изменены.")
+        }
+
+        codePanel.onSelectTab = { [weak self] tab in self?.selectTab(tab) }
+        codePanel.onJSONChange = { [weak self] value in self?.model.updateJSONDraft(value) }
+        codePanel.onDOTChange = { [weak self] value in self?.model.updateDOTDraft(value) }
+        codePanel.onApplyJSON = { [weak self] in self?.applyJSON() }
+        codePanel.onDiscardJSON = { [weak self] in self?.model.discardJSONDraft() }
+        codePanel.onFormatJSON = { [weak self] in self?.formatJSONDraft() }
+        codePanel.onValidateJSON = { [weak self] in
+            guard let self else { return }
+            Task { @MainActor in await self.model.validate(); self.codePanel.refresh(model: self.model) }
+        }
+        codePanel.onPreviewDOT = { [weak self] in
             guard let self else { return }
             Task { @MainActor in
                 do { try await self.model.previewDOTDraft() }
                 catch { self.showAlert(error.localizedDescription) }
             }
         }
-        workspace.onApplyDOT = { [weak self] in
+        model.onModelChange = { [weak self] in
             guard let self else { return }
-            Task { @MainActor in
-                do { try await self.model.applyCurrentProposal(); self.refreshAll() }
-                catch { self.showAlert(error.localizedDescription) }
-            }
+            self.refreshSidebar()
+            self.refreshInspector()
+            self.refreshHeader()
+            self.styleInspector?.setInteractionState(isEditingLocked: self.model.isEditingLocked)
+            self.workspace.refreshCounts(model: self.model)
+            self.workspace.setInteractionState(model: self.model)
+            self.codePanel.refresh(model: self.model)
         }
-        workspace.onCancelDOT = { [weak self] in self?.model.cancelCurrentProposal() }
-        inspector.onDelete = { [weak self] in self?.model.deleteSelection(); self?.refreshAll() }
-        model.onModelChange = { [weak self] in self?.refreshSidebar(); self?.refreshHeader(); self?.workspace.refreshCounts(model: self?.model) }
         model.onPreviewChange = { [weak self] in
             guard let self else { return }
             self.workspace.refresh(model: self.model)
+            self.refreshInspector()
             self.refreshSidebar()
             self.refreshHeader()
+            self.codePanel.refresh(model: self.model)
         }
         model.onAlert = { [weak self] message in self?.showAlert(message) }
         sidebar.update(model: model)
         workspace.refresh(model: model)
-        inspector.update(model: model)
+        codePanel.refresh(model: model)
         refreshHeader()
     }
 
     private func refreshSidebar() { sidebar.update(model: model) }
-    private func refreshInspector() { inspector.update(model: model) }
+    private func refreshInspector() { styleInspector?.update(model: model) }
 
     private func refreshHeader() {
         titleField.stringValue = model.diagram?.project.title ?? ""
         statusLabel.stringValue = model.status
         statusLabel.toolTip = model.backend.status
-        undoButton?.isEnabled = model.history.canUndo
-        redoButton?.isEnabled = model.history.canRedo
+        importButton?.isEnabled = !model.isEditingLocked
+        undoButton?.isEnabled = model.history.canUndo && !model.isEditingLocked
+        redoButton?.isEnabled = model.history.canRedo && !model.isEditingLocked
     }
 
     private func selectTab(_ tab: WorkspaceTab) {
         Task { @MainActor in
             await model.selectTab(tab)
-            workspace.refresh(model: model)
+            codePanel.refresh(model: model)
             refreshHeader()
         }
+    }
+
+    private func formatJSONDraft() {
+        guard model.activeProposal == nil else { return }
+        guard let data = model.jsonDraft.data(using: .utf8) else { return }
+        do {
+            let value = try JSONSerialization.jsonObject(with: data)
+            let formatted = try JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+            guard let text = String(data: formatted, encoding: .utf8) else { return }
+            codePanel.applyFormattedJSON(text)
+        } catch {
+            showAlert("JSON не удалось отформатировать: \(error.localizedDescription)")
+        }
+    }
+
+    func showStyleWindow() {
+        guard !model.isEditingLocked else {
+            showAlert("Сначала примените или сбросьте текущий черновик.")
+            return
+        }
+        guard model.diagram != nil else {
+            showAlert("Дождитесь загрузки проекта, прежде чем открывать настройки.")
+            return
+        }
+        let inspector: InspectorView
+        if let existing = styleInspector {
+            inspector = existing
+        } else {
+            inspector = InspectorView()
+            inspector.onDelete = { [weak self] in
+                guard let self else { return }
+                self.model.deleteSelection()
+                self.refreshAll()
+            }
+            styleInspector = inspector
+        }
+        inspector.update(model: model)
+        if let controller = styleWindowController {
+            controller.showWindow(self)
+            controller.window?.makeKeyAndOrderFront(self)
+            controller.window?.layoutIfNeeded()
+            inspector.layoutSubtreeIfNeeded()
+            return
+        }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 460, height: 700),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Оформление и свойства"
+        window.minSize = NSSize(width: 440, height: 520)
+        inspector.frame = NSRect(x: 0, y: 0, width: 460, height: 680)
+        inspector.autoresizingMask = [.width, .height]
+        window.contentView = inspector
+        window.setContentSize(NSSize(width: 460, height: 680))
+        let controller = NSWindowController(window: window)
+        styleWindowController = controller
+        controller.showWindow(self)
+        controller.window?.makeKeyAndOrderFront(self)
+        controller.window?.layoutIfNeeded()
+        inspector.layoutSubtreeIfNeeded()
     }
 
     private func applyJSON() {
@@ -241,11 +370,16 @@ final class MainWindowController: NSWindowController {
 
     private func saveProject() {
         Task { @MainActor in
-            if model.workspaceTab == .json {
+            guard model.activeProposal == nil else {
+                showAlert("Сначала примените или отмените предложение.")
+                return
+            }
+            if model.jsonDraftIsDirty {
                 do { try await model.applyJSONDraft() }
                 catch { showAlert(error.localizedDescription); return }
             } else {
-                await model.saveNow()
+                do { try await model.saveNow() }
+                catch { showAlert("Не удалось сохранить проект: \(error.localizedDescription)"); refreshHeader(); return }
             }
             refreshHeader()
         }
@@ -262,6 +396,10 @@ final class MainWindowController: NSWindowController {
     }
 
     private func importJSON() {
+        guard !model.isEditingLocked else {
+            showAlert("Сначала примените или сбросьте текущий черновик.")
+            return
+        }
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.json]
         panel.allowsMultipleSelection = false
@@ -281,11 +419,16 @@ final class MainWindowController: NSWindowController {
 
     private func exportJSON() {
         Task { @MainActor in
-            if model.workspaceTab == .json {
+            guard model.activeProposal == nil else {
+                showAlert("Сначала примените или отмените предложение перед экспортом.")
+                return
+            }
+            if model.jsonDraftIsDirty {
                 do { try await model.applyJSONDraft() }
                 catch { showAlert(error.localizedDescription); return }
             } else {
-                await model.saveNow()
+                do { try await model.saveNow() }
+                catch { showAlert("Экспорт отменён: проект не сохранён. \(error.localizedDescription)"); return }
             }
             let panel = NSSavePanel()
             panel.allowedContentTypes = [.json]
@@ -302,6 +445,10 @@ final class MainWindowController: NSWindowController {
     }
 
     private func exportPNG() {
+        guard model.activeProposal == nil else {
+            showAlert("Сначала примените или отмените предложение перед экспортом.")
+            return
+        }
         let scalePopup = NSPopUpButton(frame: .zero, pullsDown: false)
         scalePopup.addItems(withTitles: ["1×", "1.5×", "2×", "3×"])
         scalePopup.selectItem(at: 2)
@@ -354,56 +501,34 @@ final class MainWindowController: NSWindowController {
     }
 
     private func showHistory() {
-        Task { @MainActor in
+        Task { @MainActor [weak self] in
+            guard let self else { return }
             do {
-                if model.workspaceTab == .json {
-                    try await model.applyJSONDraft()
-                } else {
-                    await model.saveNow()
-                }
-                let versions = try await model.fetchVersions()
-                guard !versions.isEmpty else {
-                    showAlert("Для этого проекта пока нет сохранённых версий.")
+                guard model.activeProposal == nil else {
+                    showAlert("Сначала примените или отмените предложение перед открытием истории.")
                     return
                 }
-                let picker = NSPopUpButton(frame: .zero, pullsDown: false)
-                for version in versions {
-                    let date = String(version.createdAt.replacingOccurrences(of: "T", with: " ").prefix(16))
-                    picker.addItem(withTitle: "\(date) · \(version.title) · \(version.revision.prefix(7))")
+                if model.jsonDraftIsDirty {
+                    try await model.applyJSONDraft()
+                } else {
+                    try await model.saveNow()
                 }
-                picker.selectItem(at: 0)
-                let options = NSStackView(views: [makeLabel("Снимок", size: 11, weight: .medium, color: .labelColor), picker])
-                options.orientation = .horizontal
-                options.alignment = .centerY
-                options.spacing = 10
-                options.widthAnchor.constraint(equalToConstant: 520).isActive = true
-
-                let alert = NSAlert()
-                alert.messageText = "История проекта"
-                alert.informativeText = "Сравните выбранную версию с текущей или восстановите её."
-                alert.accessoryView = options
-                alert.addButton(withTitle: "Сравнить")
-                alert.addButton(withTitle: "Восстановить")
-                alert.addButton(withTitle: "Закрыть")
-                alert.beginSheetModal(for: window!) { response in
-                    let selectedIndex = picker.indexOfSelectedItem
-                    guard versions.indices.contains(selectedIndex) else { return }
-                    let version = versions[selectedIndex]
-                    if response == .alertFirstButtonReturn {
-                        Task { @MainActor in
-                            do { self.showVersionDiff(try await self.model.fetchVersionDiff(version.id)) }
-                            catch { self.showAlert(error.localizedDescription) }
-                        }
-                    } else if response == .alertSecondButtonReturn {
-                        Task { @MainActor in
-                            do {
-                                try await self.model.restoreVersion(version.id)
-                                self.refreshAll()
-                            } catch { self.showAlert(error.localizedDescription) }
-                        }
-                    }
+                let versions = try await model.fetchVersions()
+                let controller: VersionHistoryWindowController
+                if let current = historyWindowController {
+                    controller = current
+                } else {
+                    controller = VersionHistoryWindowController(model: model, onRestore: { [weak self] in
+                        self?.refreshAll()
+                    }, onShowDiff: { [weak self] diff in
+                        self?.showVersionDiff(diff)
+                    })
+                    historyWindowController = controller
                 }
-            } catch { showAlert(error.localizedDescription) }
+                controller.update(versions)
+                controller.showWindow(self)
+                controller.window?.makeKeyAndOrderFront(self)
+            } catch { showAlert("Не удалось сохранить изменения или загрузить историю: \(error.localizedDescription)") }
         }
     }
 
@@ -417,6 +542,48 @@ final class MainWindowController: NSWindowController {
         ollamaWindowController = controller
         controller.showWindow(self)
         controller.window?.makeKeyAndOrderFront(self)
+    }
+
+    private func runOllamaPrompt(_ prompt: String, mode: Int) {
+        let preferences = model.ollamaPreferences
+        guard !preferences.endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !preferences.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            workspace.appendChatMessage(role: "Ассистент", text: "Сначала задайте endpoint и модель в настройках ИИ.")
+            showOllamaAssistant()
+            return
+        }
+        workspace.setOllamaBusy(true)
+        Task { @MainActor in
+            defer { self.workspace.setOllamaBusy(false) }
+            do {
+                if mode == 2 {
+                    let response = try await self.model.reviewWithOllama(prompt)
+                    self.workspace.appendChatMessage(role: "Ассистент · проверка", text: response.report.text)
+                } else {
+                    let proposal = try await self.model.generateWithOllama(prompt, editing: mode == 1)
+                    let summary = proposal.changes.entries.isEmpty
+                        ? "Модель не предложила изменений."
+                        : "Предложение подготовлено (\(proposal.changes.entries.count) изменений):\n" + proposal.changes.entries.joined(separator: "\n")
+                    self.workspace.appendChatMessage(role: "Ассистент · предложение", text: summary + "\n\nJSON-кандидат показан в правой панели. Нажмите «Применить · сохранить версию», чтобы записать его в проект и историю.")
+                }
+                self.refreshAll()
+            } catch {
+                self.workspace.appendChatMessage(role: "Ассистент · ошибка", text: error.localizedDescription)
+            }
+        }
+    }
+
+    private func applyProposalFromChat() {
+        Task { @MainActor in
+            do {
+                try await model.applyCurrentProposal()
+                refreshAll()
+                workspace.appendChatMessage(role: "Ассистент", text: "Изменения применены, проект сохранён как новая версия \(model.revision).")
+            } catch {
+                showAlert(error.localizedDescription)
+                workspace.appendChatMessage(role: "Ассистент · ошибка", text: error.localizedDescription)
+            }
+        }
     }
 
     private func showVersionDiff(_ diff: VersionDiff) {
@@ -456,45 +623,344 @@ final class MainWindowController: NSWindowController {
 }
 
 @MainActor
+final class VersionHistoryWindowController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate {
+    private let model: AppModel
+    private let tableView = NSTableView()
+    private let statusLabel = NSTextField(labelWithString: "")
+    private let compareButton = makeButton("Сравнить", symbol: "arrow.left.arrow.right") { _ in }
+    private let restoreButton = makeButton("Восстановить", symbol: "clock.arrow.circlepath") { _ in }
+    private var versions: [ProjectVersion] = []
+    private var onRestore: (() -> Void)?
+    private var onShowDiff: ((VersionDiff) -> Void)?
+
+    init(model: AppModel, onRestore: @escaping () -> Void, onShowDiff: @escaping (VersionDiff) -> Void) {
+        self.model = model
+        self.onRestore = onRestore
+        self.onShowDiff = onShowDiff
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 760, height: 520),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "История проекта"
+        window.minSize = NSSize(width: 620, height: 380)
+        super.init(window: window)
+        buildInterface()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    func update(_ versions: [ProjectVersion]) {
+        self.versions = versions
+        tableView.reloadData()
+        if versions.isEmpty {
+            statusLabel.stringValue = "Сохранённых версий пока нет."
+        } else {
+            statusLabel.stringValue = "Снимков: \(versions.count). Выберите снимок для сравнения или восстановления."
+            tableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        }
+        updateButtons()
+    }
+
+    func showError(_ message: String) {
+        statusLabel.stringValue = message
+    }
+
+    func numberOfRows(in tableView: NSTableView) -> Int { versions.count }
+
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        guard versions.indices.contains(row), let key = tableColumn?.identifier.rawValue else { return nil }
+        let version = versions[row]
+        let cellIdentifier = NSUserInterfaceItemIdentifier("history-cell-\(key)")
+        let cell = (tableView.makeView(withIdentifier: cellIdentifier, owner: self) as? NSTextField) ?? NSTextField(labelWithString: "")
+        cell.identifier = cellIdentifier
+        cell.font = key == "revision" ? .monospacedSystemFont(ofSize: 10, weight: .regular) : .systemFont(ofSize: 11)
+        switch key {
+        case "date": cell.stringValue = version.createdAt.replacingOccurrences(of: "T", with: " ").replacingOccurrences(of: "Z", with: " UTC")
+        case "title": cell.stringValue = version.title
+        default: cell.stringValue = String(version.revision.prefix(12))
+        }
+        cell.lineBreakMode = .byTruncatingTail
+        return cell
+    }
+
+    func tableViewSelectionDidChange(_ notification: Notification) { updateButtons() }
+
+    private func buildInterface() {
+        guard let content = window?.contentView else { return }
+        tableView.identifier = NSUserInterfaceItemIdentifier("version-history-table")
+        compareButton.identifier = NSUserInterfaceItemIdentifier("version-history-compare")
+        restoreButton.identifier = NSUserInterfaceItemIdentifier("version-history-restore")
+        let dateColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("date"))
+        dateColumn.title = "Дата"
+        dateColumn.width = 205
+        let titleColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("title"))
+        titleColumn.title = "Название"
+        titleColumn.width = 375
+        let revisionColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("revision"))
+        revisionColumn.title = "Ревизия"
+        revisionColumn.width = 130
+        [dateColumn, titleColumn, revisionColumn].forEach(tableView.addTableColumn)
+        tableView.headerView = NSTableHeaderView()
+        tableView.rowHeight = 30
+        tableView.usesAlternatingRowBackgroundColors = true
+        tableView.allowsMultipleSelection = false
+        tableView.dataSource = self
+        tableView.delegate = self
+
+        let scrollView = NSScrollView()
+        scrollView.documentView = tableView
+        scrollView.hasVerticalScroller = true
+        scrollView.borderType = .bezelBorder
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+
+        statusLabel.font = .systemFont(ofSize: 10)
+        statusLabel.textColor = .secondaryLabelColor
+        compareButton.target = self
+        compareButton.action = #selector(compareSelected)
+        restoreButton.target = self
+        restoreButton.action = #selector(restoreSelected)
+        let refreshButton = makeButton("Обновить", symbol: "arrow.clockwise") { [weak self] _ in
+            Task { @MainActor in await self?.reload() }
+        }
+        let closeButton = makeButton("Закрыть", symbol: "xmark") { [weak self] _ in self?.close() }
+        let buttons = NSStackView(views: [compareButton, restoreButton, refreshButton, NSView(), closeButton])
+        buttons.orientation = .horizontal
+        buttons.alignment = .centerY
+        buttons.spacing = 10
+        buttons.translatesAutoresizingMaskIntoConstraints = false
+        statusLabel.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(statusLabel)
+        content.addSubview(scrollView)
+        content.addSubview(buttons)
+        NSLayoutConstraint.activate([
+            statusLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
+            statusLabel.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
+            statusLabel.topAnchor.constraint(equalTo: content.topAnchor, constant: 14),
+            scrollView.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
+            scrollView.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
+            scrollView.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 10),
+            scrollView.bottomAnchor.constraint(equalTo: buttons.topAnchor, constant: -12),
+            buttons.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
+            buttons.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
+            buttons.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -14),
+            buttons.heightAnchor.constraint(equalToConstant: 30),
+        ])
+        updateButtons()
+    }
+
+    private func updateButtons() {
+        let hasSelection = versions.indices.contains(tableView.selectedRow)
+        compareButton.isEnabled = hasSelection
+        restoreButton.isEnabled = hasSelection
+    }
+
+    private func reload() async {
+        statusLabel.stringValue = "Загрузка истории…"
+        do { update(try await model.fetchVersions()) }
+        catch { showError("Не удалось загрузить версии: \(error.localizedDescription)") }
+    }
+
+    @objc private func compareSelected() {
+        let row = tableView.selectedRow
+        guard versions.indices.contains(row) else { return }
+        let id = versions[row].id
+        Task { @MainActor in
+            do { onShowDiff?(try await model.fetchVersionDiff(id)) }
+            catch { showError("Не удалось сравнить версию: \(error.localizedDescription)") }
+        }
+    }
+
+    @objc private func restoreSelected() {
+        let row = tableView.selectedRow
+        guard versions.indices.contains(row) else { return }
+        let version = versions[row]
+        let alert = NSAlert()
+        alert.messageText = "Восстановить выбранную версию?"
+        alert.informativeText = "Текущий проект будет сохранён в истории, затем его состояние заменится выбранным снимком."
+        alert.addButton(withTitle: "Восстановить")
+        alert.addButton(withTitle: "Отмена")
+        alert.beginSheetModal(for: window!) { [weak self] response in
+            guard response == .alertFirstButtonReturn, let self else { return }
+            Task { @MainActor in
+                do {
+                    try await self.model.restoreVersion(version.id)
+                    self.onRestore?()
+                    await self.reload()
+                    self.statusLabel.stringValue = "Версия восстановлена. Снимок текущего состояния добавлен в историю."
+                } catch {
+                    self.showError("Не удалось восстановить версию: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+}
+
+@MainActor
+private final class PaletteItemView: NSView, NSDraggingSource {
+    let item: PaletteObject
+    var onClick: (() -> Void)?
+    var isEditingLocked = false {
+        didSet { alphaValue = isEditingLocked ? 0.55 : 1 }
+    }
+
+    private let iconView = NSImageView()
+    private let titleLabel: NSTextField
+    private let detailLabel: NSTextField
+    private var pointerDown: NSPoint?
+    private var startedDragging = false
+
+    init(item: PaletteObject) {
+        self.item = item
+        titleLabel = makeLabel(item.title, size: 11, weight: .semibold)
+        detailLabel = makeLabel(item.detail, size: 9, weight: .regular, color: .secondaryLabelColor)
+        super.init(frame: .zero)
+        identifier = NSUserInterfaceItemIdentifier("palette-item-\(item.id)")
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        layer?.cornerRadius = 7
+        iconView.image = item.loadIcon() ?? NSImage(systemSymbolName: item.symbol, accessibilityDescription: item.title)
+        iconView.contentTintColor = .controlAccentColor
+        iconView.imageScaling = .scaleProportionallyDown
+        let labels = NSStackView(views: [titleLabel, detailLabel])
+        labels.orientation = .vertical
+        labels.alignment = .leading
+        labels.spacing = 2
+        let row = NSStackView(views: [iconView, labels])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 9
+        row.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(row)
+        NSLayoutConstraint.activate([
+            row.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 9),
+            row.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -9),
+            row.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            row.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6),
+            iconView.widthAnchor.constraint(equalToConstant: 25),
+            iconView.heightAnchor.constraint(equalToConstant: 25),
+            heightAnchor.constraint(equalToConstant: 48),
+        ])
+        toolTip = "Нажмите, чтобы добавить, или перетащите на холст."
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override func mouseDown(with event: NSEvent) {
+        guard !isEditingLocked else { return }
+        pointerDown = convert(event.locationInWindow, from: nil)
+        startedDragging = false
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard !isEditingLocked else { return }
+        guard let pointerDown, !startedDragging else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        guard hypot(point.x - pointerDown.x, point.y - pointerDown.y) >= 4 else { return }
+        startedDragging = true
+        let pasteboardItem = NSPasteboardItem()
+        pasteboardItem.setString(item.id, forType: PaletteItem.pasteboardType)
+        let dragItem = NSDraggingItem(pasteboardWriter: pasteboardItem)
+        let image = NSImage(size: bounds.size)
+        image.lockFocus()
+        NSColor.controlBackgroundColor.setFill()
+        NSBezierPath(roundedRect: NSRect(origin: .zero, size: bounds.size), xRadius: 7, yRadius: 7).fill()
+        image.unlockFocus()
+        dragItem.setDraggingFrame(bounds, contents: image)
+        beginDraggingSession(with: [dragItem], event: event, source: self)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if !startedDragging { onClick?() }
+        pointerDown = nil
+        startedDragging = false
+    }
+
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        .copy
+    }
+}
+
+@MainActor
 private final class SidebarView: NSView {
-    var onAddNode: (() -> Void)?
+    var onAddNode: ((PaletteObject) -> Void)?
     var onAddContainer: (() -> Void)?
     var onAddEdge: (() -> Void)?
     var onSelect: ((DiagramSelection) -> Void)?
 
     private let scrollView = NSScrollView()
     private let stack = NSStackView()
+    private let searchField = NSSearchField()
+    private let collectionPicker = NSPopUpButton(frame: .zero, pullsDown: false)
+    private var selectedCollectionID = "all"
+    private var searchWidthInstalled = false
+    private var collectionWidthInstalled = false
     private var actions: [ControlAction] = []
+    private weak var currentModel: AppModel?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        identifier = NSUserInterfaceItemIdentifier("diagram-palette")
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 5
         stack.edgeInsets = NSEdgeInsets(top: 14, left: 12, bottom: 12, right: 12)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        searchField.placeholderString = "Найти объект…"
+        searchField.sendsSearchStringImmediately = true
+        searchField.target = self
+        searchField.action = #selector(searchPalette)
+        collectionPicker.identifier = NSUserInterfaceItemIdentifier("palette-collection-picker")
+        for collection in PaletteLibrary.collections {
+            collectionPicker.addItem(withTitle: "\(collection.title) · \(collection.objects.count)")
+            collectionPicker.lastItem?.representedObject = collection.id
+        }
+        collectionPicker.target = self
+        collectionPicker.action = #selector(selectCollection)
+        collectionPicker.font = .systemFont(ofSize: 10)
         scrollView.documentView = stack
+        scrollView.identifier = NSUserInterfaceItemIdentifier("palette-scroll")
         scrollView.hasVerticalScroller = true
         scrollView.drawsBackground = false
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(scrollView)
-        NSLayoutConstraint.activate([
-            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            scrollView.topAnchor.constraint(equalTo: topAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
-            stack.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
-        ])
+        scrollView.autoresizingMask = [.width, .height]
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     func update(model: AppModel) {
+        currentModel = model
         actions.removeAll()
         stack.removeAllArrangedSubviews()
-        addArranged(section("ИНСТРУМЕНТЫ"))
-        addArranged(actionButton("Компонент", symbol: "plus.square", key: "n") { [weak self] in self?.onAddNode?() })
-        addArranged(actionButton("Контейнер", symbol: "rectangle.3.group") { [weak self] in self?.onAddContainer?() })
-        addArranged(actionButton("Связь", symbol: "arrow.up.right", key: "e") { [weak self] in self?.onAddEdge?() })
+        if let selected = collectionPicker.itemArray.first(where: { ($0.representedObject as? String) == selectedCollectionID }) {
+            collectionPicker.select(selected)
+        }
+        addArranged(section("КОЛЛЕКЦИЯ ОБЪЕКТОВ"))
+        addArranged(collectionPicker)
+        addArranged(searchField)
+        addArranged(hint("Нажмите или перетащите объект на холст"))
+        let query = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).localizedLowercase
+        let paletteItems = (PaletteLibrary.collection(id: selectedCollectionID)?.objects ?? []).filter {
+            query.isEmpty || $0.title.localizedLowercase.contains(query) || $0.detail.localizedLowercase.contains(query) || $0.kind.localizedLowercase.contains(query)
+        }
+        addArranged(section("ОБЪЕКТЫ · \(paletteItems.count)"))
+        for item in paletteItems {
+            let paletteItem = PaletteItemView(item: item)
+            paletteItem.isEditingLocked = model.isEditingLocked
+            paletteItem.onClick = { [weak self] in self?.onAddNode?(item) }
+            addArranged(paletteItem)
+        }
+        if paletteItems.isEmpty { addArranged(hint("Объекты не найдены")) }
+        addArranged(separator())
+        addArranged(section("ДЕЙСТВИЯ"))
+        let addContainer = actionButton("Добавить контейнер", symbol: "rectangle.3.group") { [weak self] in self?.onAddContainer?() }
+        addContainer.isEnabled = !model.isEditingLocked
+        addArranged(addContainer)
+        let addEdge = actionButton("Добавить связь", symbol: "arrow.up.right", key: "e") { [weak self] in self?.onAddEdge?() }
+        addEdge.isEnabled = !model.isEditingLocked
+        addArranged(addEdge)
         addArranged(separator())
         addArranged(section("КОНТЕЙНЕРЫ · \(model.containers.count)"))
         if model.containers.isEmpty { addArranged(hint("Нет контейнеров")) }
@@ -520,11 +986,56 @@ private final class SidebarView: NSView {
         let local = makeLabel("●  Данные и backend остаются локально", size: 9, weight: .medium, color: NSColor(hex: "#3F8064"))
         local.lineBreakMode = .byWordWrapping
         addArranged(local)
+        needsLayout = true
+        layoutSubtreeIfNeeded()
+    }
+
+    override func layout() {
+        super.layout()
+        scrollView.frame = bounds
+        let width = scrollView.contentView.bounds.width
+        let height = documentHeight(for: stack)
+        stack.frame = NSRect(x: 0, y: 0, width: width, height: max(height, scrollView.contentView.bounds.height))
+        stack.layoutSubtreeIfNeeded()
+    }
+
+    @objc private func searchPalette() {
+        guard let currentModel else { return }
+        update(model: currentModel)
+        window?.makeFirstResponder(searchField)
+    }
+
+    @objc private func selectCollection() {
+        guard let collectionID = collectionPicker.selectedItem?.representedObject as? String,
+              PaletteLibrary.collection(id: collectionID) != nil
+        else { return }
+        selectedCollectionID = collectionID
+        if let currentModel { update(model: currentModel) }
     }
 
     private func addArranged(_ view: NSView) {
         stack.addArrangedSubview(view)
-        view.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -24).isActive = true
+        if view === searchField {
+            if !searchWidthInstalled {
+                searchField.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -24).isActive = true
+                searchWidthInstalled = true
+            }
+        } else if view === collectionPicker {
+            if !collectionWidthInstalled {
+                collectionPicker.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -24).isActive = true
+                collectionWidthInstalled = true
+            }
+        } else {
+            view.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -24).isActive = true
+        }
+    }
+
+    private func documentHeight(for stack: NSStackView) -> CGFloat {
+        let viewsHeight = stack.arrangedSubviews.reduce(CGFloat.zero) { total, view in
+            total + max(view.fittingSize.height, view.frame.height)
+        }
+        let spacing = stack.spacing * CGFloat(max(0, stack.arrangedSubviews.count - 1))
+        return viewsHeight + spacing + stack.edgeInsets.top + stack.edgeInsets.bottom
     }
 
     private func actionButton(_ title: String, symbol: String, key: String? = nil, action: @escaping () -> Void) -> NSButton {
@@ -561,34 +1072,32 @@ private final class SidebarView: NSView {
 }
 
 @MainActor
-private final class WorkspaceView: NSView, NSTextViewDelegate {
-    var onSelectTab: ((WorkspaceTab) -> Void)?
-    var onApplyJSON: (() -> Void)?
-    var onJSONChange: ((String) -> Void)?
-    var onDOTChange: ((String) -> Void)?
-    var onPreviewDOT: (() -> Void)?
-    var onApplyDOT: (() -> Void)?
-    var onCancelDOT: (() -> Void)?
+private final class WorkspaceView: NSView {
     var onSelectElement: ((DiagramSelection) -> Void)?
     var onMoveNode: ((String, Double, Double) -> Void)?
+    var onResizeNode: ((String, Double, Double) -> Void)?
+    var onCreateEdge: ((String, String) -> Void)?
     var onMoveContainer: ((String, Double, Double) -> Void)?
     var onResizeContainer: ((String, Double) -> Void)?
+    var onDropPaletteItem: ((PaletteObject, Double, Double, String?) -> Void)?
+    var onShowStyle: (() -> Void)?
+    var onConfigureOllama: (() -> Void)?
+    var onOllamaMessage: ((String, Int) -> Void)?
+    var onDeleteSelection: (() -> Void)?
+    var onApplyProposal: (() -> Void)?
+    var onCancelProposal: (() -> Void)?
 
     private let header = NSStackView()
     private let content = NSView()
-    private let canvasSplit = NSSplitView()
     private let canvasView = DiagramCanvasView()
-    private let codeScroll = NSScrollView()
-    private let codeTextView = NSTextView()
+    private let chatPanel = OllamaChatPanelView()
     private let footer = NSTextField(labelWithString: "")
     private let countLabel = NSTextField(labelWithString: "")
     private let layoutLabel = NSTextField(labelWithString: "")
-    private var previewDOTButton = NSButton(title: "Проверить DOT", target: nil, action: nil)
-    private var applyDOTButton = NSButton(title: "Применить", target: nil, action: nil)
-    private var cancelDOTButton = NSButton(title: "Отмена", target: nil, action: nil)
+    private var styleButton = NSButton(title: "Стиль", target: nil, action: nil)
+    private var applyProposalButton = NSButton(title: "Применить", target: nil, action: nil)
+    private var cancelProposalButton = NSButton(title: "Отмена", target: nil, action: nil)
     private var actions: [ControlAction] = []
-    private var lastCode = ""
-    private var activeCodeTab: WorkspaceTab = .canvas
     private var showingProposal = false
 
     override init(frame frameRect: NSRect) {
@@ -602,62 +1111,45 @@ private final class WorkspaceView: NSView, NSTextViewDelegate {
         countLabel.stringValue = "\(model.nodes.count) объектов · \(model.edges.count) связей"
         updateCanvasStatus(model)
         let proposal = model.activeProposal
-        canvasView.isReadOnly = proposal != nil
+        canvasView.isReadOnly = model.isEditingLocked
         canvasView.update(
             diagram: proposal?.diagram ?? model.diagram,
             layout: proposal?.layout ?? model.layout,
             selection: proposal == nil ? model.selection : .project
         )
-        codeTextView.isEditable = model.workspaceTab == .json || model.workspaceTab == .dot
-        activeCodeTab = model.workspaceTab
-        let hasPreview = proposal != nil
-        countLabel.isHidden = model.workspaceTab == .dot || hasPreview
-        layoutLabel.isHidden = model.workspaceTab == .dot || hasPreview
-        previewDOTButton.isHidden = model.workspaceTab != .dot
-        applyDOTButton.isHidden = !hasPreview || model.workspaceTab == .json
-        cancelDOTButton.isHidden = !hasPreview || model.workspaceTab == .json
-        applyDOTButton.isEnabled = hasPreview
-        cancelDOTButton.isEnabled = hasPreview
-        canvasSplit.isHidden = false
-        switch model.workspaceTab {
-        case .canvas:
-            canvasView.isHidden = false
-            codeScroll.isHidden = true
-            if let proposal {
-                presentProposal(proposal, model: model, split: false)
-            } else {
-                showingProposal = false
-            }
-        case .json:
-            canvasView.isHidden = true
-            codeScroll.isHidden = false
+        chatPanel.update(model: model)
+        let hasProposal = proposal != nil
+        applyProposalButton.isHidden = !hasProposal
+        cancelProposalButton.isHidden = !hasProposal
+        applyProposalButton.isEnabled = hasProposal
+        cancelProposalButton.isEnabled = hasProposal
+        styleButton.isEnabled = model.selection != .project && !model.isEditingLocked
+        if let proposal {
+            footer.stringValue = "Предложение · \(proposal.changes.entries.count) изменений · проверьте и примените или отмените"
+            footer.toolTip = proposal.changes.entries.joined(separator: "\n")
+            if !showingProposal { canvasView.fitToContent() }
+            showingProposal = true
+        } else if model.jsonDraftIsDirty {
             showingProposal = false
-            setCode(model.jsonDraft)
-        case .dot:
-            canvasView.isHidden = !hasPreview
-            codeScroll.isHidden = false
-            setCode(model.dotSource)
-            if let proposal {
-                presentProposal(proposal, model: model, split: true)
-            } else {
-                showingProposal = false
-            }
+            footer.stringValue = "JSON не применён · проверьте код и нажмите «Применить JSON»"
+            footer.toolTip = "Холст заблокирован, пока черновик JSON не применён или не отменён."
+        } else {
+            showingProposal = false
+            updateCanvasStatus(model)
         }
     }
 
-    private func presentProposal(_ proposal: DiagramProposal, model: AppModel, split: Bool) {
-        layoutSubtreeIfNeeded()
-        if !showingProposal {
-            if split {
-                canvasSplit.setPosition(bounds.width * 0.5, ofDividerAt: 0)
-                layoutSubtreeIfNeeded()
+    func setInteractionState(model: AppModel) {
+        canvasView.isReadOnly = model.isEditingLocked
+        styleButton.isEnabled = model.selection != .project && !model.isEditingLocked
+        if model.activeProposal == nil {
+            if model.jsonDraftIsDirty {
+                footer.stringValue = "JSON не применён · проверьте код и нажмите «Применить JSON»"
+                footer.toolTip = "Холст заблокирован, пока черновик JSON не применён или не отменён."
+            } else {
+                updateCanvasStatus(model)
             }
-            canvasView.fitToContent()
         }
-        let source = model.dotPreview == nil ? "Предложение Ollama" : "Предпросмотр DOT"
-        footer.stringValue = "\(source) · \(proposal.changes.entries.count) изменений · примените или отмените"
-        footer.toolTip = proposal.changes.entries.joined(separator: "\n")
-        showingProposal = true
     }
 
     func refreshCounts(model: AppModel?) {
@@ -666,9 +1158,12 @@ private final class WorkspaceView: NSView, NSTextViewDelegate {
         updateCanvasStatus(model)
     }
 
+    func appendChatMessage(role: String, text: String) { chatPanel.appendMessage(role: role, text: text) }
+    func setOllamaBusy(_ busy: Bool) { chatPanel.setBusy(busy) }
+
     private func updateCanvasStatus(_ model: AppModel) {
-        footer.stringValue = "Ревизия \(model.revision.isEmpty ? "—" : model.revision) · двигайте узлы/зоны; маркер зоны — отступ · ⌥ панорама · ⌘-колесо/щипок масштаб"
-        footer.toolTip = "Перетаскивайте компоненты и зоны мышью. Потяните маркер выбранной зоны, чтобы изменить её отступ. Удерживайте Option для панорамирования. Масштабируйте кнопками, жестом щипка или Command + прокрутка."
+        footer.stringValue = "Ревизия \(model.revision.isEmpty ? "—" : model.revision) · узлы: движение/размер · синий маркер: связь · ⌥ панорама"
+        footer.toolTip = "Перетаскивайте компоненты из левой палитры на холст. Выберите узел: нижний правый маркер меняет размер, синий маркер справа создаёт связь перетаскиванием к другому узлу. Нажмите линию, чтобы выбрать связь и открыть её стиль. Option панорамирует; Command + прокрутка и щипок меняют масштаб."
         if model.diagram?.diagram.layoutMode == "manual" {
             layoutLabel.stringValue = "Graphviz · neato · вручную"
         } else {
@@ -684,9 +1179,6 @@ private final class WorkspaceView: NSView, NSTextViewDelegate {
         header.alignment = .centerY
         header.spacing = 7
         header.translatesAutoresizingMaskIntoConstraints = false
-        let canvas = tabButton(.canvas)
-        let json = tabButton(.json)
-        let dot = tabButton(.dot)
         let zoomOut = makeButton("−", symbol: "minus.magnifyingglass") { [weak self] _ in self?.canvasView.zoom(by: 0.82) }
         zoomOut.toolTip = "Уменьшить масштаб"
         let zoomIn = makeButton("+", symbol: "plus.magnifyingglass") { [weak self] _ in self?.canvasView.zoom(by: 1.22) }
@@ -701,25 +1193,31 @@ private final class WorkspaceView: NSView, NSTextViewDelegate {
                 : NSColor.secondaryLabelColor
         }
         grid.toolTip = "Показать или скрыть сетку"
-        previewDOTButton = makeButton("Проверить DOT", symbol: "checkmark.magnifyingglass") { [weak self] _ in self?.onPreviewDOT?() }
-        applyDOTButton = makeButton("Применить", symbol: "checkmark.circle.fill") { [weak self] _ in self?.onApplyDOT?() }
-        cancelDOTButton = makeButton("Отмена", symbol: "xmark") { [weak self] _ in self?.onCancelDOT?() }
-        [previewDOTButton, applyDOTButton, cancelDOTButton].forEach { $0.controlSize = .small; $0.isHidden = true }
+        styleButton = makeButton("Стиль", symbol: "paintpalette") { [weak self] _ in self?.onShowStyle?() }
+        applyProposalButton = makeButton("Применить", symbol: "checkmark.circle.fill") { [weak self] _ in self?.onApplyProposal?() }
+        cancelProposalButton = makeButton("Отменить", symbol: "xmark") { [weak self] _ in self?.onCancelProposal?() }
+        [applyProposalButton, cancelProposalButton].forEach { $0.controlSize = .small; $0.isHidden = true }
         canvasView.onSelect = { [weak self] selection in self?.onSelectElement?(selection) }
         canvasView.onMoveNode = { [weak self] id, x, y in self?.onMoveNode?(id, x, y) }
+        canvasView.onResizeNode = { [weak self] id, width, height in self?.onResizeNode?(id, width, height) }
+        canvasView.onCreateEdge = { [weak self] source, target in self?.onCreateEdge?(source, target) }
         canvasView.onMoveContainer = { [weak self] id, x, y in self?.onMoveContainer?(id, x, y) }
         canvasView.onResizeContainer = { [weak self] id, padding in self?.onResizeContainer?(id, padding) }
+        canvasView.onDropPaletteItem = { [weak self] item, x, y, containerID in self?.onDropPaletteItem?(item, x, y, containerID) }
+        canvasView.onRequestStyle = { [weak self] in self?.onShowStyle?() }
+        canvasView.onDeleteSelection = { [weak self] in self?.onDeleteSelection?() }
+        chatPanel.onConfigure = { [weak self] in self?.onConfigureOllama?() }
+        chatPanel.onSend = { [weak self] prompt, mode in self?.onOllamaMessage?(prompt, mode) }
+        chatPanel.onApplyProposal = { [weak self] in self?.onApplyProposal?() }
+        chatPanel.onCancelProposal = { [weak self] in self?.onCancelProposal?() }
         let spacer = NSView()
         countLabel.font = .systemFont(ofSize: 10)
         countLabel.textColor = .secondaryLabelColor
         layoutLabel.font = .monospacedSystemFont(ofSize: 9, weight: .medium)
         layoutLabel.textColor = .controlAccentColor
-        header.addArrangedSubview(canvas)
-        header.addArrangedSubview(json)
-        header.addArrangedSubview(dot)
-        header.addArrangedSubview(previewDOTButton)
-        header.addArrangedSubview(applyDOTButton)
-        header.addArrangedSubview(cancelDOTButton)
+        header.addArrangedSubview(styleButton)
+        header.addArrangedSubview(applyProposalButton)
+        header.addArrangedSubview(cancelProposalButton)
         header.addArrangedSubview(zoomOut)
         header.addArrangedSubview(zoomIn)
         header.addArrangedSubview(fit)
@@ -732,32 +1230,15 @@ private final class WorkspaceView: NSView, NSTextViewDelegate {
         spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         content.translatesAutoresizingMaskIntoConstraints = false
-        canvasSplit.isVertical = true
-        canvasSplit.dividerStyle = .thin
-        canvasSplit.translatesAutoresizingMaskIntoConstraints = false
         canvasView.translatesAutoresizingMaskIntoConstraints = false
-
-        codeTextView.isRichText = false
-        codeTextView.isAutomaticQuoteSubstitutionEnabled = false
-        codeTextView.isAutomaticDashSubstitutionEnabled = false
-        codeTextView.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        codeTextView.textColor = NSColor(hex: "#D6DEEC")
-        codeTextView.backgroundColor = NSColor(hex: "#111827")
-        codeTextView.insertionPointColor = .white
-        codeTextView.delegate = self
-        codeScroll.documentView = codeTextView
-        codeScroll.hasVerticalScroller = true
-        codeScroll.hasHorizontalScroller = true
-        codeScroll.drawsBackground = true
-        codeScroll.backgroundColor = NSColor(hex: "#111827")
-        codeScroll.translatesAutoresizingMaskIntoConstraints = false
-
-        canvasSplit.addArrangedSubview(codeScroll)
-        canvasSplit.addArrangedSubview(canvasView)
-        content.addSubview(canvasSplit)
+        chatPanel.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(canvasView)
+        content.addSubview(chatPanel)
         NSLayoutConstraint.activate([
-            canvasSplit.leadingAnchor.constraint(equalTo: content.leadingAnchor), canvasSplit.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            canvasSplit.topAnchor.constraint(equalTo: content.topAnchor), canvasSplit.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            canvasView.leadingAnchor.constraint(equalTo: content.leadingAnchor), canvasView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            canvasView.topAnchor.constraint(equalTo: content.topAnchor), canvasView.bottomAnchor.constraint(equalTo: chatPanel.topAnchor),
+            chatPanel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 8), chatPanel.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -8),
+            chatPanel.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -6), chatPanel.heightAnchor.constraint(equalToConstant: 205),
         ])
 
         footer.font = .systemFont(ofSize: 9)
@@ -771,35 +1252,215 @@ private final class WorkspaceView: NSView, NSTextViewDelegate {
             addSubview($0)
         }
         NSLayoutConstraint.activate([
-            header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14), header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
+            header.leadingAnchor.constraint(equalTo: leadingAnchor), header.trailingAnchor.constraint(equalTo: trailingAnchor),
             header.topAnchor.constraint(equalTo: topAnchor), header.heightAnchor.constraint(equalToConstant: 48),
             separator.leadingAnchor.constraint(equalTo: leadingAnchor), separator.trailingAnchor.constraint(equalTo: trailingAnchor), separator.topAnchor.constraint(equalTo: header.bottomAnchor),
             content.leadingAnchor.constraint(equalTo: leadingAnchor), content.trailingAnchor.constraint(equalTo: trailingAnchor), content.topAnchor.constraint(equalTo: separator.bottomAnchor), content.bottomAnchor.constraint(equalTo: footer.topAnchor),
             footer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14), footer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14), footer.bottomAnchor.constraint(equalTo: bottomAnchor), footer.heightAnchor.constraint(equalToConstant: 30),
         ])
     }
+}
 
-    private func tabButton(_ tab: WorkspaceTab) -> NSButton {
-        let button = NSButton(title: tab.rawValue, target: nil, action: nil)
-        button.bezelStyle = .rounded
-        button.controlSize = .small
-        let action = ControlAction { [weak self] _ in self?.onSelectTab?(tab) }
-        button.target = action
-        button.action = #selector(ControlAction.invoke(_:))
-        actions.append(action)
-        return button
+@MainActor
+private final class JSONCodePanelView: NSView, NSTextViewDelegate {
+    var onSelectTab: ((WorkspaceTab) -> Void)?
+    var onJSONChange: ((String) -> Void)?
+    var onDOTChange: ((String) -> Void)?
+    var onApplyJSON: (() -> Void)?
+    var onDiscardJSON: (() -> Void)?
+    var onValidateJSON: (() -> Void)?
+    var onFormatJSON: (() -> Void)?
+    var onPreviewDOT: (() -> Void)?
+
+    private let modeControl = NSSegmentedControl(labels: ["JSON", "DOT"], trackingMode: .selectOne, target: nil, action: nil)
+    private let codeScroll = NSScrollView()
+    private let codeTextView = NSTextView()
+    private let statusLabel = NSTextField(labelWithString: "Ожидание локального backend…")
+    private let formatButton = makeButton("Формат", symbol: "text.alignleft") { _ in }
+    private let validateButton = makeButton("Проверить", symbol: "checkmark.magnifyingglass") { _ in }
+    private let applyJSONButton = makeButton("Применить JSON", symbol: "checkmark.circle.fill") { _ in }
+    private let discardJSONButton = makeButton("Сбросить", symbol: "arrow.uturn.backward") { _ in }
+    private let previewDOTButton = makeButton("Проверить DOT", symbol: "checkmark.magnifyingglass") { _ in }
+    private var actions: [ControlAction] = []
+    private var lastCode = ""
+    private var isUpdatingCode = false
+    private var currentModel: AppModel?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        build()
     }
 
-    private func setCode(_ value: String) {
-        guard lastCode != value else { return }
-        lastCode = value
-        codeTextView.string = value
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    func refresh(model: AppModel) {
+        currentModel = model
+        let tab: WorkspaceTab = model.workspaceTab == .dot ? .dot : .json
+        modeControl.selectedSegment = tab == .dot ? 1 : 0
+        let source: String
+        if tab == .json, let proposal = model.activeProposal {
+            source = model.prettyJSON(proposal.diagram)
+        } else {
+            source = tab == .json ? model.jsonDraft : model.dotSource
+        }
+        if source != lastCode {
+            isUpdatingCode = true
+            lastCode = source
+            codeTextView.string = source
+            isUpdatingCode = false
+        }
+        let isJSON = tab == .json
+        modeControl.isEnabled = model.activeProposal == nil
+        codeTextView.isEditable = model.activeProposal == nil
+        formatButton.isHidden = !isJSON || model.activeProposal != nil
+        validateButton.isHidden = !isJSON || model.activeProposal != nil
+        applyJSONButton.isHidden = !isJSON || model.activeProposal != nil
+        discardJSONButton.isHidden = !isJSON || model.activeProposal != nil
+        previewDOTButton.isHidden = isJSON || model.activeProposal != nil
+        discardJSONButton.isEnabled = isJSON && model.jsonDraftIsDirty
+        updateJSONStatus()
+        if !isJSON { statusLabel.stringValue = model.status }
+    }
+
+    private func build() {
+        identifier = NSUserInterfaceItemIdentifier("diagram-code-editor")
+        wantsLayer = true
+        layer?.backgroundColor = NSColor(hex: "#F8FAFC").cgColor
+        modeControl.selectedSegment = 0
+        modeControl.segmentStyle = .rounded
+        modeControl.widthAnchor.constraint(equalToConstant: 150).isActive = true
+        modeControl.target = self
+        modeControl.action = #selector(modeChanged(_:))
+
+        codeTextView.isRichText = false
+        codeTextView.isAutomaticQuoteSubstitutionEnabled = false
+        codeTextView.isAutomaticDashSubstitutionEnabled = false
+        codeTextView.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        codeTextView.textColor = NSColor(hex: "#D6DEEC")
+        codeTextView.backgroundColor = NSColor(hex: "#111827")
+        codeTextView.insertionPointColor = .white
+        codeTextView.textContainerInset = NSSize(width: 10, height: 10)
+        codeTextView.delegate = self
+        codeScroll.documentView = codeTextView
+        codeScroll.hasVerticalScroller = true
+        codeScroll.hasHorizontalScroller = true
+        codeScroll.drawsBackground = true
+        codeScroll.backgroundColor = NSColor(hex: "#111827")
+
+        let formatAction = ControlAction { [weak self] _ in self?.onFormatJSON?() }
+        let validateAction = ControlAction { [weak self] _ in self?.onValidateJSON?() }
+        let applyAction = ControlAction { [weak self] _ in self?.onApplyJSON?() }
+        let discardAction = ControlAction { [weak self] _ in self?.onDiscardJSON?() }
+        let dotAction = ControlAction { [weak self] _ in self?.onPreviewDOT?() }
+        for (button, action) in [
+            (formatButton, formatAction), (validateButton, validateAction), (applyJSONButton, applyAction),
+            (discardJSONButton, discardAction), (previewDOTButton, dotAction),
+        ] {
+            button.target = action
+            button.action = #selector(ControlAction.invoke(_:))
+            actions.append(action)
+        }
+
+        let modeRow = NSStackView(views: [makeLabel("СТРУКТУРА ПРОЕКТА · JSON", size: 8, weight: .bold, color: .secondaryLabelColor), NSView(), modeControl])
+        modeRow.orientation = .horizontal
+        modeRow.alignment = .centerY
+        modeRow.spacing = 8
+        let jsonActions = NSStackView(views: [formatButton, validateButton, applyJSONButton, discardJSONButton])
+        jsonActions.orientation = .horizontal
+        jsonActions.alignment = .centerY
+        jsonActions.spacing = 5
+        let dotActions = NSStackView(views: [previewDOTButton])
+        dotActions.orientation = .horizontal
+        dotActions.alignment = .centerY
+        let toolbar = NSStackView(views: [jsonActions, dotActions])
+        toolbar.orientation = .horizontal
+        toolbar.alignment = .centerY
+        toolbar.spacing = 6
+        statusLabel.font = .systemFont(ofSize: 9)
+        statusLabel.textColor = .secondaryLabelColor
+        statusLabel.lineBreakMode = .byTruncatingTail
+
+        let root = NSStackView(views: [modeRow, toolbar, statusLabel, codeScroll])
+        root.orientation = .vertical
+        root.alignment = .leading
+        root.spacing = 9
+        root.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
+        root.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(root)
+        NSLayoutConstraint.activate([
+            root.leadingAnchor.constraint(equalTo: leadingAnchor), root.trailingAnchor.constraint(equalTo: trailingAnchor),
+            root.topAnchor.constraint(equalTo: topAnchor), root.bottomAnchor.constraint(equalTo: bottomAnchor),
+            modeRow.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -24),
+            toolbar.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -24),
+            statusLabel.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -24),
+            codeScroll.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -24),
+            codeScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 300),
+        ])
+        codeScroll.setContentHuggingPriority(.defaultLow, for: .vertical)
+        codeScroll.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        codeTextView.minSize = .zero
+        codeTextView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        codeTextView.isVerticallyResizable = true
+        codeTextView.isHorizontallyResizable = true
+        codeTextView.autoresizingMask = [.width]
+        codeTextView.textContainer?.widthTracksTextView = true
+        codeTextView.textContainer?.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        modeRow.setContentHuggingPriority(.required, for: .vertical)
+        toolbar.setContentHuggingPriority(.required, for: .vertical)
+        statusLabel.setContentHuggingPriority(.required, for: .vertical)
+    }
+
+    @objc private func modeChanged(_ sender: NSSegmentedControl) {
+        onSelectTab?(sender.selectedSegment == 1 ? .dot : .json)
     }
 
     func textDidChange(_ notification: Notification) {
+        guard !isUpdatingCode else { return }
         lastCode = codeTextView.string
-        if activeCodeTab == .json { onJSONChange?(codeTextView.string) }
-        if activeCodeTab == .dot { onDOTChange?(codeTextView.string) }
+        if currentModel?.workspaceTab == .dot {
+            onDOTChange?(lastCode)
+            statusLabel.stringValue = "DOT изменён · проверьте совместимость перед применением"
+        } else {
+            onJSONChange?(lastCode)
+            updateJSONStatus()
+        }
+    }
+
+    func applyFormattedJSON(_ value: String) {
+        isUpdatingCode = true
+        codeTextView.string = value
+        lastCode = value
+        isUpdatingCode = false
+        onJSONChange?(value)
+        updateJSONStatus()
+    }
+
+    private func updateJSONStatus() {
+        guard currentModel?.workspaceTab != .dot else { return }
+        if currentModel?.activeProposal != nil {
+            statusLabel.stringValue = "JSON предложения · только просмотр до применения или отмены"
+            statusLabel.textColor = .controlAccentColor
+            applyJSONButton.isEnabled = false
+            return
+        }
+        guard let data = codeTextView.string.data(using: .utf8) else {
+            statusLabel.stringValue = "JSON: текст невозможно прочитать"
+            statusLabel.textColor = .systemRed
+            applyJSONButton.isEnabled = false
+            return
+        }
+        do {
+            _ = try JSONSerialization.jsonObject(with: data)
+            statusLabel.stringValue = currentModel?.jsonDraftIsDirty == true
+                ? "JSON синтаксически корректен · нажмите «Применить JSON»"
+                : "Синхронизировано с холстом"
+            statusLabel.textColor = currentModel?.jsonDraftIsDirty == true ? .controlAccentColor : .secondaryLabelColor
+            applyJSONButton.isEnabled = currentModel?.jsonDraftIsDirty == true
+        } catch {
+            statusLabel.stringValue = "Ошибка JSON: \(error.localizedDescription)"
+            statusLabel.textColor = .systemRed
+            applyJSONButton.isEnabled = false
+        }
     }
 }
 
@@ -811,7 +1472,11 @@ private final class InspectorView: NSView {
     private let title = NSTextField(labelWithString: "Проект")
     private let scrollView = NSScrollView()
     private let stack = NSStackView()
+    private let header = NSStackView()
     private var actions: [ControlAction] = []
+    private var editableControls: [NSControl] = []
+    private var isEditingLocked = false
+    private var deleteButton: NSButton?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -822,11 +1487,14 @@ private final class InspectorView: NSView {
 
     func update(model: AppModel) {
         actions.removeAll()
+        editableControls.removeAll()
+        isEditingLocked = model.isEditingLocked
         stack.removeAllArrangedSubviews()
         let delete = makeButton("Удалить", symbol: "trash") { [weak self] _ in self?.onDelete?() }
         delete.isBordered = false
         delete.contentTintColor = .systemRed
-        delete.isEnabled = model.selection != .project
+        delete.isEnabled = model.selection != .project && !model.isEditingLocked
+        deleteButton = delete
         let top = NSStackView(views: [title, NSView(), delete])
         top.orientation = .horizontal
         top.alignment = .centerY
@@ -918,9 +1586,22 @@ private final class InspectorView: NSView {
                 addReadOnly("ID", value: item.id)
             }
         }
+        if stack.arrangedSubviews.count <= 2 {
+            addFullWidth(makeLabel("Выбранный элемент не найден. Выберите объект на холсте или в списке слева.", size: 9, weight: .regular, color: .tertiaryLabelColor))
+        }
+        needsLayout = true
+        layoutSubtreeIfNeeded()
+    }
+
+    func setInteractionState(isEditingLocked: Bool) {
+        self.isEditingLocked = isEditingLocked
+        for control in editableControls { control.isEnabled = !isEditingLocked }
+        deleteButton?.isEnabled = !isEditingLocked && title.stringValue != "Проект"
     }
 
     private func build() {
+        widthAnchor.constraint(greaterThanOrEqualToConstant: 440).isActive = true
+        heightAnchor.constraint(greaterThanOrEqualToConstant: 520).isActive = true
         heading.font = .systemFont(ofSize: 8, weight: .bold)
         heading.textColor = .secondaryLabelColor
         heading.stringValue = "СВОЙСТВА"
@@ -929,24 +1610,41 @@ private final class InspectorView: NSView {
         stack.alignment = .leading
         stack.spacing = 12
         stack.edgeInsets = NSEdgeInsets(top: 14, left: 14, bottom: 14, right: 14)
+        stack.translatesAutoresizingMaskIntoConstraints = false
         scrollView.documentView = stack
+        scrollView.identifier = NSUserInterfaceItemIdentifier("inspector-properties-scroll")
         scrollView.hasVerticalScroller = true
         scrollView.drawsBackground = false
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
-        let header = NSStackView(views: [heading, title])
+        scrollView.autoresizingMask = [.width, .height]
+        header.addArrangedSubview(heading)
+        header.addArrangedSubview(title)
         header.orientation = .vertical
         header.alignment = .leading
         header.spacing = 4
-        header.translatesAutoresizingMaskIntoConstraints = false
         addSubview(header)
         addSubview(scrollView)
-        NSLayoutConstraint.activate([
-            header.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16), header.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
-            header.topAnchor.constraint(equalTo: topAnchor, constant: 14), header.heightAnchor.constraint(equalToConstant: 42),
-            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor), scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            scrollView.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 7), scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
-            stack.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
-        ])
+        header.autoresizingMask = [.minYMargin, .width]
+    }
+
+    override func layout() {
+        super.layout()
+        let headerHeight: CGFloat = 42
+        let topPadding: CGFloat = 14
+        let scrollTopGap: CGFloat = 7
+        header.frame = NSRect(x: 16, y: max(0, bounds.height - topPadding - headerHeight), width: max(0, bounds.width - 32), height: headerHeight)
+        scrollView.frame = NSRect(x: 0, y: 0, width: bounds.width, height: max(0, bounds.height - topPadding - headerHeight - scrollTopGap))
+        let width = scrollView.contentView.bounds.width
+        let height = documentHeight(for: stack)
+        stack.frame = NSRect(x: 0, y: 0, width: width, height: max(height, scrollView.contentView.bounds.height))
+        stack.layoutSubtreeIfNeeded()
+    }
+
+    private func documentHeight(for stack: NSStackView) -> CGFloat {
+        let viewsHeight = stack.arrangedSubviews.reduce(CGFloat.zero) { total, view in
+            total + max(view.fittingSize.height, view.frame.height)
+        }
+        let spacing = stack.spacing * CGFloat(max(0, stack.arrangedSubviews.count - 1))
+        return viewsHeight + spacing + stack.edgeInsets.top + stack.edgeInsets.bottom
     }
 
     private func addSection(_ text: String) {
@@ -956,6 +1654,7 @@ private final class InspectorView: NSView {
 
     private func addText(_ label: String, value: String, changed: @escaping (String) -> Void) {
         let field = NSTextField(string: value)
+        field.identifier = NSUserInterfaceItemIdentifier("inspector-field-\(label)")
         field.font = .systemFont(ofSize: 11)
         field.cell?.sendsActionOnEndEditing = true
         addField(label, control: field) { sender in changed((sender as? NSTextField)?.stringValue ?? "") }
@@ -963,6 +1662,7 @@ private final class InspectorView: NSView {
 
     private func addReadOnly(_ label: String, value: String) {
         let field = NSTextField(string: value)
+        field.identifier = NSUserInterfaceItemIdentifier("inspector-field-\(label)")
         field.isEditable = false
         field.isSelectable = true
         field.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
@@ -972,6 +1672,7 @@ private final class InspectorView: NSView {
 
     private func addPopup(_ label: String, value: String, choices: [(String, String)], changed: @escaping (String) -> Void) {
         let popup = NSPopUpButton()
+        popup.identifier = NSUserInterfaceItemIdentifier("inspector-field-\(label)")
         for (key, title) in choices {
             popup.addItem(withTitle: title)
             popup.lastItem?.representedObject = key
@@ -986,6 +1687,7 @@ private final class InspectorView: NSView {
 
     private func addColor(_ label: String, value: String, changed: @escaping (String) -> Void) {
         let well = NSColorWell()
+        well.identifier = NSUserInterfaceItemIdentifier("inspector-field-\(label)")
         well.color = NSColor(hex: value)
         addField(label, control: well) { sender in changed((sender as? NSColorWell)?.color.hexRGB ?? value) }
     }
@@ -1000,6 +1702,8 @@ private final class InspectorView: NSView {
         row.spacing = 4
         addFullWidth(row)
         guard let action else { return }
+        control.isEnabled = !isEditingLocked
+        editableControls.append(control)
         let proxy = ControlAction(action)
         control.target = proxy
         control.action = #selector(ControlAction.invoke(_:))
@@ -1048,8 +1752,7 @@ private func makeButton(_ title: String, symbol: String, prominent: Bool = false
 
 private extension NSStackView {
     func removeAllArrangedSubviews() {
-        for item in arrangedSubviews {
-            removeArrangedSubview(item)
+        for item in Array(arrangedSubviews) where item.superview === self {
             item.removeFromSuperview()
         }
     }

@@ -30,6 +30,14 @@ def test_fallback_svg_is_deterministic(project: DiagramProject) -> None:
     assert render_fallback_svg(project) == render_fallback_svg(project)
 
 
+def test_fallback_svg_reflects_custom_node_dimensions(project: DiagramProject) -> None:
+    project.nodes[0].shape = "box"
+    project.nodes[0].width = 4.0
+    project.nodes[0].height = 1.2
+    svg = render_fallback_svg(project)
+    assert 'width="304.0" height="162.6"' in svg
+
+
 def test_fallback_svg_escapes_untrusted_text(project: DiagramProject) -> None:
     project.nodes[0].label = '<script>alert("x")</script>'
     svg = render_fallback_svg(project)

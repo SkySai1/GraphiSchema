@@ -69,6 +69,8 @@ struct DiagramNode: Codable, Equatable, Identifiable {
     var style: NodeStyle
     var x: Double?
     var y: Double?
+    var width: Double?
+    var height: Double?
 }
 
 struct NodeStyle: Codable, Equatable {
@@ -279,6 +281,269 @@ enum WorkspaceTab: String, CaseIterable, Identifiable {
     case dot = "DOT"
 
     var id: String { rawValue }
+}
+
+enum PaletteItem: String, CaseIterable, Identifiable {
+    case service
+    case database
+    case gateway
+    case security
+    case api
+    case cache
+    case server
+    case loadBalancer = "load-balancer"
+    case router
+    case cloud
+    case container
+    case workstation
+    case network
+    case identity
+
+    static let pasteboardType = NSPasteboard.PasteboardType("local.graphischema.palette-item")
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .service: "Сервис приложения"
+        case .database: "База данных"
+        case .gateway: "Шлюз"
+        case .security: "Межсетевой экран"
+        case .api: "API"
+        case .cache: "Кэш"
+        case .server: "Сервер"
+        case .loadBalancer: "Балансировщик"
+        case .router: "Маршрутизатор"
+        case .cloud: "Облако"
+        case .container: "Контейнер"
+        case .workstation: "Рабочая станция"
+        case .network: "Сеть"
+        case .identity: "Служба идентификации"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .service: "square.stack.3d.up"
+        case .database: "cylinder.split.1x2"
+        case .gateway: "point.3.connected.trianglepath.dotted"
+        case .security: "lock.shield"
+        case .api: "point.3.connected.trianglepath.dotted"
+        case .cache: "cylinder.split.1x2"
+        case .server: "server.rack"
+        case .loadBalancer: "arrow.left.arrow.right"
+        case .router: "point.3.connected.trianglepath.dotted"
+        case .cloud: "cloud"
+        case .container: "shippingbox"
+        case .workstation: "desktopcomputer"
+        case .network: "point.3.connected.trianglepath.dotted"
+        case .identity: "person.badge.key"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .service, .api, .server, .cache: "Приложения и данные"
+        case .database: "Хранение данных"
+        case .gateway, .loadBalancer, .router, .network: "Сетевой компонент"
+        case .security, .identity: "Защита и доступ"
+        case .cloud, .container, .workstation: "Среда размещения"
+        }
+    }
+
+    var kind: String {
+        switch self {
+        case .service, .api: "service"
+        case .database: "database"
+        case .gateway, .loadBalancer, .router, .network: "gateway"
+        case .security, .identity: "security"
+        case .cache: "cache"
+        case .server: "server"
+        case .cloud: "cloud"
+        case .container: "container"
+        case .workstation: "client"
+        }
+    }
+
+    var shape: String {
+        switch self {
+        case .database, .cache: "cylinder"
+        case .gateway, .security, .api, .loadBalancer, .router, .network: "hexagon"
+        case .cloud: "cloud"
+        case .workstation: "ellipse"
+        default: "box"
+        }
+    }
+
+    var fill: String {
+        switch self {
+        case .database, .cache: "#E9F3FF"
+        case .gateway, .api, .loadBalancer, .router: "#FFF4DF"
+        case .security, .identity: "#E6F7EF"
+        case .cloud: "#EAF2FF"
+        case .workstation: "#F3F4F6"
+        default: "#FFFFFF"
+        }
+    }
+
+    var stroke: String {
+        switch self {
+        case .database, .cache: "#2B75B8"
+        case .gateway, .api, .loadBalancer, .router: "#D08A18"
+        case .security, .identity: "#16835D"
+        case .cloud: "#3867E8"
+        default: "#3867E8"
+        }
+    }
+
+    var iconPath: String {
+        switch self {
+        case .service: "lucide/icons/app-window.svg"
+        case .database: "tabler-icons/outline/database.svg"
+        case .gateway: "tabler-icons/outline/api-app.svg"
+        case .security: "tabler-icons/outline/shield.svg"
+        case .api: "tabler-icons/outline/api-app.svg"
+        case .cache: "lucide/icons/hard-drive.svg"
+        case .server: "tabler-icons/outline/server.svg"
+        case .loadBalancer: "tabler-icons/outline/load-balancer.svg"
+        case .router: "tabler-icons/outline/router.svg"
+        case .cloud: "tabler-icons/outline/cloud.svg"
+        case .container: "tabler-icons/outline/container.svg"
+        case .workstation: "tabler-icons/outline/device-desktop.svg"
+        case .network: "lucide/icons/network.svg"
+        case .identity: "lucide/icons/lock.svg"
+        }
+    }
+
+    func loadIcon() -> NSImage? {
+        PaletteObject.resourceURL(for: iconPath).flatMap(NSImage.init(contentsOf:))
+    }
+}
+
+struct PaletteObject: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let detail: String
+    let kind: String
+    let shape: String
+    let fill: String
+    let stroke: String
+    let symbol: String
+    let iconPath: String
+    let collectionID: String
+
+    func loadIcon() -> NSImage? {
+        Self.resourceURL(for: iconPath).flatMap(NSImage.init(contentsOf:))
+    }
+
+    static func resourceURL(for iconPath: String) -> URL? {
+        objectLibraryRoots()
+            .map { $0.appendingPathComponent(iconPath) }
+            .first(where: { FileManager.default.fileExists(atPath: $0.path) })
+    }
+
+    static func objectLibraryRoots() -> [URL] {
+        var roots: [URL] = []
+        if let resourceURL = Bundle.main.resourceURL {
+            roots.append(resourceURL.appendingPathComponent("GraphiSchema/resources/object-library", isDirectory: true))
+            roots.append(resourceURL.appendingPathComponent("resources/object-library", isDirectory: true))
+        }
+        roots.append(URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+            .appendingPathComponent("resources/object-library", isDirectory: true))
+        var sourceRoot = URL(fileURLWithPath: #filePath)
+        for _ in 0..<4 { sourceRoot.deleteLastPathComponent() }
+        roots.append(sourceRoot.appendingPathComponent("resources/object-library", isDirectory: true))
+        var seen: Set<String> = []
+        return roots.filter { seen.insert($0.standardizedFileURL.path).inserted }
+    }
+}
+
+struct PaletteCollection: Identifiable {
+    let id: String
+    let title: String
+    let license: String
+    let objects: [PaletteObject]
+}
+
+enum PaletteLibrary {
+    static let collections: [PaletteCollection] = loadCollections()
+    static let allObjects: [PaletteObject] = collections.first(where: { $0.id == "all" })?.objects ?? []
+
+    static func collection(id: String) -> PaletteCollection? {
+        collections.first(where: { $0.id == id })
+    }
+
+    static func object(id: String) -> PaletteObject? {
+        allObjects.first(where: { $0.id == id })
+    }
+
+    private static func loadCollections() -> [PaletteCollection] {
+        let templates = PaletteItem.allCases.map { item in
+            PaletteObject(
+                id: "template:\(item.rawValue)", title: item.title, detail: item.detail,
+                kind: item.kind, shape: item.shape, fill: item.fill, stroke: item.stroke,
+                symbol: item.symbol, iconPath: item.iconPath, collectionID: "templates"
+            )
+        }
+        let tabler = loadSVGObjects(collectionID: "tabler", folder: "tabler-icons/outline", title: "Tabler Icons · MIT")
+        let lucide = loadSVGObjects(collectionID: "lucide", folder: "lucide/icons", title: "Lucide · ISC")
+        let everything = templates + tabler + lucide
+        return [
+            PaletteCollection(id: "all", title: "Все коллекции", license: "", objects: everything),
+            PaletteCollection(id: "templates", title: "GraphiSchema · шаблоны", license: "", objects: templates),
+            PaletteCollection(id: "tabler", title: "Tabler Icons (MIT)", license: "MIT", objects: tabler),
+            PaletteCollection(id: "lucide", title: "Lucide (ISC)", license: "ISC", objects: lucide),
+        ]
+    }
+
+    private static func loadSVGObjects(collectionID: String, folder: String, title: String) -> [PaletteObject] {
+        let directory = PaletteObject.objectLibraryRoots()
+            .map { $0.appendingPathComponent(folder, isDirectory: true) }
+            .first(where: { FileManager.default.fileExists(atPath: $0.path) })
+        guard let directory,
+              let files = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        else { return [] }
+
+        return files.filter { $0.pathExtension.lowercased() == "svg" }
+            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+            .map { file in
+                let basename = file.deletingPathExtension().lastPathComponent
+                let normalized = basename.replacingOccurrences(of: "-", with: " ").lowercased()
+                let classification = classify(normalized)
+                let iconPath = "\(folder)/\(file.lastPathComponent)"
+                let collectionTitle = collectionID == "tabler" ? "Tabler Icons" : "Lucide"
+                return PaletteObject(
+                    id: "svg:\(collectionID):\(file.lastPathComponent)",
+                    title: basename.replacingOccurrences(of: "-", with: " ").capitalized,
+                    detail: "\(classification.detail) · \(collectionTitle)",
+                    kind: classification.kind, shape: classification.shape, fill: classification.fill,
+                    stroke: classification.stroke, symbol: classification.symbol, iconPath: iconPath,
+                    collectionID: collectionID
+                )
+            }
+    }
+
+    private static func classify(_ name: String) -> (kind: String, shape: String, fill: String, stroke: String, symbol: String, detail: String) {
+        if name.contains("database") || name.contains("storage") || name.contains("hard drive") {
+            return ("database", "cylinder", "#E9F3FF", "#2B75B8", "externaldrive", "Хранение данных")
+        }
+        if name.contains("shield") || name.contains("lock") || name.contains("security") || name.contains("firewall") {
+            return ("security", "hexagon", "#E6F7EF", "#16835D", "lock.shield", "Защита и доступ")
+        }
+        if name.contains("router") || name.contains("network") || name.contains("gateway") || name.contains("api") || name.contains("load balancer") || name.contains("globe") || name.contains("world") || name.contains("waypoint") {
+            return ("gateway", "hexagon", "#FFF4DF", "#D08A18", "point.3.connected.trianglepath.dotted", "Сетевой компонент")
+        }
+        if name.contains("cloud") || name.contains("container") || name.contains("building") {
+            return ("cloud", name.contains("cloud") ? "cloud" : "box", "#EAF2FF", "#3867E8", "cloud", "Среда размещения")
+        }
+        if name.contains("desktop") || name.contains("monitor") || name.contains("mobile") || name.contains("user") {
+            return ("client", "ellipse", "#F3F4F6", "#3867E8", "desktopcomputer", "Пользовательское устройство")
+        }
+        if name.contains("server") || name.contains("cpu") {
+            return ("server", "box", "#FFFFFF", "#3867E8", "server.rack", "Серверная инфраструктура")
+        }
+        return ("service", "box", "#FFFFFF", "#3867E8", "square.stack.3d.up", "Компонент архитектуры")
+    }
 }
 
 extension NSColor {

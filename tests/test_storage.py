@@ -1,4 +1,6 @@
+import json
 from pathlib import Path
+import sqlite3
 
 from graphischema.models import DiagramProject
 from graphischema.storage import ProjectStore, RevisionConflict
@@ -39,3 +41,38 @@ def test_store_migrates_legacy_json_and_keeps_version_snapshots(tmp_path: Path) 
     store.save(restored, expected_revision=new_revision)
     assert store.load().project.title == "Локальная миграция"
     assert len(store.list_versions()) == 3
+
+
+def test_store_normalizes_old_model_revisions_before_clients_load_them(tmp_path: Path) -> None:
+    starter = ROOT / "examples" / "starter.json"
+    store = ProjectStore(tmp_path, starter)
+    store.load()
+    with sqlite3.connect(store.database_file) as connection:
+        row = connection.execute("SELECT snapshot FROM current_project WHERE slot = 1").fetchone()
+        legacy = json.loads(row[0])
+        for container in legacy["containers"]:
+            container.pop("padding", None)
+        for node in legacy["nodes"]:
+            node.pop("width", None)
+            node.pop("height", None)
+        legacy_snapshot = json.dumps(legacy, ensure_ascii=False)
+        connection.execute(
+            "UPDATE current_project SET snapshot = ?, revision = ? WHERE slot = 1",
+            (legacy_snapshot, "revision-from-old-model"),
+        )
+        connection.execute(
+            "UPDATE versions SET snapshot = ?, revision = ?",
+            (legacy_snapshot, "revision-from-old-model"),
+        )
+
+    upgraded_store = ProjectStore(tmp_path, starter)
+    loaded = upgraded_store.load()
+    current_revision = upgraded_store.revision(loaded)
+    with sqlite3.connect(upgraded_store.database_file) as connection:
+        stored_revision = connection.execute(
+            "SELECT revision FROM current_project WHERE slot = 1"
+        ).fetchone()[0]
+    assert stored_revision == current_revision
+    assert upgraded_store.get_project_at_revision(current_revision) == loaded
+    assert upgraded_store.get_project_at_revision("revision-from-old-model") == loaded
+    assert all(version["revision"] != "revision-from-old-model" for version in upgraded_store.list_versions())

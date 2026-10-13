@@ -29,6 +29,7 @@ class ProjectStore:
         self.database_file = data_dir / "graphischema.sqlite3"
         self.starter_file = starter_file
         self._lock = RLock()
+        self._normalized = False
 
     def load(self) -> DiagramProject:
         with self._lock, self._database() as connection:
@@ -90,6 +91,20 @@ class ProjectStore:
                 raise VersionNotFound(f"Снимок версии {version_id} не найден.")
             return DiagramProject.model_validate_json(row["snapshot"])
 
+    def get_project_at_revision(self, revision: str) -> DiagramProject | None:
+        """Return the saved base snapshot needed to merge a stale client edit."""
+        with self._lock, self._database() as connection:
+            row = connection.execute(
+                "SELECT snapshot FROM versions WHERE revision = ? ORDER BY id DESC LIMIT 1",
+                (revision,),
+            ).fetchone()
+            if row is None:
+                row = connection.execute(
+                    "SELECT snapshot FROM revision_aliases WHERE legacy_revision = ?",
+                    (revision,),
+                ).fetchone()
+            return DiagramProject.model_validate_json(row["snapshot"]) if row is not None else None
+
     def diff_version(self, version_id: int) -> dict[str, object]:
         with self._lock, self._database() as connection:
             row = connection.execute(
@@ -143,6 +158,13 @@ class ProjectStore:
                 )"""
             )
             connection.execute("CREATE INDEX IF NOT EXISTS versions_created_at ON versions(id DESC)")
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS revision_aliases (
+                    legacy_revision TEXT PRIMARY KEY,
+                    canonical_revision TEXT NOT NULL,
+                    snapshot TEXT NOT NULL
+                )"""
+            )
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute("SELECT 1 FROM current_project WHERE slot = 1").fetchone()
             if row is None:
@@ -159,7 +181,12 @@ class ProjectStore:
                     "INSERT INTO versions(project_id, title, revision, snapshot, created_at) VALUES (?, ?, ?, ?, ?)",
                     (initial.project.id, initial.project.title, revision, snapshot, created_at),
                 )
+            needs_normalization = not self._normalized
+            if needs_normalization:
+                self._normalize_snapshots(connection)
             connection.commit()
+            if needs_normalization:
+                self._normalized = True
             yield connection
         except Exception:
             if connection.in_transaction:
@@ -167,6 +194,42 @@ class ProjectStore:
             raise
         finally:
             connection.close()
+
+    def _normalize_snapshots(self, connection: sqlite3.Connection) -> None:
+        """Migrate stored revisions after model defaults or canonical JSON change."""
+        row = connection.execute(
+            "SELECT project_id, snapshot, revision FROM current_project WHERE slot = 1"
+        ).fetchone()
+        if row is not None:
+            project = DiagramProject.model_validate_json(row["snapshot"])
+            revision = self.revision(project)
+            snapshot = _serialize(project)
+            if row["revision"] != revision or row["snapshot"] != snapshot:
+                if row["revision"] != revision:
+                    connection.execute(
+                        "INSERT OR REPLACE INTO revision_aliases(legacy_revision, canonical_revision, snapshot) VALUES (?, ?, ?)",
+                        (row["revision"], revision, snapshot),
+                    )
+                connection.execute(
+                    "UPDATE current_project SET project_id = ?, snapshot = ?, revision = ? WHERE slot = 1",
+                    (project.project.id, snapshot, revision),
+                )
+
+        rows = connection.execute("SELECT id, snapshot, revision FROM versions").fetchall()
+        for version in rows:
+            project = DiagramProject.model_validate_json(version["snapshot"])
+            revision = self.revision(project)
+            snapshot = _serialize(project)
+            if version["revision"] != revision or version["snapshot"] != snapshot:
+                if version["revision"] != revision:
+                    connection.execute(
+                        "INSERT OR REPLACE INTO revision_aliases(legacy_revision, canonical_revision, snapshot) VALUES (?, ?, ?)",
+                        (version["revision"], revision, snapshot),
+                    )
+                connection.execute(
+                    "UPDATE versions SET project_id = ?, title = ?, revision = ?, snapshot = ? WHERE id = ?",
+                    (project.project.id, project.project.title, revision, snapshot, version["id"]),
+                )
 
 
 def _serialize(project: DiagramProject) -> str:

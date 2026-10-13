@@ -10,23 +10,19 @@ final class OllamaAssistantWindowController: NSWindowController {
     private let contextField = NSTextField(string: "8192")
     private let timeoutField = NSTextField(string: "120")
     private let systemPromptView = NSTextView()
-    private let taskView = NSTextView()
-    private let resultView = NSTextView()
-    private let modeControl = NSSegmentedControl(labels: ["Создать", "Изменить", "Проверить"], trackingMode: .selectOne, target: nil, action: nil)
-    private let statusLabel = NSTextField(labelWithString: "Endpoint: локальный Ollama")
-    private var runButton: NSButton?
-    private var buttonActions: [AssistantButtonAction] = []
+    private let statusLabel = NSTextField(labelWithString: "Настройки применяются только к локальному endpoint.")
+    private var actions: [AssistantButtonAction] = []
 
     init(model: AppModel) {
         self.model = model
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 820, height: 780),
+            contentRect: NSRect(x: 0, y: 0, width: 690, height: 620),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "GraphiSchema · Ollama"
-        window.minSize = NSSize(width: 700, height: 680)
+        window.minSize = NSSize(width: 560, height: 500)
         window.center()
         super.init(window: window)
         buildInterface()
@@ -36,80 +32,90 @@ final class OllamaAssistantWindowController: NSWindowController {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     private func buildInterface() {
-        let root = NSStackView()
-        root.orientation = .vertical
-        root.alignment = .leading
-        root.spacing = 9
+        let root = NSView()
+        let form = NSStackView()
+        form.orientation = .vertical
+        form.alignment = .leading
+        form.spacing = 11
+        form.translatesAutoresizingMaskIntoConstraints = false
         root.translatesAutoresizingMaskIntoConstraints = false
+        window?.contentView = root
+        root.addSubview(form)
 
-        let endpointRow = NSStackView()
-        endpointRow.orientation = .horizontal
-        endpointRow.alignment = .centerY
-        endpointRow.spacing = 8
+        let heading = NSTextField(labelWithString: "ПОДКЛЮЧЕНИЕ И ПАРАМЕТРЫ МОДЕЛИ")
+        heading.font = .systemFont(ofSize: 10, weight: .bold)
+        heading.textColor = .secondaryLabelColor
+
         endpointField.placeholderString = "http://127.0.0.1:11434"
-        endpointField.widthAnchor.constraint(greaterThanOrEqualToConstant: 270).isActive = true
         endpointField.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        endpointRow.addArrangedSubview(fieldLabel("Endpoint", width: 70))
-        endpointRow.addArrangedSubview(endpointField)
-        endpointRow.addArrangedSubview(button("Модели / связь", symbol: "arrow.clockwise") { [weak self] in self?.loadModels() })
-        root.addArrangedSubview(endpointRow)
+        endpointField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let checkButton = button("Проверить", symbol: "arrow.clockwise") { [weak self] in self?.checkConnection() }
+        let endpointRow = row(label("Endpoint", width: 86), endpointField, checkButton)
 
         modelField.isEditable = true
         modelField.placeholderString = "Выберите установленную модель"
-        modelField.widthAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true
-        let modelRow = NSStackView(views: [fieldLabel("Модель", width: 70), modelField])
-        modelRow.orientation = .horizontal
-        modelRow.alignment = .centerY
-        modelRow.spacing = 8
-        root.addArrangedSubview(modelRow)
+        modelField.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        modelField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let modelRow = row(label("Модель", width: 86), modelField)
 
-        let settingsRow = NSStackView()
+        temperatureField.placeholderString = "0.2"
+        contextField.placeholderString = "8192"
+        timeoutField.placeholderString = "120"
+        [temperatureField, contextField, timeoutField].forEach { $0.alignment = .left }
+        let settingsRow = NSStackView(views: [
+            label("Температура", width: 80), temperatureField,
+            label("Контекст", width: 57), contextField,
+            label("Тайм-аут, с", width: 75), timeoutField,
+        ])
         settingsRow.orientation = .horizontal
         settingsRow.alignment = .centerY
-        settingsRow.spacing = 8
-        addSetting("Температура", field: temperatureField, width: 70, to: settingsRow)
-        addSetting("Контекст", field: contextField, width: 90, to: settingsRow)
-        addSetting("Тайм-аут, с", field: timeoutField, width: 60, to: settingsRow)
-        root.addArrangedSubview(settingsRow)
+        settingsRow.spacing = 7
+        for field in [temperatureField, contextField, timeoutField] {
+            field.widthAnchor.constraint(equalToConstant: field === contextField ? 72 : 58).isActive = true
+        }
 
-        root.addArrangedSubview(section("СИСТЕМНЫЙ ПРОМПТ"))
-        root.addArrangedSubview(textScroll(systemPromptView, height: 95))
-        root.addArrangedSubview(section("РЕЖИМ И ЗАДАНИЕ"))
-        modeControl.selectedSegment = 0
-        root.addArrangedSubview(modeControl)
-        root.addArrangedSubview(textScroll(taskView, height: 120))
+        let promptHeading = NSTextField(labelWithString: "СИСТЕМНЫЙ ПРОМПТ")
+        promptHeading.font = .systemFont(ofSize: 9, weight: .bold)
+        promptHeading.textColor = .secondaryLabelColor
+        systemPromptView.isRichText = false
+        systemPromptView.identifier = NSUserInterfaceItemIdentifier("ollama-system-prompt")
+        systemPromptView.isAutomaticQuoteSubstitutionEnabled = false
+        systemPromptView.isAutomaticDashSubstitutionEnabled = false
+        systemPromptView.font = .systemFont(ofSize: 11)
+        systemPromptView.textContainerInset = NSSize(width: 9, height: 8)
+        systemPromptView.isVerticallyResizable = true
+        systemPromptView.isHorizontallyResizable = false
+        systemPromptView.autoresizingMask = [.width]
+        systemPromptView.textContainer?.widthTracksTextView = true
+        let promptScroll = NSScrollView()
+        promptScroll.documentView = systemPromptView
+        promptScroll.hasVerticalScroller = true
+        promptScroll.borderType = .bezelBorder
+        promptScroll.heightAnchor.constraint(equalToConstant: 285).isActive = true
 
-        let runRow = NSStackView()
-        runRow.orientation = .horizontal
-        runRow.alignment = .centerY
-        runRow.spacing = 10
-        runButton = button("Выполнить", symbol: "sparkles", prominent: true) { [weak self] in self?.runSelectedMode() }
-        runRow.addArrangedSubview(runButton!)
-        runRow.addArrangedSubview(statusLabel)
-        root.addArrangedSubview(runRow)
+        statusLabel.font = .systemFont(ofSize: 10)
+        statusLabel.textColor = .secondaryLabelColor
+        statusLabel.lineBreakMode = .byWordWrapping
+        let saveButton = button("Сохранить настройки", symbol: "checkmark.circle.fill", prominent: true) { [weak self] in self?.savePreferences() }
+        let actionsRow = NSStackView(views: [saveButton, statusLabel])
+        actionsRow.orientation = .horizontal
+        actionsRow.alignment = .centerY
+        actionsRow.spacing = 12
 
-        root.addArrangedSubview(section("ОТВЕТ / ОТЧЁТ"))
-        root.addArrangedSubview(textScroll(resultView, height: 190, editable: false))
-        let footnote = NSTextField(labelWithString: "Предложение появится на холсте главного окна; применяйте или отменяйте его там. Проверка только формирует отчёт и не изменяет проект.")
-        footnote.font = .systemFont(ofSize: 10)
-        footnote.textColor = .secondaryLabelColor
-        footnote.lineBreakMode = .byWordWrapping
-        root.addArrangedSubview(footnote)
-
-        window?.contentView = root
+        [heading, endpointRow, modelRow, settingsRow, promptHeading, promptScroll, actionsRow].forEach { form.addArrangedSubview($0) }
         NSLayoutConstraint.activate([
-            root.leadingAnchor.constraint(equalTo: window!.contentView!.leadingAnchor, constant: 18),
-            root.trailingAnchor.constraint(equalTo: window!.contentView!.trailingAnchor, constant: -18),
-            root.topAnchor.constraint(equalTo: window!.contentView!.topAnchor, constant: 16),
-            root.bottomAnchor.constraint(lessThanOrEqualTo: window!.contentView!.bottomAnchor, constant: -16),
-            endpointRow.widthAnchor.constraint(equalTo: root.widthAnchor),
-            modelRow.widthAnchor.constraint(equalTo: root.widthAnchor),
-            settingsRow.widthAnchor.constraint(equalTo: root.widthAnchor),
-            modeControl.widthAnchor.constraint(equalToConstant: 370),
-            runRow.widthAnchor.constraint(equalTo: root.widthAnchor),
-            statusLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 220),
-            footnote.widthAnchor.constraint(equalTo: root.widthAnchor),
+            form.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 22),
+            form.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -22),
+            form.topAnchor.constraint(equalTo: root.topAnchor, constant: 20),
+            form.bottomAnchor.constraint(lessThanOrEqualTo: root.bottomAnchor, constant: -20),
+            endpointRow.widthAnchor.constraint(equalTo: form.widthAnchor),
+            modelRow.widthAnchor.constraint(equalTo: form.widthAnchor),
+            settingsRow.widthAnchor.constraint(equalTo: form.widthAnchor),
+            promptScroll.widthAnchor.constraint(equalTo: form.widthAnchor),
+            actionsRow.widthAnchor.constraint(equalTo: form.widthAnchor),
+            statusLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 250),
         ])
+        statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     }
 
     private func loadPreferences() {
@@ -122,10 +128,10 @@ final class OllamaAssistantWindowController: NSWindowController {
         systemPromptView.string = preferences.systemPrompt
     }
 
-    private func loadModels() {
+    private func checkConnection() {
         guard let preferences = readPreferences(requireModel: false) else { return }
         model.updateOllamaPreferences(preferences)
-        statusLabel.stringValue = "Подключение…"
+        statusLabel.stringValue = "Проверка подключения…"
         Task { @MainActor in
             do {
                 let models = try await model.fetchOllamaModels()
@@ -136,55 +142,24 @@ final class OllamaAssistantWindowController: NSWindowController {
                 } else if let first = models.first {
                     modelField.stringValue = first.name
                 }
-                statusLabel.stringValue = "Ollama доступна · моделей: \(models.count)"
+                statusLabel.stringValue = "Ollama доступна · моделей: \(models.count). Сохраните выбранную модель."
             } catch {
-                statusLabel.stringValue = "Нет подключения"
-                resultView.string = error.localizedDescription
+                statusLabel.stringValue = "Нет подключения: \(error.localizedDescription)"
             }
         }
     }
 
-    private func runSelectedMode() {
+    private func savePreferences() {
         guard let preferences = readPreferences() else { return }
-        let prompt = taskView.string.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty else {
-            resultView.string = "Введите задание для выбранного режима."
-            return
-        }
         model.updateOllamaPreferences(preferences)
-        resultView.string = ""
-        statusLabel.stringValue = "Запрос к локальной модели…"
-        runButton?.isEnabled = false
-        let mode = modeControl.selectedSegment
-        Task { @MainActor in
-            defer { runButton?.isEnabled = true }
-            do {
-                if mode == 2 {
-                    let response = try await model.reviewWithOllama(prompt)
-                    resultView.string = response.report.text
-                    statusLabel.stringValue = "Read-only проверка завершена"
-                } else {
-                    let proposal = try await model.generateWithOllama(prompt, editing: mode == 1)
-                    let changes = proposal.changes.entries
-                    resultView.string = changes.isEmpty
-                        ? "Предложение не содержит отличий от текущего проекта."
-                        : "Предложенные изменения:\n" + changes.joined(separator: "\n")
-                    statusLabel.stringValue = "Предложение показано на холсте"
-                }
-            } catch {
-                resultView.string = error.localizedDescription
-                statusLabel.stringValue = "Ошибка запроса"
-            }
-        }
+        statusLabel.stringValue = "Настройки сохранены локально."
     }
 
     private func readPreferences(requireModel: Bool = true) -> OllamaPreferences? {
         guard let temperature = Double(temperatureField.stringValue), (0...2).contains(temperature),
               let context = Int(contextField.stringValue), (512...131072).contains(context),
-              let timeout = Double(timeoutField.stringValue), (1...300).contains(timeout)
-        else {
-            resultView.string = "Проверьте параметры: температура 0–2, контекст 512–131072, тайм-аут 1–300 секунд."
-            statusLabel.stringValue = "Некорректные настройки"
+              let timeout = Double(timeoutField.stringValue), (1...300).contains(timeout) else {
+            statusLabel.stringValue = "Проверьте параметры: температура 0–2, контекст 512–131072, тайм-аут 1–300 секунд."
             return nil
         }
         var preferences = model.ollamaPreferences
@@ -195,49 +170,25 @@ final class OllamaAssistantWindowController: NSWindowController {
         preferences.numCtx = context
         preferences.timeout = timeout
         guard !preferences.endpoint.isEmpty, !requireModel || !preferences.model.isEmpty else {
-            resultView.string = requireModel ? "Укажите endpoint и выберите установленную модель." : "Укажите endpoint Ollama."
-            statusLabel.stringValue = requireModel ? "Нужны endpoint и модель" : "Нужен endpoint"
+            statusLabel.stringValue = requireModel ? "Укажите endpoint и выберите модель." : "Укажите endpoint Ollama."
             return nil
         }
         return preferences
     }
 
-    private func addSetting(_ title: String, field: NSTextField, width: CGFloat, to stack: NSStackView) {
-        field.stringValue = ""
-        field.widthAnchor.constraint(equalToConstant: width).isActive = true
-        stack.addArrangedSubview(fieldLabel(title, width: nil))
-        stack.addArrangedSubview(field)
+    private func row(_ views: NSView...) -> NSStackView {
+        let result = NSStackView(views: views)
+        result.orientation = .horizontal
+        result.alignment = .centerY
+        result.spacing = 8
+        return result
     }
 
-    private func textScroll(_ textView: NSTextView, height: CGFloat, editable: Bool = true) -> NSScrollView {
-        textView.isRichText = false
-        textView.isAutomaticQuoteSubstitutionEnabled = false
-        textView.isAutomaticDashSubstitutionEnabled = false
-        textView.font = .systemFont(ofSize: 12)
-        textView.isEditable = editable
-        textView.textColor = .labelColor
-        textView.backgroundColor = NSColor.textBackgroundColor
-        let scroll = NSScrollView()
-        scroll.documentView = textView
-        scroll.hasVerticalScroller = true
-        scroll.borderType = .bezelBorder
-        scroll.heightAnchor.constraint(equalToConstant: height).isActive = true
-        scroll.widthAnchor.constraint(greaterThanOrEqualToConstant: 400).isActive = true
-        return scroll
-    }
-
-    private func fieldLabel(_ text: String, width: CGFloat?) -> NSTextField {
-        let label = NSTextField(labelWithString: text)
-        label.font = .systemFont(ofSize: 11, weight: .medium)
-        if let width { label.widthAnchor.constraint(equalToConstant: width).isActive = true }
-        return label
-    }
-
-    private func section(_ title: String) -> NSTextField {
-        let label = NSTextField(labelWithString: title)
-        label.font = .systemFont(ofSize: 9, weight: .bold)
-        label.textColor = .secondaryLabelColor
-        return label
+    private func label(_ value: String, width: CGFloat) -> NSTextField {
+        let result = NSTextField(labelWithString: value)
+        result.font = .systemFont(ofSize: 11, weight: .medium)
+        result.widthAnchor.constraint(equalToConstant: width).isActive = true
+        return result
     }
 
     private func button(_ title: String, symbol: String, prominent: Bool = false, action: @escaping () -> Void) -> NSButton {
@@ -251,7 +202,7 @@ final class OllamaAssistantWindowController: NSWindowController {
         button.target = proxy
         button.action = #selector(AssistantButtonAction.invoke(_:))
         objc_setAssociatedObject(button, Unmanaged.passUnretained(proxy).toOpaque(), proxy, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
-        buttonActions.append(proxy)
+        actions.append(proxy)
         return button
     }
 }

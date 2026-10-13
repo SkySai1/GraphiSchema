@@ -50,10 +50,13 @@ BIN_PATH="$(swift build --package-path "$ROOT/native" --configuration release \
 
 echo "GraphiSchema: упаковка локального Python backend…"
 rm -rf "$APP_PATH"
-mkdir -p "$CONTENTS/MacOS" "$BUNDLED_PROJECT/backend" "$BUNDLED_PROJECT/examples"
+mkdir -p "$CONTENTS/MacOS" "$BUNDLED_PROJECT/backend" "$BUNDLED_PROJECT/examples" "$BUNDLED_PROJECT/resources"
 cp "$BIN_PATH/GraphiSchema" "$CONTENTS/MacOS/GraphiSchema"
 cp -R "$ROOT/backend/graphischema" "$BUNDLED_PROJECT/backend/graphischema"
+find "$BUNDLED_PROJECT/backend/graphischema" -type d -name __pycache__ -prune -exec rm -rf {} +
+find "$BUNDLED_PROJECT/backend/graphischema" -type f -name '*.py[co]' -delete
 cp "$ROOT/examples/starter.json" "$BUNDLED_PROJECT/examples/starter.json"
+cp -R "$ROOT/resources/object-library" "$BUNDLED_PROJECT/resources/object-library"
 cp "$ROOT/pyproject.toml" "$ROOT/uv.lock" "$ROOT/README.md" "$BUNDLED_PROJECT/"
 cp "$ROOT/LICENSE" "$RESOURCES/LICENSE"
 
@@ -75,6 +78,7 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
+printf 'APPL????' > "$CONTENTS/PkgInfo"
 
 if command -v dot >/dev/null 2>&1; then
   dot -V
@@ -91,6 +95,10 @@ UV_PROJECT_ENVIRONMENT="$APP_SUPPORT/backend-venv" \
 if [[ -n "$SIGN_IDENTITY" ]]; then
   echo "GraphiSchema: подпись code signing identity '$SIGN_IDENTITY'…"
   codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" --identifier "local.graphischema.app" "$APP_PATH"
+  codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+else
+  echo "GraphiSchema: ad hoc-подпись локального приложения…"
+  codesign --force --sign - --identifier "local.graphischema.app" "$APP_PATH"
   codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 fi
 

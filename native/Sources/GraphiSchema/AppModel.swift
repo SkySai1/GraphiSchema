@@ -5,13 +5,14 @@ final class AppModel: ObservableObject {
     var diagram: DiagramProject?
     var revision = ""
     var selection: DiagramSelection = .project
-    var workspaceTab: WorkspaceTab = .canvas
+    var workspaceTab: WorkspaceTab = .json
     var layout: DiagramLayout?
     var dotSource = ""
     var dotPreview: DOTPreviewResponse?
     var ollamaProposal: DiagramProposal?
     var ollamaPreferences = OllamaPreferences()
     var jsonDraft = ""
+    var jsonDraftIsDirty = false
     var issues: [ValidationIssue] = []
     var history = HistoryState(canUndo: false, canRedo: false)
     var status = "Подключение…"
@@ -34,6 +35,7 @@ final class AppModel: ObservableObject {
     var containers: [DiagramContainer] { diagram?.containers ?? [] }
     var edges: [DiagramEdge] { diagram?.edges ?? [] }
     var activeProposal: DiagramProposal? { dotPreview ?? ollamaProposal }
+    var isEditingLocked: Bool { jsonDraftIsDirty || activeProposal != nil }
 
     init() {
         if let data = UserDefaults.standard.data(forKey: "GraphiSchema.ollama.preferences"),
@@ -53,6 +55,7 @@ final class AppModel: ObservableObject {
             diagram = envelope.diagram
             revision = envelope.revision
             jsonDraft = prettyJSON(envelope.diagram)
+            jsonDraftIsDirty = false
             lastSerializedJSON = jsonDraft
             status = "Сохранено"
             await refreshLayout()
@@ -66,6 +69,7 @@ final class AppModel: ObservableObject {
     }
 
     func updateTitle(_ value: String) {
+        guard !isEditingLocked else { return }
         guard var current = diagram else { return }
         current.project.title = value
         diagram = current
@@ -73,6 +77,7 @@ final class AppModel: ObservableObject {
     }
 
     func updateDirection(_ value: String) {
+        guard !isEditingLocked else { return }
         guard var current = diagram else { return }
         current.diagram.direction = value
         diagram = current
@@ -80,6 +85,7 @@ final class AppModel: ObservableObject {
     }
 
     func updateLayoutMode(_ value: String) {
+        guard !isEditingLocked else { return }
         guard var current = diagram, ["auto", "manual"].contains(value) else { return }
         guard current.diagram.layoutMode != value else { return }
         if value == "manual", current.diagram.layoutMode != "manual" {
@@ -96,6 +102,7 @@ final class AppModel: ObservableObject {
     }
 
     func editNode(_ id: String, _ update: (inout DiagramNode) -> Void) {
+        guard !isEditingLocked else { return }
         guard var current = diagram, let index = current.nodes.firstIndex(where: { $0.id == id }) else { return }
         update(&current.nodes[index])
         diagram = current
@@ -103,6 +110,7 @@ final class AppModel: ObservableObject {
     }
 
     func editContainer(_ id: String, _ update: (inout DiagramContainer) -> Void) {
+        guard !isEditingLocked else { return }
         guard var current = diagram, let index = current.containers.firstIndex(where: { $0.id == id }) else { return }
         update(&current.containers[index])
         diagram = current
@@ -110,6 +118,7 @@ final class AppModel: ObservableObject {
     }
 
     func editEdge(_ id: String, _ update: (inout DiagramEdge) -> Void) {
+        guard !isEditingLocked else { return }
         guard var current = diagram, let index = current.edges.firstIndex(where: { $0.id == id }) else { return }
         update(&current.edges[index])
         diagram = current
@@ -117,6 +126,7 @@ final class AppModel: ObservableObject {
     }
 
     func moveNode(_ id: String, x: Double, y: Double) {
+        guard !isEditingLocked else { return }
         guard var current = diagram, let index = current.nodes.firstIndex(where: { $0.id == id }) else { return }
         current.diagram.layoutMode = "manual"
         let positions = Dictionary(uniqueKeysWithValues: (layout?.nodes ?? []).map { ($0.id, $0) })
@@ -133,6 +143,7 @@ final class AppModel: ObservableObject {
     }
 
     func moveContainer(_ id: String, deltaX: Double, deltaY: Double) {
+        guard !isEditingLocked else { return }
         guard var current = diagram, current.containers.contains(where: { $0.id == id }) else { return }
         current.diagram.layoutMode = "manual"
         let positions = Dictionary(uniqueKeysWithValues: (layout?.nodes ?? []).map { ($0.id, $0) })
@@ -158,23 +169,49 @@ final class AppModel: ObservableObject {
         changed()
     }
 
-    func addNode() {
+    func addNode(kind: String = "service", at position: (x: Double, y: Double)? = nil, inContainer containerID: String? = nil) {
+        let presets: [String: (String, String, String, String)] = [
+            "database": ("База данных", "cylinder", "#E9F3FF", "#2B75B8"),
+            "gateway": ("Шлюз", "hexagon", "#FFF4DF", "#D08A18"),
+            "security": ("Защита", "hexagon", "#E6F7EF", "#16835D"),
+        ]
+        let preset = presets[kind] ?? ("Новый сервис", "box", "#FFFFFF", "#3867E8")
+        insertNode(kind: kind, label: preset.0, shape: preset.1, fill: preset.2, stroke: preset.3, at: position, inContainer: containerID)
+    }
+
+    func addNode(_ item: PaletteObject, at position: (x: Double, y: Double)? = nil, inContainer containerID: String? = nil) {
+        insertNode(kind: item.kind, label: item.title, shape: item.shape, fill: item.fill, stroke: item.stroke, at: position, inContainer: containerID)
+    }
+
+    private func insertNode(kind: String, label: String, shape: String, fill: String, stroke: String, at position: (x: Double, y: Double)?, inContainer containerID: String?) {
+        guard !isEditingLocked else { return }
         guard var current = diagram else { return }
         let id = makeID("node")
+        let positions = Dictionary(uniqueKeysWithValues: (layout?.nodes ?? []).map { ($0.id, $0) })
+        if position != nil {
+            current.diagram.layoutMode = "manual"
+            for index in current.nodes.indices where current.nodes[index].x == nil || current.nodes[index].y == nil {
+                guard let existing = positions[current.nodes[index].id] else { continue }
+                current.nodes[index].x = existing.x
+                current.nodes[index].y = existing.y
+            }
+        }
         let manualX = current.diagram.layoutMode == "manual"
             ? (current.nodes.compactMap(\.x).max() ?? layout?.width ?? 0) + 1.6
             : nil
         let manualY = current.diagram.layoutMode == "manual" ? (layout?.height ?? 1) / 2 : nil
         current.nodes.append(DiagramNode(
             id: id,
-            label: "Новый компонент",
+            label: label,
             description: "",
-            kind: "service",
-            shape: "box",
-            containerId: nil,
-            style: NodeStyle(fill: "#FFFFFF", stroke: "#3867E8", text: "#172238", penwidth: 1.5),
-            x: manualX,
-            y: manualY
+            kind: kind,
+            shape: shape,
+            containerId: current.containers.contains(where: { $0.id == containerID }) ? containerID : nil,
+            style: NodeStyle(fill: fill, stroke: stroke, text: "#172238", penwidth: 1.5),
+            x: position.map { min(1000, max(-1000, $0.x)) } ?? manualX,
+            y: position.map { min(1000, max(-1000, $0.y)) } ?? manualY,
+            width: nil,
+            height: nil
         ))
         diagram = current
         selection = .node(id)
@@ -182,6 +219,7 @@ final class AppModel: ObservableObject {
     }
 
     func addContainer() {
+        guard !isEditingLocked else { return }
         guard var current = diagram else { return }
         let id = makeID("zone")
         current.containers.append(DiagramContainer(
@@ -195,20 +233,31 @@ final class AppModel: ObservableObject {
         changed()
     }
 
-    func addEdge() {
+    func addEdge(from sourceID: String? = nil, to targetID: String? = nil) {
+        guard !isEditingLocked else { return }
         guard var current = diagram else { return }
-        guard current.nodes.count >= 2 else {
+        let source: DiagramNode?
+        let target: DiagramNode?
+        if let sourceID, let targetID {
+            source = current.nodes.first(where: { $0.id == sourceID })
+            target = current.nodes.first(where: { $0.id == targetID })
+        } else if current.nodes.count >= 2 {
+            source = current.nodes[current.nodes.count - 2]
+            target = current.nodes[current.nodes.count - 1]
+        } else {
+            source = nil
+            target = nil
+        }
+        guard let source, let target, source.id != target.id else {
             alertMessage = "Добавьте минимум два компонента для создания связи."
             onAlert?(alertMessage ?? "Добавьте компоненты для связи.")
             return
         }
-        let first = current.nodes[current.nodes.count - 2]
-        let second = current.nodes[current.nodes.count - 1]
         let id = makeID("edge")
         current.edges.append(DiagramEdge(
             id: id,
-            source: first.id,
-            target: second.id,
+            source: source.id,
+            target: target.id,
             label: "Новая связь",
             direction: "forward",
             style: EdgeStyle(lineStyle: "solid", color: "#64748B", penwidth: 1.5, arrowhead: "normal", arrowtail: "none", constraint: true, weight: 1, minlen: 1)
@@ -219,6 +268,7 @@ final class AppModel: ObservableObject {
     }
 
     func deleteSelection() {
+        guard !isEditingLocked else { return }
         guard var current = diagram else { return }
         switch selection {
         case .project:
@@ -243,11 +293,27 @@ final class AppModel: ObservableObject {
         changed()
     }
 
-    func saveNow() async {
-        guard let snapshot = diagram else { return }
+    func saveNow() async throws {
         saveTask?.cancel()
+        saveTask = nil
         if isSaving {
             saveQueued = true
+            while isSaving {
+                guard !Task.isCancelled else { return }
+                do { try await Task.sleep(for: .milliseconds(20)) }
+                catch { return }
+            }
+            // An in-flight save may have queued a debounced follow-up. This caller
+            // takes ownership of that save so actions such as opening history wait
+            // until the latest canvas state has reached the backend.
+            saveTask?.cancel()
+            saveTask = nil
+            saveQueued = false
+        }
+        guard let snapshot = diagram else { return }
+        guard prettyJSON(snapshot) != lastSerializedJSON else {
+            status = "Сохранено"
+            onModelChange?()
             return
         }
         isSaving = true
@@ -266,8 +332,8 @@ final class AppModel: ObservableObject {
             revision = envelope.revision
             if diagram == snapshot {
                 diagram = envelope.diagram
-                jsonDraft = prettyJSON(envelope.diagram)
-                lastSerializedJSON = jsonDraft
+                lastSerializedJSON = prettyJSON(envelope.diagram)
+                if !jsonDraftIsDirty { jsonDraft = lastSerializedJSON }
                 status = "Сохранено"
                 await refreshLayout()
                 await refreshHistoryState()
@@ -279,7 +345,8 @@ final class AppModel: ObservableObject {
         } catch {
             status = "Ошибка сохранения"
             alertMessage = error.localizedDescription
-            onAlert?(error.localizedDescription)
+            onModelChange?()
+            throw error
         }
     }
 
@@ -305,10 +372,9 @@ final class AppModel: ObservableObject {
     func selectTab(_ tab: WorkspaceTab) async {
         workspaceTab = tab
         if tab == .json {
-            if jsonDraft.isEmpty || jsonDraft == lastSerializedJSON {
+            if !jsonDraftIsDirty || jsonDraft.isEmpty {
                 jsonDraft = prettyJSON(diagram)
             }
-            lastSerializedJSON = prettyJSON(diagram)
         } else if tab == .dot {
             if dotSource.isEmpty || dotSource == lastSerializedDOT {
                 do {
@@ -317,6 +383,20 @@ final class AppModel: ObservableObject {
                 } catch { alertMessage = error.localizedDescription; onAlert?(error.localizedDescription) }
             }
         }
+        onModelChange?()
+    }
+
+    func updateJSONDraft(_ value: String) {
+        jsonDraft = value
+        jsonDraftIsDirty = value != prettyJSON(diagram)
+        status = jsonDraftIsDirty ? "JSON изменён" : "Сохранено"
+        onModelChange?()
+    }
+
+    func discardJSONDraft() {
+        jsonDraft = prettyJSON(diagram)
+        jsonDraftIsDirty = false
+        status = "JSON восстановлен"
         onModelChange?()
     }
 
@@ -333,6 +413,7 @@ final class AppModel: ObservableObject {
     }
 
     func previewDOTDraft() async throws {
+        guard !jsonDraftIsDirty else { throw ClientError.pendingChanges }
         try await flushPendingSave()
         let source = dotSource
         let baseDiagram = diagram
@@ -369,6 +450,7 @@ final class AppModel: ObservableObject {
     }
 
     func generateWithOllama(_ prompt: String, editing: Bool) async throws -> DiagramProposal {
+        guard !jsonDraftIsDirty else { throw ClientError.pendingChanges }
         try await flushPendingSave()
         let baseDiagram = diagram
         let baseRevision = revision
@@ -382,7 +464,7 @@ final class AppModel: ObservableObject {
         proposalBaseRevision = baseRevision
         proposalBaseDiagram = baseDiagram
         selection = .project
-        workspaceTab = .canvas
+        workspaceTab = .json
         status = editing ? "Предложение Ollama · \(proposal.changes.entries.count) изменений" : "Диаграмма Ollama готова к проверке"
         onModelChange?()
         onPreviewChange?()
@@ -390,6 +472,7 @@ final class AppModel: ObservableObject {
     }
 
     func reviewWithOllama(_ prompt: String) async throws -> OllamaReviewResponse {
+        guard !jsonDraftIsDirty else { throw ClientError.pendingChanges }
         try await flushPendingSave()
         let baseDiagram = diagram
         let baseRevision = revision
@@ -400,6 +483,7 @@ final class AppModel: ObservableObject {
     }
 
     func applyCurrentProposal() async throws {
+        guard !jsonDraftIsDirty else { throw ClientError.pendingChanges }
         guard let candidate = activeProposal?.diagram else { return }
         guard proposalBaseRevision == revision, proposalBaseDiagram == diagram else {
             cancelCurrentProposal()
@@ -414,6 +498,7 @@ final class AppModel: ObservableObject {
         proposalBaseRevision = nil
         proposalBaseDiagram = nil
         jsonDraft = prettyJSON(envelope.diagram)
+        jsonDraftIsDirty = false
         lastSerializedJSON = jsonDraft
         dotSource = try await requestText("api/dot")
         lastSerializedDOT = dotSource
@@ -436,13 +521,16 @@ final class AppModel: ObservableObject {
     }
 
     func applyJSONDraft() async throws {
+        guard activeProposal == nil else { throw ClientError.pendingChanges }
         guard let data = jsonDraft.data(using: .utf8) else { throw ClientError.invalidJSON }
+        try await flushPendingSave()
         let _: ValidationResponse = try await request("api/validate", method: "POST", body: data)
         let candidate = try decode(DiagramProject.self, from: data)
         let envelope = try await persist(candidate)
         diagram = envelope.diagram
         revision = envelope.revision
         jsonDraft = prettyJSON(envelope.diagram)
+        jsonDraftIsDirty = false
         lastSerializedJSON = jsonDraft
         status = "Сохранено"
         await refreshLayout()
@@ -451,6 +539,11 @@ final class AppModel: ObservableObject {
     }
 
     func importJSON(_ data: Data) async {
+        guard !isEditingLocked else {
+            alertMessage = "Сначала примените или сбросьте текущий черновик."
+            onAlert?(alertMessage ?? "Текущий черновик не применён.")
+            return
+        }
         do {
             let _: ValidationResponse = try await request("api/validate", method: "POST", body: data)
             let candidate = try decode(DiagramProject.self, from: data)
@@ -458,6 +551,7 @@ final class AppModel: ObservableObject {
             diagram = envelope.diagram
             revision = envelope.revision
             jsonDraft = prettyJSON(envelope.diagram)
+            jsonDraftIsDirty = false
             lastSerializedJSON = jsonDraft
             selection = .project
             status = "Импортировано"
@@ -502,10 +596,25 @@ final class AppModel: ObservableObject {
     }
 
     func restoreVersion(_ id: Int) async throws {
-        let envelope: DiagramResponse = try await request("api/versions/\(id)/restore", method: "POST", ifMatch: revision)
+        guard !isEditingLocked else { throw ClientError.pendingChanges }
+        try await saveNow()
+        // Restoration is an explicit replacement requested by the user. Read the
+        // current revision immediately before it so another app instance cannot
+        // leave the version picker holding an obsolete If-Match value.
+        let current: DiagramResponse = try await request("api/diagram")
+        revision = current.revision
+        let envelope: DiagramResponse
+        do {
+            envelope = try await request("api/versions/\(id)/restore", method: "POST", ifMatch: revision)
+        } catch ClientError.server(let message) where message.contains("Проект уже изменён") {
+            let latest: DiagramResponse = try await request("api/diagram")
+            revision = latest.revision
+            envelope = try await request("api/versions/\(id)/restore", method: "POST", ifMatch: revision)
+        }
         diagram = envelope.diagram
         revision = envelope.revision
         jsonDraft = prettyJSON(envelope.diagram)
+        jsonDraftIsDirty = false
         lastSerializedJSON = jsonDraft
         selection = .project
         status = "Версия восстановлена"
@@ -519,10 +628,12 @@ final class AppModel: ObservableObject {
     func redo() async throws { try await applyHistoryCommand("api/redo", status: "Повторено") }
 
     private func applyHistoryCommand(_ path: String, status newStatus: String) async throws {
+        guard !isEditingLocked else { throw ClientError.pendingChanges }
         let envelope: DiagramResponse = try await request(path, method: "POST", ifMatch: revision)
         diagram = envelope.diagram
         revision = envelope.revision
         jsonDraft = prettyJSON(envelope.diagram)
+        jsonDraftIsDirty = false
         lastSerializedJSON = jsonDraft
         selection = .project
         status = newStatus
@@ -546,6 +657,7 @@ final class AppModel: ObservableObject {
     }
 
     private func changed() {
+        if !jsonDraftIsDirty { jsonDraft = prettyJSON(diagram) }
         status = "Есть изменения"
         onModelChange?()
         scheduleSave()
@@ -555,14 +667,34 @@ final class AppModel: ObservableObject {
         saveTask?.cancel()
         saveTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(500))
-            guard !Task.isCancelled else { return }
-            await self?.saveNow()
+            guard let self, !Task.isCancelled else { return }
+            self.saveTask = nil
+            do {
+                try await self.saveNow()
+            } catch {
+                self.onAlert?("Не удалось сохранить проект: \(error.localizedDescription)")
+            }
         }
     }
 
-    private func persist(_ project: DiagramProject) async throws -> DiagramResponse {
+    private func persist(_ project: DiagramProject, includeCurrentEdits: Bool = false) async throws -> DiagramResponse {
         let data = try encode(project)
-        return try await request("api/diagram", method: "PUT", body: data, ifMatch: revision)
+        do {
+            return try await request("api/diagram", method: "PUT", body: data, ifMatch: revision)
+        } catch ClientError.server(let message) where message.contains("Проект уже изменён") {
+            let latest: DiagramResponse = try await request("api/diagram")
+            let local = includeCurrentEdits ? (diagram ?? project) : project
+            guard let merged = mergeProject(base: lastSerializedJSON, local: local, remote: latest.diagram) else {
+                throw ClientError.server("В другом открытом GraphiSchema изменены те же поля. Сохранение остановлено, чтобы не перезаписать их.")
+            }
+            revision = latest.revision
+            diagram = merged
+            if !jsonDraftIsDirty { jsonDraft = prettyJSON(merged) }
+            guard merged != latest.diagram else {
+                return latest
+            }
+            return try await request("api/diagram", method: "PUT", body: encode(merged), ifMatch: latest.revision)
+        }
     }
 
     private func flushPendingSave() async throws {
@@ -575,12 +707,12 @@ final class AppModel: ObservableObject {
             guard let snapshot = diagram else { return }
             let serialized = prettyJSON(snapshot)
             guard serialized != lastSerializedJSON else { return }
-            let envelope = try await persist(snapshot)
+            let envelope = try await persist(snapshot, includeCurrentEdits: true)
             revision = envelope.revision
             lastSerializedJSON = prettyJSON(envelope.diagram)
             if diagram == snapshot {
                 diagram = envelope.diagram
-                jsonDraft = lastSerializedJSON
+                if !jsonDraftIsDirty { jsonDraft = lastSerializedJSON }
                 status = "Сохранено"
                 await refreshLayout()
                 await refreshHistoryState()
@@ -655,14 +787,103 @@ final class AppModel: ObservableObject {
         return try decoder.decode(type, from: data)
     }
 
-    private func prettyJSON(_ value: DiagramProject?) -> String {
+    func prettyJSON(_ value: DiagramProject?) -> String {
         guard let value, let data = try? encode(value) else { return "" }
         return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    func mergeProject(base: String, local: DiagramProject, remote: DiagramProject) -> DiagramProject? {
+        guard let baseValue = try? JSONSerialization.jsonObject(with: Data(base.utf8), options: [.fragmentsAllowed]),
+              let localData = try? encode(local),
+              let localValue = try? JSONSerialization.jsonObject(with: localData, options: [.fragmentsAllowed]),
+              let remoteData = try? encode(remote),
+              let remoteValue = try? JSONSerialization.jsonObject(with: remoteData, options: [.fragmentsAllowed]),
+              case .value(let mergedValue) = mergeJSON(base: baseValue, local: localValue, remote: remoteValue),
+              let mergedValue,
+              let mergedData = try? JSONSerialization.data(withJSONObject: mergedValue, options: [.sortedKeys, .fragmentsAllowed])
+        else { return nil }
+        return try? decode(DiagramProject.self, from: mergedData)
+    }
+
+    private func mergeJSON(base: Any?, local: Any?, remote: Any?) -> JSONMergeResult {
+        if jsonValuesEqual(local, base) { return .value(remote) }
+        if jsonValuesEqual(remote, base) { return .value(local) }
+        if jsonValuesEqual(local, remote) { return .value(local) }
+
+        if let localObject = local as? [String: Any], let remoteObject = remote as? [String: Any] {
+            let baseObject: [String: Any]
+            if let base {
+                guard let value = base as? [String: Any] else { return .conflict }
+                baseObject = value
+            } else {
+                baseObject = [:]
+            }
+            var merged: [String: Any] = [:]
+            let keys = Set(baseObject.keys).union(localObject.keys).union(remoteObject.keys)
+            for key in keys {
+                switch mergeJSON(base: baseObject[key], local: localObject[key], remote: remoteObject[key]) {
+                case .conflict:
+                    return .conflict
+                case .value(let value):
+                    if let value { merged[key] = value }
+                }
+            }
+            return .value(merged)
+        }
+
+        if let localItems = keyedJSONArray(local), let remoteItems = keyedJSONArray(remote) {
+            let baseItems: [String: [String: Any]]
+            if let base {
+                guard let value = keyedJSONArray(base) else { return .conflict }
+                baseItems = value
+            } else {
+                baseItems = [:]
+            }
+            var order: [String] = []
+            for item in (remote as? [[String: Any]] ?? []) + (local as? [[String: Any]] ?? []) {
+                guard let id = item["id"] as? String else { return .conflict }
+                if !order.contains(id) { order.append(id) }
+            }
+            var merged: [[String: Any]] = []
+            for id in order {
+                switch mergeJSON(base: baseItems[id], local: localItems[id], remote: remoteItems[id]) {
+                case .conflict:
+                    return .conflict
+                case .value(let value):
+                    if let item = value as? [String: Any] { merged.append(item) }
+                }
+            }
+            return .value(merged)
+        }
+        return .conflict
+    }
+
+    private func jsonValuesEqual(_ lhs: Any?, _ rhs: Any?) -> Bool {
+        guard let lhs, let rhs else { return lhs == nil && rhs == nil }
+        guard let left = try? JSONSerialization.data(withJSONObject: lhs, options: [.sortedKeys, .fragmentsAllowed]),
+              let right = try? JSONSerialization.data(withJSONObject: rhs, options: [.sortedKeys, .fragmentsAllowed])
+        else { return false }
+        return left == right
+    }
+
+    private func keyedJSONArray(_ value: Any?) -> [String: [String: Any]]? {
+        guard let items = value as? [[String: Any]] else { return nil }
+        var result: [String: [String: Any]] = [:]
+        for item in items {
+            guard let id = item["id"] as? String, result[id] == nil else { return nil }
+            result[id] = item
+        }
+        return result
     }
 
     private func makeID(_ prefix: String) -> String {
         "\(prefix)_\(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(8))"
     }
+}
+
+private enum JSONMergeResult {
+    case value(Any?)
+    case conflict
 }
 
 enum ClientError: LocalizedError {

@@ -92,6 +92,14 @@ class DiagramNode(StrictModel):
     style: NodeStyle = Field(default_factory=NodeStyle)
     x: float | None = None
     y: float | None = None
+    width: float | None = Field(default=None, ge=0.5, le=10)
+    height: float | None = Field(default=None, ge=0.5, le=10)
+
+    @model_validator(mode="after")
+    def validate_size(self) -> DiagramNode:
+        if (self.width is None) != (self.height is None):
+            raise ValueError("Node width and height must be set together")
+        return self
 
     @field_validator("id", "container_id")
     @classmethod

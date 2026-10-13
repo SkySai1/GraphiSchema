@@ -148,39 +148,53 @@ def _fallback_layout(project: DiagramProject, engine: str) -> dict[str, object]:
     for node in project.nodes:
         buckets[ranks[node.id]].append(node)
     max_rank = max(ranks.values(), default=0)
-    node_widths = {node.id: min(2.5, max(0.85, 0.16 + len(node.label) * 0.085)) for node in project.nodes}
-    node_height = 0.62
+    node_widths = {
+        node.id: node.width or min(2.5, max(0.85, 0.16 + len(node.label) * 0.085))
+        for node in project.nodes
+    }
+    node_heights = {node.id: node.height or 0.62 for node in project.nodes}
     positions: dict[str, tuple[float, float]] = {}
+    rank_widths = {rank: max((node_widths[node.id] for node in bucket), default=0.85) for rank, bucket in buckets.items()}
+    rank_heights = {rank: max((node_heights[node.id] for node in bucket), default=0.62) for rank, bucket in buckets.items()}
+    rank_offsets: dict[int, float] = {}
+    cursor = 0.65
+    for rank in range(max_rank + 1):
+        rank_offsets[rank] = cursor
+        cursor += (rank_widths.get(rank, 0.85) if horizontal else rank_heights.get(rank, 0.62)) + 0.8
     for rank, bucket in buckets.items():
         slot = max_rank - rank if reverse else rank
-        for index, node in enumerate(bucket):
+        stack_offset = 0.65
+        for node in bucket:
+            node_width = node_widths[node.id]
+            node_height = node_heights[node.id]
             if horizontal:
-                x = 0.65 + slot * 2.5 + node_widths[node.id] / 2
-                y = 0.65 + index * 1.65 + node_height / 2
+                x = rank_offsets[slot] + node_width / 2
+                y = stack_offset + node_height / 2
             else:
-                x = 0.65 + index * 2.5 + node_widths[node.id] / 2
-                y = 0.65 + (max_rank - slot) * 1.65 + node_height / 2
+                x = stack_offset + node_width / 2
+                y = rank_offsets[max_rank - slot] + node_height / 2
             if project.diagram.layout_mode == "manual" and node.x is not None and node.y is not None:
                 x, y = node.x, node.y
             positions[node.id] = (x, y)
+            stack_offset += (node_height if horizontal else node_width) + 0.55
 
     if positions:
         width = max(x + node_widths[node_id] / 2 for node_id, (x, _) in positions.items()) + 0.65
-        height = max(y + node_height / 2 for _, y in positions.values()) + 0.65
+        height = max(y + node_heights[node_id] / 2 for node_id, (_, y) in positions.items()) + 0.65
     else:
         width, height = 4.0, 2.5
     nodes = [
         {"id": node.id, "x": positions[node.id][0], "y": positions[node.id][1],
-         "width": node_widths[node.id], "height": node_height}
+         "width": node_widths[node.id], "height": node_heights[node.id]}
         for node in project.nodes
     ]
-    by_id = {node.id: node for node in nodes}
+    by_id = {node["id"]: node for node in nodes}
     edges = []
     for edge in project.edges:
         source = positions[edge.source]
         target = positions[edge.target]
-        start = _clip_to_node(source, target, by_id[edge.source]["width"], node_height)
-        end = _clip_to_node(target, source, by_id[edge.target]["width"], node_height)
+        start = _clip_to_node(source, target, by_id[edge.source]["width"], by_id[edge.source]["height"])
+        end = _clip_to_node(target, source, by_id[edge.target]["width"], by_id[edge.target]["height"])
         one_third = ((2 * start[0] + end[0]) / 3, (2 * start[1] + end[1]) / 3)
         two_thirds = ((start[0] + 2 * end[0]) / 3, (start[1] + 2 * end[1]) / 3)
         edges.append({

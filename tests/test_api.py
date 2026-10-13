@@ -13,13 +13,19 @@ from graphischema.storage import ProjectStore
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_health_and_local_editor_routes() -> None:
+def test_health_and_local_editor_routes(monkeypatch) -> None:
+    monkeypatch.delenv("GRAPHI_SCHEMA_DATA_DIR", raising=False)
     with TestClient(api.app) as client:
-        assert client.get("/api/health").json()["status"] == "ok"
+        health = client.get("/api/health").json()
+        assert health["status"] == "ok"
+        assert health["revision_merge"] == "three_way_v1"
+        assert health["storage_scope"] == "project-local"
         assert client.get("/").json()["client"] == "native macOS AppKit"
+    monkeypatch.setenv("GRAPHI_SCHEMA_DATA_DIR", "/tmp/graphischema-test-projects")
+    assert api.health()["storage_scope"] == "application-support"
 
 
-def test_diagram_api_saves_with_revision_check(tmp_path: Path, monkeypatch) -> None:
+def test_diagram_api_merges_independent_stale_edits_and_rejects_overlapping_edits(tmp_path: Path, monkeypatch) -> None:
     store = ProjectStore(tmp_path, ROOT / "examples" / "starter.json")
     monkeypatch.setattr(api, "STORE", store)
     monkeypatch.setattr(api, "CONTROLLER", api.ApplicationController(store))
@@ -36,9 +42,21 @@ def test_diagram_api_saves_with_revision_check(tmp_path: Path, monkeypatch) -> N
         saved = client.put("/api/diagram", headers={"If-Match": current["revision"]}, json=project.model_dump(mode="json"))
         assert saved.status_code == 200
         assert saved.json()["diagram"]["project"]["title"] == "Обновлённая схема"
-        conflict = client.put("/api/diagram", headers={"If-Match": current["revision"]}, json=project.model_dump(mode="json"))
+
+        stale_edit = DiagramProject.model_validate(current["diagram"])
+        stale_edit.nodes[0].label = "Изменено во втором окне"
+        merged = client.put("/api/diagram", headers={"If-Match": current["revision"]}, json=stale_edit.model_dump(mode="json"))
+        assert merged.status_code == 200
+        assert merged.json()["diagram"]["project"]["title"] == "Обновлённая схема"
+        assert merged.json()["diagram"]["nodes"][0]["label"] == "Изменено во втором окне"
+
+        overlapping_edit = DiagramProject.model_validate(current["diagram"])
+        overlapping_edit.project.title = "Параллельное переименование"
+        conflict = client.put("/api/diagram", headers={"If-Match": current["revision"]}, json=overlapping_edit.model_dump(mode="json"))
         assert conflict.status_code == 409
+        assert "одно и то же поле" in conflict.json()["detail"].lower()
         assert store.load().project.title == "Обновлённая схема"
+        assert store.load().nodes[0].label == "Изменено во втором окне"
 
 
 def test_version_history_reports_diff_and_restores_snapshot(tmp_path: Path, monkeypatch) -> None:

@@ -62,6 +62,22 @@ def test_container_padding_defaults_and_is_bounded(project: DiagramProject) -> N
         DiagramProject.model_validate(data)
 
 
+def test_node_size_is_optional_but_must_be_a_valid_pair(project: DiagramProject) -> None:
+    project.nodes[0].width = 3.25
+    project.nodes[0].height = 1.1
+    dot = to_dot(project)
+    assert 'fixedsize=true' in dot
+    assert 'width=3.25' in dot and 'height=1.1' in dot
+    data = project.model_dump(mode="json")
+    data["nodes"][0]["height"] = None
+    with pytest.raises(ValidationError, match="set together"):
+        DiagramProject.model_validate(data)
+    data["nodes"][0]["height"] = 1.1
+    data["nodes"][0]["width"] = 12
+    with pytest.raises(ValidationError, match="less than or equal to 10"):
+        DiagramProject.model_validate(data)
+
+
 def test_dot_generation_is_deterministic_and_escapes_labels(project: DiagramProject) -> None:
     project.nodes[0].label = 'Client "A"'
     dot = to_dot(project)

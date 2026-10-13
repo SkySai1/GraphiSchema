@@ -34,6 +34,16 @@ def test_dot_attribute_edit_preserves_stable_ids() -> None:
     assert changes["nodes"] == ["~ waf"]
 
 
+def test_dot_preserves_graphically_resized_node_dimensions() -> None:
+    project = starter()
+    node = next(item for item in project.nodes if item.id == "waf")
+    node.width, node.height = 3.2, 1.15
+    candidate, _ = apply_dot(project, to_dot(project))
+    resized = next(item for item in candidate.nodes if item.id == "waf")
+    assert resized.width == pytest.approx(3.2)
+    assert resized.height == pytest.approx(1.15)
+
+
 def test_dot_can_add_nodes_and_edges_with_stable_safe_ids() -> None:
     project = DiagramProject.model_validate({"project": {"title": "Тест"}, "nodes": [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}]})
     source = '''digraph G {

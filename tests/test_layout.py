@@ -38,3 +38,26 @@ def test_manual_layout_preserves_relative_node_positions(project: DiagramProject
     assert layout["engine"] == "neato"
     assert positions[project.nodes[1].id] - positions[project.nodes[0].id] == pytest.approx(3.0)
     assert layout["minX"] < 0 and layout["minY"] < 0
+
+
+@pytest.mark.skipif(not shutil.which("dot"), reason="Graphviz dot is not installed")
+def test_graphviz_layout_uses_persisted_node_dimensions(project: DiagramProject) -> None:
+    project.nodes[0].width = 3.1
+    project.nodes[0].height = 1.2
+    layout = compute_layout(project)
+    node = next(item for item in layout["nodes"] if item["id"] == project.nodes[0].id)
+    assert node["width"] == pytest.approx(3.1)
+    assert node["height"] == pytest.approx(1.2)
+
+
+def test_fallback_layout_uses_persisted_node_dimensions(project: DiagramProject, monkeypatch: pytest.MonkeyPatch) -> None:
+    from graphischema import layout as layout_module
+
+    monkeypatch.setattr(layout_module.shutil, "which", lambda _: None)
+    project.nodes[0].width = 3.4
+    project.nodes[0].height = 1.35
+    layout = compute_layout(project)
+    node = next(item for item in layout["nodes"] if item["id"] == project.nodes[0].id)
+    assert layout["engine"] == "fallback"
+    assert node["width"] == pytest.approx(3.4)
+    assert node["height"] == pytest.approx(1.35)

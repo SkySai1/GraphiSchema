@@ -14,6 +14,7 @@ from .application.controller import ApplicationController, HistoryUnavailable
 from .dot import to_dot
 from .dot_editor import DOTEditError, MAX_DOT_BYTES, apply_dot
 from .layout import LayoutError as GeometryError, compute_layout
+from .merge import merge_projects
 from .models import DiagramProject
 from .ollama import (
     DEFAULT_ENDPOINT,
@@ -51,7 +52,13 @@ def root() -> dict[str, str]:
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "app": "GraphiSchema"}
+    storage_scope = "application-support" if os.environ.get("GRAPHI_SCHEMA_DATA_DIR") else "project-local"
+    return {
+        "status": "ok",
+        "app": "GraphiSchema",
+        "revision_merge": "three_way_v1",
+        "storage_scope": storage_scope,
+    }
 
 
 @app.get("/api/diagram")
@@ -65,7 +72,12 @@ def put_diagram(project: DiagramProject, if_match: str | None = Header(default=N
     try:
         result = CONTROLLER.replace_project(project, expected_revision=if_match)
     except RevisionConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if if_match is None:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        try:
+            result = _merge_stale_update(project, if_match)
+        except RevisionConflict as merge_error:
+            raise HTTPException(status_code=409, detail=str(merge_error)) from merge_error
     return {"diagram": result.project.model_dump(mode="json"), "revision": result.revision}
 
 
@@ -275,3 +287,20 @@ def _checked_project(expected_revision: str | None) -> DiagramProject:
     if expected_revision is not None and expected_revision != STORE.revision(project):
         raise HTTPException(status_code=409, detail="Проект изменился до выполнения запроса. Обновите предпросмотр и повторите.")
     return project
+
+
+def _merge_stale_update(project: DiagramProject, base_revision: str) -> Any:
+    base = STORE.get_project_at_revision(base_revision)
+    if base is None:
+        raise RevisionConflict("Не удалось найти исходную ревизию проекта для согласования изменений.")
+    for _ in range(3):
+        current = STORE.load()
+        current_revision = STORE.revision(current)
+        merged = merge_projects(base, project, current)
+        if merged is None:
+            raise RevisionConflict("Одно и то же поле изменено параллельно. Обновите проект и повторите правку.")
+        try:
+            return CONTROLLER.replace_project(merged, expected_revision=current_revision)
+        except RevisionConflict:
+            continue
+    raise RevisionConflict("Проект продолжает изменяться. Повторите сохранение.")
