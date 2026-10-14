@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 
 from .models import DiagramContainer, DiagramNode, DiagramProject
+from .container_layout import FONT_SIZE as CONTAINER_FONT_SIZE
 
 
 def quote(value: str) -> str:
@@ -15,14 +16,16 @@ def _node_statement(node: DiagramNode, manual_layout: bool) -> str:
     attrs = {
         "label": quote(node.label),
         "shape": quote(node.shape),
-        "style": quote("filled,rounded"),
+        "style": quote("filled,rounded" + ("," + node.style.line_style if node.style.line_style != "solid" else "")),
         "fillcolor": quote(node.style.fill),
         "color": quote(node.style.stroke),
         "fontcolor": quote(node.style.text),
+        "fontsize": str(node.style.font_size),
         "penwidth": str(node.style.penwidth),
         "tooltip": quote(node.description or node.kind),
         "gs_label_alignment": quote(node.label_alignment),
         "gs_label_vertical_alignment": quote(node.label_vertical_alignment),
+        "gs_label_wrap": "true" if node.label_wrap else "false",
     }
     if node.icon:
         attrs["gs_icon"] = quote(node.icon)
@@ -44,7 +47,10 @@ def _container_open(container: DiagramContainer, depth: int) -> list[str]:
         "color": quote(container.style.stroke),
         "fillcolor": quote(container.style.fill),
         "fontcolor": quote(container.style.text),
-        "penwidth": "1.2",
+        "fontname": quote("Arial"),
+        "fontsize": str(CONTAINER_FONT_SIZE),
+        "labeljust": quote("l"),
+        "penwidth": str(container.style.penwidth),
         # Graphviz expresses cluster margins in inches while the model stores points.
         "margin": f"{container.padding / 72:.12f}",
     }
@@ -105,10 +111,13 @@ def to_dot(project: DiagramProject) -> str:
             "constraint": "true" if style.constraint else "false",
             "weight": str(style.weight),
             "minlen": str(style.minlen),
+            "gs_label_background_transparent": "true" if style.label_background_transparent else "false",
         }
         for key, port in (("tailport", edge.source_port), ("headport", edge.target_port)):
             if port in {"n", "ne", "e", "se", "s", "sw", "w", "nw"}:
                 attrs[key] = quote(port)
+        if style.text is not None:
+            attrs["fontcolor"] = quote(style.text)
         if edge.source_port.startswith("vertex:"):
             attrs["gs_source_port"] = quote(edge.source_port)
         if edge.target_port.startswith("vertex:"):

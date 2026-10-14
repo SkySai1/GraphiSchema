@@ -148,7 +148,7 @@ enum NativeUISmokeTest {
         checkLongPressTextEditor(mainWindow: mainWindow, root: root, nodeID: "waf")
         guard NSApp.mainMenu?.items.contains(where: { $0.title == "Файл" }) == true,
               NSApp.mainMenu?.items.contains(where: { $0.title == "Настройки" }) == true,
-              NSApp.mainMenu?.items.first(where: { $0.title == "Вид" })?.submenu?.items.contains(where: { $0.title == "Стиль и свойства…" }) == true,
+              NSApp.mainMenu?.items.first(where: { $0.title == "Оформление" })?.submenu?.items.contains(where: { $0.title == "Выделенный объект…" }) == true,
               NSColor(hex: "#33669980").hexRGBA == "#33669980" else {
             fail("The macOS menu bar, system settings and RGBA color support must be available.")
         }
@@ -286,20 +286,24 @@ enum NativeUISmokeTest {
             }
             model.editNode("waf") { $0.label = oldName }
             mainWindow.refreshAll()
-            guard let borderControl = findView(identifier: "inspector-field-Граница", in: styleContent) as? NSColorWell,
-                  let borderAction = borderControl.action
+            guard let borderControl = findView(identifier: "inspector-field-Граница", in: styleContent) as? NSColorWell
             else { fail("Native UI smoke test failed: border color control must be available after a property refresh.") }
             let oldStroke = model.nodes.first(where: { $0.id == "waf" })?.style.stroke ?? "#000000"
             borderControl.activate(true)
-            let colorPanel = NSColorPanel.shared
-            colorPanel.showsAlpha = true
-            colorPanel.orderFront(nil)
+            guard let colorPanel = NSApp.windows.first(where: { $0.identifier?.rawValue == "color-window-stroke" }),
+                  let colorContent = colorPanel.contentView,
+                  let hex = findView(identifier: "color-stroke-hex", in: colorContent) as? NSTextField,
+                  let colorAction = hex.action else { fail("The border sample must open its own color window.") }
+            mainWindow.showColorEditor(.stroke)
+            guard NSApp.windows.filter({ $0.identifier?.rawValue == "color-window-stroke" }).count == 1 else {
+                fail("Reopening a color parameter must reuse one existing window.")
+            }
             for color in ["#AA337780", "#3355AA60"] {
-                borderControl.color = NSColor(hex: color)
-                let colorActionHandled = NSApp.sendAction(borderAction, to: borderControl.target, from: borderControl)
+                hex.stringValue = color
+                let colorActionHandled = NSApp.sendAction(colorAction, to: hex.target, from: hex)
                 guard colorActionHandled,
                       model.nodes.first(where: { $0.id == "waf" })?.style.stroke == color else {
-                    fail("Native UI smoke test failed: repeated RGBA color selection must update the object, expected \(color), well=\(borderControl.color.hexRGBA), handled=\(colorActionHandled), got \(model.nodes.first(where: { $0.id == "waf" })?.style.stroke ?? "missing").")
+                    fail("Native UI smoke test failed: repeated RGBA color selection must update the object, expected \(color), HEX=\(hex.stringValue), handled=\(colorActionHandled), got \(model.nodes.first(where: { $0.id == "waf" })?.style.stroke ?? "missing").")
                 }
             }
             colorPanel.close()
@@ -699,8 +703,8 @@ enum NativeUISmokeTest {
         let world = NSPoint(x: 8, y: 5)
         let clicked = canvas.screenPoint(for: world)
         guard let menu = canvas.menu(for: event(world)),
-              menu.items.map(\.title) == ["Создать пустой контейнер"],
-              let create = menu.items.first, let action = create.action else {
+              menu.items.contains(where: { $0.title == "Цвет: фон…" }),
+              let create = menu.items.first(where: { $0.title == "Создать пустой контейнер" }), let action = create.action else {
             fail("Right-clicking blank canvas must offer creation of an empty container.")
         }
         _ = NSApp.sendAction(action, to: create.target, from: create)
@@ -1202,16 +1206,23 @@ enum NativeUISmokeTest {
               let position = canvas.nodePositions.first(where: { $0.id == nodeID }) else {
             fail("Canvas node position is required for the long-press text-editor test.")
         }
+        // Edge endpoint controls are tested separately. Clear them before
+        // checking a node press on the compact, zoomed-out canvas.
+        canvas.onSelect?(.project)
         let point = canvas.screenPoint(for: NSPoint(x: position.x, y: position.y))
         let down = NSEvent.mouseEvent(with: .leftMouseDown, location: canvas.convert(point, to: nil),
                                       modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
                                       context: nil, eventNumber: 31, clickCount: 1, pressure: 1)!
         canvas.mouseDown(with: down)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.72))
-        guard let editor = NSApp.windows.first(where: { $0.title == "Текст фигуры" }),
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline && !NSApp.windows.contains(where: { $0.identifier?.rawValue == "node-text-window" && $0.isVisible && $0.title.contains(nodeID) }) {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+        }
+        guard let editor = NSApp.windows.first(where: { $0.identifier?.rawValue == "node-text-window" }),
               editor.isVisible,
-              findView(identifier: "node-text-value", in: editor.contentView ?? NSView()) is NSTextField else {
-            fail("Holding the trackpad press on a node must open the text editor.")
+              editor.title.contains(nodeID),
+              findView(identifier: "node-text-value", in: editor.contentView ?? NSView()) is NSTextView else {
+            fail("Holding the trackpad press on a node must open the text editor: hit=\(String(describing: canvas.nodeID(at: point))), readOnly=\(canvas.isReadOnly), point=\(point), windows=\(NSApp.windows.map { ($0.title, $0.identifier?.rawValue ?? "", $0.isVisible) }).")
         }
         let up = NSEvent.mouseEvent(with: .leftMouseUp, location: canvas.convert(point, to: nil),
                                     modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
@@ -1254,8 +1265,8 @@ enum NativeUISmokeTest {
               canvas.nodePositions.contains(where: { $0.id == cloud.id }) else { fail("Cloud geometry missing") }
         controller.refreshAll()
         canvas.displayIfNeeded()
-        guard canvas.toolTip?.contains("Стрелка справа создаёт связь") == true,
-              canvas.toolTip?.contains("значок масштабирует объект") == true else {
+        guard canvas.toolTip?.contains("стрелка создаёт связь") == true,
+              canvas.toolTip?.contains("значок масштабирует") == true else {
             fail("Selected node controls must identify the connection arrow and scale glyph.")
         }
         guard let cloudControl = canvas.nodeControlFrames(for: cloud.id)?.resize else { fail("Selected cloud must have a resize circle.") }

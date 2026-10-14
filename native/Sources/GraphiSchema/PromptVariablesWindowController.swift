@@ -21,7 +21,6 @@ final class PromptVariablesWindowController: NSWindowController, NSTableViewData
                               styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "Переменные системного промпта"
         window.minSize = NSSize(width: 740, height: 480)
-        window.center()
         super.init(window: window)
         build()
         table.reloadData(); table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
@@ -143,8 +142,8 @@ final class PromptVariablesWindowController: NSWindowController, NSTableViewData
                 text.textContainerInset = NSSize(width: 20, height: 20)
                 let scroll = NSScrollView(); scroll.documentView = text; scroll.hasVerticalScroller = true
                 text.autoresizingMask = [.width]; text.isVerticallyResizable = true; text.textContainer?.widthTracksTextView = true
-                panel.contentView = scroll; panel.center(); AppTheme.configure(panel)
-                previewController = NSWindowController(window: panel); previewController?.showWindow(nil)
+                panel.contentView = scroll; AppTheme.configure(panel)
+                previewController = NSWindowController(window: panel); previewController?.showNearCursor(nil)
                 status.stringValue = "Шаблон проверен; Ollama не вызывалась."
             } catch { status.stringValue = error.localizedDescription }
         }

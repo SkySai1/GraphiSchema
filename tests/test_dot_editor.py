@@ -14,6 +14,14 @@ def starter() -> DiagramProject:
     return DiagramProject.model_validate_json((ROOT / "examples" / "starter.json").read_text())
 
 
+@pytest.mark.parametrize("identifier", ["graph", "node", "edge", "subgraph", "strict", "digraph"])
+def test_quoted_keyword_node_ids_are_not_parsed_as_dot_statements(identifier):
+    project = DiagramProject.model_validate({"nodes": [{"id": identifier, "label": "Text\non two lines", "label_wrap": True}]})
+    candidate, changes = apply_dot(project, to_dot(project))
+    assert candidate == project
+    assert changes == {"containers": [], "nodes": [], "edges": [], "settings": []}
+
+
 def test_generated_dot_round_trips_without_changes() -> None:
     project = starter()
 

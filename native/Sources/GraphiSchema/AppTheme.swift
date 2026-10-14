@@ -57,18 +57,13 @@ enum AppTheme {
 
 @MainActor
 final class ThemedColorWell: NSColorWell {
-    var onPanelClosed: (() -> Void)?
-    private var closeObserver: NSObjectProtocol?
+    var onOpenEditor: (() -> Void)?
 
     override func activate(_ exclusive: Bool) {
-        let panel = NSColorPanel.shared
-        panel.appearance = NSApp.appearance
-        panel.showsAlpha = true
-        isContinuous = true
-        if let closeObserver { NotificationCenter.default.removeObserver(closeObserver) }
-        closeObserver = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: panel, queue: .main) { [weak self] _ in
-            DispatchQueue.main.async { self?.onPanelClosed?() }
-        }
-        super.activate(exclusive)
+        onOpenEditor?()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if isEnabled { onOpenEditor?() }
     }
 }

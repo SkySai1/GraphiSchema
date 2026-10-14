@@ -83,7 +83,11 @@ def _ranks(project: DiagramProject) -> dict[str, int]:
 
 def render_fallback_svg(project: DiagramProject) -> str:
     """Render a readable small diagram without external binaries or network access."""
-    if any(n.icon for n in project.nodes) or any(e.waypoints or e.routing or e.source_port != "auto" or e.target_port != "auto" for e in project.edges):
+    if (
+        project.containers
+        or any(n.icon or n.style.line_style != "solid" for n in project.nodes)
+        or any(e.waypoints or e.routing or e.source_port != "auto" or e.target_port != "auto" for e in project.edges)
+    ):
         from .layout import _fallback_layout
         from .geometry import normalize_edges
         from .scene_renderer import render_scene

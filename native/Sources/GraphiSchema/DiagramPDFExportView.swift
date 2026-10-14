@@ -9,15 +9,20 @@ final class DiagramPDFExportView: NSView {
     private var didFitCanvas = false
 
     init(project: DiagramProject, layout: DiagramLayout, pageSize: NSSize, includeLegend: Bool) {
-        self.project = project
+        var exportProject = project
+        exportProject.presentation.theme = "light"
+        exportProject.presentation.background = "#FFFFFF"
+        self.project = exportProject
         self.includeLegend = includeLegend
         legendWidth = includeLegend ? min(190, pageSize.width * 0.24) : 0
         super.init(frame: NSRect(origin: .zero, size: pageSize))
+        appearance = NSAppearance(named: .aqua)
         wantsLayer = true
         canvas.isReadOnly = true
         canvas.isGridVisible = false
         canvas.exportBackground = "#FFFFFF"
-        canvas.update(diagram: project, layout: layout, selection: .project)
+        canvas.appearance = NSAppearance(named: .aqua)
+        canvas.update(diagram: exportProject, layout: layout, selection: .project)
         addSubview(canvas)
     }
 
@@ -105,7 +110,7 @@ final class DiagramPDFExportView: NSView {
         paragraph.lineBreakMode = .byTruncatingTail
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 8, weight: .regular),
-            .foregroundColor: secondary ? NSColor.secondaryLabelColor : NSColor(hex: "#263247"),
+            .foregroundColor: NSColor(hex: secondary ? "#64748B" : "#263247"),
             .paragraphStyle: paragraph,
         ]
         (text as NSString).draw(in: NSRect(x: x, y: y, width: legendWidth - 52, height: 14), withAttributes: attributes)

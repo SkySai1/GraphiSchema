@@ -33,6 +33,8 @@ final class AppModel: ObservableObject {
     private var lastSerializedDOT = ""
     private var dotSourceBaseDiagram: DiagramProject?
     private(set) var isCheckingDOT = false
+    private(set) var isAutoLayoutRunning = false
+    private(set) var isRestoringVersion = false
     private var dotPreviewSource: String?
     private var proposalBaseRevision: String?
     private var proposalBaseDiagram: DiagramProject?
@@ -41,7 +43,7 @@ final class AppModel: ObservableObject {
     var containers: [DiagramContainer] { diagram?.containers ?? [] }
     var edges: [DiagramEdge] { diagram?.edges ?? [] }
     var activeProposal: DiagramProposal? { dotPreview ?? ollamaProposal }
-    var isEditingLocked: Bool { jsonDraftIsDirty || activeProposal != nil || isCheckingDOT }
+    var isEditingLocked: Bool { jsonDraftIsDirty || activeProposal != nil || isCheckingDOT || isAutoLayoutRunning || isRestoringVersion }
     var dotDraftIsDirty: Bool { dotSource != lastSerializedDOT }
     var inverseTrackpad: Bool {
         get { UserDefaults.standard.object(forKey: "GraphiSchema.inverseTrackpad") as? Bool ?? false }
@@ -127,9 +129,13 @@ final class AppModel: ObservableObject {
     func updateTheme(_ value: String) {
         guard !isEditingLocked, var current = diagram, ["light", "dark"].contains(value) else { return }
         let background = value == "dark" ? "#21172F" : "#FFFFFF"
-        guard current.presentation.theme != value || current.presentation.background != background else { return }
+        guard current.presentation.theme != value else { return }
+        let previousDefault = current.presentation.theme == "dark" ? "#21172F" : "#FFFFFF"
+        if current.presentation.background.uppercased() == previousDefault ||
+            (current.presentation.theme == "dark" && current.presentation.background.uppercased() == "#FFFFFF") {
+            current.presentation.background = background
+        }
         current.presentation.theme = value
-        current.presentation.background = background
         diagram = current
         changed()
     }
@@ -254,9 +260,34 @@ final class AppModel: ObservableObject {
     func editNode(_ id: String, _ update: (inout DiagramNode) -> Void) {
         guard !isEditingLocked else { return }
         guard var current = diagram, let index = current.nodes.firstIndex(where: { $0.id == id }) else { return }
+        let previous = current.nodes[index]
         update(&current.nodes[index])
+        if current.nodes[index].effectiveLabelWrap, current.nodes[index].width == nil {
+            let geometry = layout?.nodes.first { $0.id == id }
+            current.nodes[index].width = min(10, max(0.5, geometry?.width ?? 1.6))
+            current.nodes[index].height = min(10, max(0.5, geometry?.height ?? 0.62))
+        }
+        guard previous != current.nodes[index] else { return }
         diagram = current
         changed()
+    }
+
+    func autoLayout() async throws {
+        guard !isEditingLocked, var current = diagram else { return }
+        current.diagram.layoutMode = "auto"
+        for index in current.edges.indices { current.edges[index].waypoints.removeAll() }
+        let needsRefresh = prettyJSON(current) == lastSerializedJSON
+        isAutoLayoutRunning = true
+        defer {
+            isAutoLayoutRunning = false
+            onModelChange?()
+        }
+        if current != diagram {
+            diagram = current
+            changed()
+        } else { onModelChange?() }
+        try await saveNow()
+        if needsRefresh { await refreshLayout() }
     }
 
     func editContainer(_ id: String, _ update: (inout DiagramContainer) -> Void) {
@@ -264,6 +295,202 @@ final class AppModel: ObservableObject {
         guard var current = diagram, let index = current.containers.firstIndex(where: { $0.id == id }) else { return }
         update(&current.containers[index])
         diagram = current
+        changed()
+    }
+
+    func transformNode(_ id: String, x: Double, y: Double, width: Double, height: Double) {
+        guard !isEditingLocked, [x, y, width, height].allSatisfy(\.isFinite),
+              var current = diagram, let index = current.nodes.firstIndex(where: { $0.id == id }) else { return }
+        let positions = Dictionary(uniqueKeysWithValues: (layout?.nodes ?? []).map { ($0.id, $0) })
+        for nodeIndex in current.nodes.indices {
+            let node = current.nodes[nodeIndex]
+            if current.diagram.layoutMode == "auto" || node.x == nil || node.y == nil {
+                current.nodes[nodeIndex].x = positions[node.id]?.x ?? node.x ?? 0
+                current.nodes[nodeIndex].y = positions[node.id]?.y ?? node.y ?? 0
+            }
+        }
+        current.diagram.layoutMode = "manual"
+        current.nodes[index].x = min(1000, max(-1000, x))
+        current.nodes[index].y = min(1000, max(-1000, y))
+        current.nodes[index].width = min(10, max(0.5, width))
+        current.nodes[index].height = min(10, max(0.5, height))
+        diagram = current
+        selection = .node(id)
+        changed()
+    }
+
+    func copySelection() {
+        guard let current = diagram,
+              let fragment = DiagramClipboard.capture(selection, from: current, layout: layout),
+              let data = try? encode(fragment) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setData(data, forType: DiagramClipboard.pasteboardType)
+    }
+
+    func colorSelection(for parameter: DiagramColorParameter) -> DiagramColorSelection {
+        guard let current = diagram else {
+            return DiagramColorSelection(projectID: "", selection: .project, caption: "Проект не загружен", color: nil)
+        }
+        var caption = "Холст «\(current.project.title)»"
+        var colors: [String] = []
+        func nodeColor(_ node: DiagramNode) -> String {
+            switch parameter {
+            case .fill: node.style.fill
+            case .stroke: node.style.stroke
+            case .text:
+                if node.icon != nil, current.presentation.theme == "dark", ["#172238", "#0F172A"].contains(node.style.text.uppercased()) { "#FFFFFF" }
+                else { node.style.text }
+            }
+        }
+        switch selection {
+        case .project:
+            if parameter == .fill { colors = [current.presentation.canvasBackground] }
+        case .node(let id):
+            if let node = current.nodes.first(where: { $0.id == id }) {
+                caption = "\(node.label) · \(id)"
+                colors = [nodeColor(node)]
+            }
+        case .nodes(let ids):
+            let nodes = current.nodes.filter { ids.contains($0.id) }
+            caption = "Выбрано фигур: \(nodes.count)"
+            colors = nodes.map(nodeColor)
+        case .container(let id):
+            if let container = current.containers.first(where: { $0.id == id }) {
+                caption = "\(container.label) · \(id)"
+                switch parameter {
+                case .fill: colors = [container.style.fill]
+                case .stroke: colors = [container.style.stroke]
+                case .text: colors = [container.style.text]
+                }
+            }
+        case .edge(let id):
+            if let edge = current.edges.first(where: { $0.id == id }) {
+                caption = "Связь \(edge.label.isEmpty ? id : edge.label) · \(id)"
+                if parameter == .stroke { colors = [edge.style.color] }
+                if parameter == .text { colors = [edge.style.text ?? (current.presentation.theme == "dark" ? "#FFFFFF" : "#172238")] }
+            }
+        }
+        let isMixed = Set(colors.map { $0.count == 7 ? $0.uppercased() + "FF" : $0.uppercased() }).count > 1
+        return DiagramColorSelection(projectID: current.project.id, selection: selection, caption: caption,
+                                     color: colors.first, isMixed: isMixed, isEditable: !isEditingLocked && !colors.isEmpty)
+    }
+
+    func setSelectionColor(_ parameter: DiagramColorParameter, value: String) {
+        let value = value.uppercased()
+        guard !isEditingLocked, var current = diagram,
+              value.range(of: "^#[0-9A-F]{6}([0-9A-F]{2})?$", options: .regularExpression) != nil else { return }
+        let valueRGBA = NSColor(hex: value).hexRGBA
+        switch selection {
+        case .project:
+            guard parameter == .fill else { return }
+            current.presentation.background = valueRGBA
+        case .node, .nodes:
+            let ids: Set<String>
+            if case .node(let id) = selection { ids = [id] }
+            else if case .nodes(let selected) = selection { ids = selected }
+            else { return }
+            for index in current.nodes.indices where ids.contains(current.nodes[index].id) {
+                switch parameter {
+                case .fill: current.nodes[index].style.fill = valueRGBA
+                case .stroke: current.nodes[index].style.stroke = valueRGBA
+                case .text: current.nodes[index].style.text = valueRGBA
+                }
+            }
+        case .container(let id):
+            guard let index = current.containers.firstIndex(where: { $0.id == id }) else { return }
+            switch parameter {
+            case .fill: current.containers[index].style.fill = valueRGBA
+            case .stroke: current.containers[index].style.stroke = valueRGBA
+            case .text: current.containers[index].style.text = valueRGBA
+            }
+        case .edge(let id):
+            guard let index = current.edges.firstIndex(where: { $0.id == id }) else { return }
+            switch parameter {
+            case .fill: return
+            case .stroke: current.edges[index].style.color = valueRGBA
+            case .text: current.edges[index].style.text = valueRGBA
+            }
+        }
+        guard current != diagram else { return }
+        diagram = current
+        changed()
+    }
+
+    func setStyle(_ change: DiagramStyleChange, for target: DiagramSelection) {
+        guard !isEditingLocked, change.isValid, var current = diagram else { return }
+        switch target {
+        case .project: return
+        case .node, .nodes:
+            let ids: Set<String>
+            if case .node(let id) = target { ids = [id] }
+            else if case .nodes(let selected) = target { ids = selected }
+            else { return }
+            for index in current.nodes.indices where ids.contains(current.nodes[index].id) {
+                switch change {
+                case .lineStyle(let value):
+                    guard DiagramStyleOptions.nodeLines.contains(where: { $0.value == value }) else { return }
+                    if current.nodes[index].style.effectiveLineStyle != value { current.nodes[index].style.lineStyle = value }
+                case .penwidth(let value): current.nodes[index].style.penwidth = value
+                default: return
+                }
+            }
+        case .container(let id):
+            guard let index = current.containers.firstIndex(where: { $0.id == id }),
+                  case .penwidth(let value) = change else { return }
+            if current.containers[index].style.effectivePenwidth != value { current.containers[index].style.penwidth = value }
+        case .edge(let id):
+            guard let index = current.edges.firstIndex(where: { $0.id == id }) else { return }
+            switch change {
+            case .lineStyle(let value):
+                current.edges[index].style.lineStyle = value
+                // Explicit penwidth overrides Graphviz's bold width. Make this
+                // quick preset visible while retaining larger custom widths.
+                if value == "bold" { current.edges[index].style.penwidth = max(3, current.edges[index].style.penwidth) }
+            case .penwidth(let value): current.edges[index].style.penwidth = value
+            case .arrowhead(let value):
+                current.edges[index].style.arrowhead = value
+                if value != "none", current.edges[index].direction == "none" { current.edges[index].direction = "forward" }
+            case .arrowtail(let value):
+                current.edges[index].style.arrowtail = value
+                if value != "none" { current.edges[index].direction = "both" }
+            case .direction(let value):
+                current.edges[index].direction = value
+                if value != "none", current.edges[index].style.arrowhead == "none" { current.edges[index].style.arrowhead = "normal" }
+                if value == "both", current.edges[index].style.arrowtail == "none" {
+                    current.edges[index].style.arrowtail = current.edges[index].style.arrowhead
+                }
+            case .routing(let value): current.edges[index].routing = value
+            case .reverse:
+                let old = current.edges[index]
+                current.edges[index].source = old.target
+                current.edges[index].target = old.source
+                current.edges[index].sourcePort = old.targetPort
+                current.edges[index].targetPort = old.sourcePort
+                current.edges[index].waypoints = Array(old.waypoints.reversed())
+            }
+        }
+        guard current != diagram else { return }
+        diagram = current
+        changed()
+    }
+
+    func pasteSelection() {
+        guard !isEditingLocked, let data = NSPasteboard.general.data(forType: DiagramClipboard.pasteboardType),
+              let fragment = try? decode(DiagramClipboard.self, from: data) else { return }
+        insertFragment(fragment, delta: NSPoint(x: 0.35, y: -0.35))
+    }
+
+    func duplicateSelection(deltaX: Double = 0.35, deltaY: Double = -0.35, containerIDs: [String: String] = [:]) {
+        guard !isEditingLocked, let current = diagram,
+              let fragment = DiagramClipboard.capture(selection, from: current, layout: layout) else { return }
+        insertFragment(fragment, delta: NSPoint(x: deltaX, y: deltaY), containerIDs: containerIDs)
+    }
+
+    private func insertFragment(_ fragment: DiagramClipboard, delta: NSPoint, containerIDs: [String: String] = [:]) {
+        guard !isEditingLocked, let current = diagram,
+              let insertion = fragment.inserting(into: current, layout: layout, delta: delta, containerOverrides: containerIDs) else { return }
+        diagram = insertion.project
+        selection = insertion.selection
         changed()
     }
 
@@ -407,9 +634,11 @@ final class AppModel: ObservableObject {
             current.nodes[index].x = min(1000, max(-1000, (current.nodes[index].x ?? 0) + deltaX))
             current.nodes[index].y = min(1000, max(-1000, (current.nodes[index].y ?? 0) + deltaY))
         }
-        if let index = current.containers.firstIndex(where: { $0.id == id }) {
-            current.containers[index].x = min(1000, max(-1000, (current.containers[index].x ?? ((layout?.minX ?? 0) + 1.6)) + deltaX))
-            current.containers[index].y = min(1000, max(-1000, (current.containers[index].y ?? ((layout?.minY ?? 0) + 1.2)) + deltaY))
+        let containerPositions = Dictionary(uniqueKeysWithValues: (layout?.containers ?? []).map { ($0.id, $0) })
+        for index in current.containers.indices where containerIDs.contains(current.containers[index].id) {
+            let position = containerPositions[current.containers[index].id]
+            current.containers[index].x = min(1000, max(-1000, (current.containers[index].x ?? position?.x ?? ((layout?.minX ?? 0) + 1.6)) + deltaX))
+            current.containers[index].y = min(1000, max(-1000, (current.containers[index].y ?? position?.y ?? ((layout?.minY ?? 0) + 1.2)) + deltaY))
         }
         diagram = current
         selection = .container(id)
@@ -870,8 +1099,20 @@ final class AppModel: ObservableObject {
         try await request("api/versions/\(id)/diff")
     }
 
+    func fetchVersionPreview(_ id: Int) async throws -> VersionPreview {
+        let preview: VersionPreview = try await request("api/versions/\(id)/preview")
+        guard preview.versionId == id else { throw ClientError.invalidResponse }
+        return preview
+    }
+
     func restoreVersion(_ id: Int) async throws {
         guard !isEditingLocked else { throw ClientError.pendingChanges }
+        isRestoringVersion = true
+        onModelChange?()
+        defer {
+            isRestoringVersion = false
+            onModelChange?()
+        }
         try await saveNow()
         // Restoration is an explicit replacement requested by the user. Read the
         // current revision immediately before it so another app instance cannot
@@ -891,6 +1132,9 @@ final class AppModel: ObservableObject {
         jsonDraft = prettyJSON(envelope.diagram)
         jsonDraftIsDirty = false
         lastSerializedJSON = jsonDraft
+        dotSource = ""
+        lastSerializedDOT = ""
+        dotSourceBaseDiagram = nil
         selection = .project
         status = "Версия восстановлена"
         await refreshLayout()

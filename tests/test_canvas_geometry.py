@@ -175,9 +175,21 @@ def test_svg_and_png_include_collection_vectors_and_night_theme():
 def test_night_svg_uses_the_same_purple_canvas_as_appkit():
     project = icon_project()
     project.presentation.theme = "dark"
-    project.presentation.background = "#F5F7FA"
+    project.presentation.background = "#FFFFFF"
     svg, _ = render_svg(project)
-    assert '<rect width="100%" height="100%" fill="#21172F"/>' in svg
+    canvas = ElementTree.fromstring(svg)[0]
+    assert canvas.attrib["fill"] == "#21172F"
+
+
+@pytest.mark.parametrize("theme", ["light", "dark"])
+@pytest.mark.parametrize("background", ["#F5F7FA", "#FFFFFF80", "#21172F60"])
+def test_custom_canvas_color_and_opacity_survive_theme_changes(theme, background):
+    project = icon_project()
+    project.presentation.theme = theme
+    project.presentation.background = background
+    canvas = ElementTree.fromstring(render_svg(project)[0])[0]
+    assert canvas.attrib["fill"] == background[:7]
+    assert float(canvas.attrib["fill-opacity"]) == pytest.approx(int(background[7:9], 16)/255 if len(background) == 9 else 1, abs=1e-4)
 
 
 @pytest.mark.parametrize("theme", ["light", "dark"])

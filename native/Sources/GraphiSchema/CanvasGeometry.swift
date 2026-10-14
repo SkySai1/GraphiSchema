@@ -94,6 +94,30 @@ enum CanvasGeometry {
         NSPoint(x: position.x+(point.x-0.5)*position.width, y: position.y+(point.y-0.5)*position.height)
     }
 
+    /// Hit the same filled contours and strokes that the canvas paints. All
+    /// coordinates and tolerance are screen points, independent of canvas zoom.
+    static func contains(_ point: NSPoint, node: DiagramNode, in rect: NSRect, tolerance: CGFloat) -> Bool {
+        guard rect.insetBy(dx: -tolerance, dy: -tolerance).contains(point) else { return false }
+        let closed = node.icon.flatMap { icons[$0]?.closed } ?? [true]
+        for (index, contour) in paths(node).enumerated() {
+            var points = contour.map { NSPoint(x: rect.minX+$0.x*rect.width, y: rect.minY+$0.y*rect.height) }
+            guard let first = points.first else { continue }
+            if closed.indices.contains(index), closed[index] {
+                let path = NSBezierPath()
+                path.move(to: first)
+                for next in points.dropFirst() { path.line(to: next) }
+                path.close()
+                if path.contains(point) { return true }
+                if points.last != first { points.append(first) }
+            }
+            if zip(points, points.dropFirst()).contains(where: {
+                let closest = nearest(point, $0.0, $0.1)
+                return hypot(point.x-closest.x, point.y-closest.y) <= tolerance
+            }) { return true }
+        }
+        return false
+    }
+
     static func nearest(_ point: NSPoint, _ a: NSPoint, _ b: NSPoint) -> NSPoint {
         let dx = b.x-a.x, dy = b.y-a.y, length = dx*dx+dy*dy
         let t = length > 0 ? max(0, min(1, ((point.x-a.x)*dx+(point.y-a.y)*dy)/length)) : 0

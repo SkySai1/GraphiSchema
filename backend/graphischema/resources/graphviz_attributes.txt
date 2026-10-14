@@ -11,21 +11,32 @@ bgcolor: presentation.background, #RRGGBB. theme: light или dark.
 
 node [label="API", shape="box", style="filled,rounded", fillcolor="#FFFFFF", color="#2563EB", fontcolor="#0F172A", penwidth=1.5];
 shape: box, ellipse, cylinder, diamond, hexagon, cloud.
+style узла: filled,rounded (сплошной контур), filled,rounded,dashed (пунктир), filled,rounded,dotted (точки). JSON nodes[].style.line_style: solid (по умолчанию), dashed, dotted. Сохраняй filled,rounded при редактировании DOT.
+penwidth узла: 0.5–10 pt, JSON nodes[].style.penwidth; применяется ко всем контурам фигуры, включая внутренние линии.
 label: имя, tooltip: описание. Идентификатор не изменяется при переименовании.
 width/height: одновременно, 0.5–10 дюймов; fixedsize=true.
+Ширина и высота изменяются независимо: растягивание не требует сохранения пропорций.
+fontsize: 1–144 пункта; JSON nodes[].style.font_size, по умолчанию 10. Поддерживается на холсте, в DOT и при экспорте. Размер фигуры задаётся отдельно.
+JSON nodes[].label_wrap: true включает автоматический перенос слов по ширине фигуры, false (по умолчанию) отключает его. Ручные переводы строк в label работают в обоих режимах. Если текст не помещается по высоте, увеличь фигуру.
+gs_label_wrap=true/false: расширение редактора для сохранения опции в DOT; перенос выполняют рендереры GraphiSchema, сам Graphviz его игнорирует. DOT label сохраняет исходный текст без автоматически добавленных переводов строк.
 pos="144,72!": ручные координаты DOT в пунктах (72 пункта = 1 дюйм).
 JSON nodes[].x/y: дюймы, ось Y вверх; ручные координаты сохраняются отдельно.
 nodes[].icon: путь к фигуре из локальной коллекции. Геометрия берётся из её SVG-контура.
 gs_icon: атрибут сохранения icon при редактировании DOT; Graphviz его не рисует.
 
-subgraph cluster_dmz { graph [label="DMZ", style="rounded,filled", fillcolor="#F1F5F9", color="#94A3B8", fontcolor="#334155", penwidth=1.2, margin=0.222222222222]; ... }
+subgraph cluster_dmz { graph [label="DMZ", style="rounded,filled", fillcolor="#F1F5F9", color="#94A3B8", fontcolor="#334155", fontname="Arial", fontsize=11, labeljust="l", penwidth=1.2, margin=0.222222222222]; ... }
 JSON containers[].parent_id задаёт вложенность; циклы запрещены. padding: 4–48 пунктов.
+Название контейнера: фиксированные fontsize=11, fontname=Arial и labeljust=l; эти значения не редактируются. Рендереры резервируют отдельную полосу заголовка 28 pt независимо от масштаба и padding. Родительская рамка охватывает дочерние контейнеры вместе с их заголовками. Длинная подпись сокращается в пределах рамки без изменения исходного label.
+penwidth контейнера: 0.5–10 pt, JSON containers[].style.penwidth (по умолчанию 1.2). Цвет границы задаётся color, заливка — fillcolor; style контейнера остаётся rounded,filled.
 Вложенные кластеры наиболее полно поддерживаются dot; поддержка другими движками ограничена.
 Пустой контейнер получает пользовательские координаты и размер в JSON; gs_x/gs_y/gs_width/gs_height сохраняют их в редактируемом DOT.
 
 "api" -> "db" [label="SQL", dir="forward", style="solid", color="#64748B", penwidth=1.5, arrowhead="normal", arrowtail="none", constraint=true, weight=1, minlen=1, tailport="e", headport="w"];
 dir: forward, both, none. style: solid, dashed, dotted, bold. penwidth: 0.5–10.
 arrowhead/arrowtail: normal, vee, none, diamond, dot, box, crow, tee.
+fontcolor связи: JSON edges[].style.text, #RRGGBB или #RRGGBBAA. null сохраняет автоматический контраст по теме; явный цвет сохраняется при смене темы.
+JSON edges[].style.label_background_transparent: false (по умолчанию) рисует непрозрачную плашку под подписью в цвете темы, true отключает плашку. Сам цвет текста задаётся отдельно через style.text.
+gs_label_background_transparent=true/false: расширение DOT для сохранения этой опции в GraphiSchema; фон подписи рисуют SVG/AppKit-рендереры приложения, сам Graphviz этот атрибут игнорирует.
 constraint и minlen влияют на ранжирование dot; другие движки не гарантируют такой эффект.
 weight: 0–100. minlen: 1–20. headport/tailport: n, ne, e, se, s, sw, w, nw.
 Graphviz splines=ortho не поддерживает порты и подписи полностью. Геометрический слой GraphiSchema применяет привязки после расчёта компоновки.

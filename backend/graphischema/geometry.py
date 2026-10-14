@@ -210,25 +210,19 @@ def normalize_edges(project, layout):
         layout["minX"] = min(layout["minX"], *(p[0] for p in all_points))
         layout["minY"] = min(layout["minY"], *(p[1] for p in all_points))
         layout["width"], layout["height"] = max_x-layout["minX"], max_y-layout["minY"]
-    containers = {item.id: item for item in project.containers}
-    member_ids = {item.id: set() for item in project.containers}
-    for node in project.nodes:
-        parent = node.container_id
-        while parent:
-            member_ids[parent].add(node.id)
-            parent = containers[parent].parent_id
-    empty_bounds = []
-    for container in project.containers:
-        if member_ids[container.id]:
-            continue
-        cx = container.x if container.x is not None else layout["minX"] + 1.6
-        cy = container.y if container.y is not None else layout["minY"] + 1.2
-        empty_bounds.append((cx-container.width/2, cy-container.height/2, cx+container.width/2, cy+container.height/2))
-    if empty_bounds:
-        left = min(layout["minX"], *(box[0] for box in empty_bounds))
-        bottom = min(layout["minY"], *(box[1] for box in empty_bounds))
-        right = max(layout["minX"]+layout["width"], *(box[2] for box in empty_bounds))
-        top = max(layout["minY"]+layout["height"], *(box[3] for box in empty_bounds))
+    from .container_layout import container_rects
+    bounds = container_rects(project, layout)
+    layout["containers"] = [
+        {"id": item.id, "x": (bounds[item.id][0]+bounds[item.id][2])/2,
+         "y": (bounds[item.id][1]+bounds[item.id][3])/2,
+         "width": bounds[item.id][2]-bounds[item.id][0], "height": bounds[item.id][3]-bounds[item.id][1]}
+        for item in project.containers
+    ]
+    if bounds:
+        left = min(layout["minX"], *(box[0] for box in bounds.values()))
+        bottom = min(layout["minY"], *(box[1] for box in bounds.values()))
+        right = max(layout["minX"]+layout["width"], *(box[2] for box in bounds.values()))
+        top = max(layout["minY"]+layout["height"], *(box[3] for box in bounds.values()))
         layout["minX"], layout["minY"] = left, bottom
         layout["width"], layout["height"] = right-left, top-bottom
     return layout

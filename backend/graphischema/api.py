@@ -62,6 +62,13 @@ def health() -> dict[str, str]:
         "edge_routing": "graphviz_v1",
         "dot_sync": "three_way_v1",
         "canvas_geometry": "icon_ports_v1",
+        "node_text": "fontsize_v1",
+        "label_wrap": "renderer_v1",
+        "selection_colors": "rgba_v1",
+        "edge_label_background": "toggle_v1",
+        "outline_styles": "nodes_clusters_v1",
+        "version_preview": "snapshot_layout_v1",
+        "container_headers": "fixed_11pt_v1",
         "prompt_templates": "jinja_v1",
         "storage_scope": storage_scope,
     }
@@ -257,6 +264,25 @@ def get_version_diff(version_id: int) -> dict[str, Any]:
         return STORE.diff_version(version_id)
     except VersionNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/versions/{version_id}/preview")
+def preview_version(version_id: int) -> dict[str, Any]:
+    """Render an immutable snapshot without changing the current project/history."""
+    try:
+        project = STORE.get_version(version_id)
+    except VersionNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    try:
+        layout = compute_layout(project)
+    except GeometryError as exc:
+        raise HTTPException(status_code=422, detail=f"Не удалось отобразить версию: {exc}") from exc
+    return {
+        "versionId": version_id,
+        "revision": STORE.revision(project),
+        "diagram": project.model_dump(mode="json"),
+        "layout": layout,
+    }
 
 
 @app.post("/api/versions/{version_id}/restore")

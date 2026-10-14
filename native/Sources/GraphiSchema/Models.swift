@@ -86,6 +86,9 @@ struct ContainerStyle: Codable, Equatable {
     var fill: String
     var stroke: String
     var text: String
+    var penwidth: Double? = nil
+
+    var effectivePenwidth: Double { penwidth ?? 1.2 }
 }
 
 struct DiagramNode: Codable, Equatable, Identifiable {
@@ -103,10 +106,12 @@ struct DiagramNode: Codable, Equatable, Identifiable {
     var icon: String? = nil
     var labelAlignment: String? = nil
     var labelVerticalAlignment: String? = nil
+    var labelWrap: Bool? = nil
     var zIndex: Int? = nil
 
     var effectiveLabelAlignment: String { labelAlignment ?? "center" }
     var effectiveLabelVerticalAlignment: String { labelVerticalAlignment ?? "middle" }
+    var effectiveLabelWrap: Bool { labelWrap ?? false }
     var effectiveZIndex: Int { zIndex ?? 0 }
 }
 
@@ -145,6 +150,11 @@ struct NodeStyle: Codable, Equatable {
     var stroke: String
     var text: String
     var penwidth: Double
+    var fontSize: Double? = nil
+    var lineStyle: String? = nil
+
+    var effectiveFontSize: Double { fontSize ?? 10 }
+    var effectiveLineStyle: String { lineStyle ?? "solid" }
 }
 
 struct DiagramEdge: Codable, Equatable, Identifiable {
@@ -187,11 +197,17 @@ struct EdgeStyle: Codable, Equatable {
     var constraint: Bool
     var weight: Int
     var minlen: Int
+    var text: String? = nil
+    var labelBackgroundTransparent: Bool? = nil
+
+    var effectiveLabelBackgroundTransparent: Bool { labelBackgroundTransparent ?? false }
 }
 
 struct PresentationSettings: Codable, Equatable {
     var theme: String
     var background: String
+
+    var canvasBackground: String { theme == "dark" && background.uppercased() == "#FFFFFF" ? "#21172F" : background }
 }
 
 struct DiagramResponse: Decodable {
@@ -295,6 +311,7 @@ struct DiagramLayout: Decodable, Equatable {
     var minY: Double
     var nodes: [LayoutNode]
     var edges: [LayoutEdge]
+    var containers: [LayoutNode]? = nil
 }
 
 struct LayoutNode: Decodable, Equatable, Identifiable {
@@ -341,6 +358,13 @@ struct ProjectVersion: Decodable, Identifiable {
     var title: String
     var revision: String
     var createdAt: String
+}
+
+struct VersionPreview: Decodable {
+    var versionId: Int
+    var revision: String
+    var diagram: DiagramProject
+    var layout: DiagramLayout
 }
 
 struct VersionElementDiff: Decodable {

@@ -3,6 +3,8 @@ import html
 
 from .geometry import icon_library, normalized_paths
 from .arrows import arrow_drawing
+from .text_layout import elide_text, estimated_text_width, label_lines
+from .container_layout import FONT_SIZE, LABEL_HEIGHT, LABEL_INSET_X, LABEL_INSET_TOP, container_rects
 
 
 def render_scene(project, layout, background=None):
@@ -16,22 +18,19 @@ def render_scene(project, layout, background=None):
         value = value.upper()
         return (value[:7], int(value[7:9], 16)/255) if len(value) == 9 else (value, 1.0)
     dark = project.presentation.theme == "dark"
-    canvas = background or ("#21172F" if dark else project.presentation.background)
+    default_canvas = "#21172F" if dark and project.presentation.background.upper() == "#FFFFFF" else project.presentation.background
+    canvas = background or default_canvas
     if background and background != "transparent":
         red, green, blue = (int(background[i:i+2], 16)/255 for i in (1, 3, 5))
         dark = .2126*red+.7152*green+.0722*blue < .5
     text = "#FFFFFF" if dark else "#172238"
     out = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width:.4f}pt" height="{height:.4f}pt" viewBox="0 0 {width:.4f} {height:.4f}">']
     if canvas != "transparent":
-        out.append(f'<rect width="100%" height="100%" fill="{canvas}"/>')
+        canvas_color, canvas_alpha = color(canvas)
+        out.append(f'<rect width="100%" height="100%" fill="{canvas_color}" fill-opacity="{canvas_alpha:.4f}"/>')
     positions = {n["id"]: n for n in layout["nodes"]}
     containers = {c.id: c for c in project.containers}
-    members = {c.id: [] for c in project.containers}
-    for node in project.nodes:
-        current = node.container_id
-        while current:
-            members[current].append(positions[node.id])
-            current = containers[current].parent_id
+    container_bounds = container_rects(project, layout)
     def depth(container):
         current, result = container.parent_id, 0
         while current:
@@ -39,20 +38,15 @@ def render_scene(project, layout, background=None):
             current = containers[current].parent_id
         return result
     for c in sorted(project.containers, key=depth):
-        group = members[c.id]
-        if group:
-            left = min(n["x"]-n["width"]/2 for n in group)-c.padding/72
-            right = max(n["x"]+n["width"]/2 for n in group)+c.padding/72
-            bottom = min(n["y"]-n["height"]/2 for n in group)-c.padding/72
-            top = max(n["y"]+n["height"]/2 for n in group)+c.padding/72
-        else:
-            cx, cy = c.x if c.x is not None else layout["minX"]+1.6, c.y if c.y is not None else layout["minY"]+1.2
-            left, right = cx-c.width/2, cx+c.width/2
-            bottom, top = cy-c.height/2, cy+c.height/2
+        left, bottom, right, top = container_bounds[c.id]
         x, y = point(left, top)
         fill, fill_alpha = color(c.style.fill); stroke, stroke_alpha = color(c.style.stroke); caption, text_alpha = color(c.style.text)
-        out.append(f'<rect x="{x:.4f}" y="{y:.4f}" width="{(right-left)*72:.4f}" height="{(top-bottom)*72:.4f}" rx="11" fill="{fill}" fill-opacity="{.42*fill_alpha:.4f}" stroke="{stroke}" stroke-opacity="{stroke_alpha:.4f}" stroke-width="1.2"/>')
-        out.append(f'<text x="{x+10:.4f}" y="{y+17:.4f}" fill="{caption}" fill-opacity="{text_alpha:.4f}" font-family="Arial,sans-serif" font-size="11">{html.escape(c.label)}</text>')
+        out.append(f'<rect x="{x:.4f}" y="{y:.4f}" width="{(right-left)*72:.4f}" height="{(top-bottom)*72:.4f}" rx="11" fill="{fill}" fill-opacity="{.42*fill_alpha:.4f}" stroke="{stroke}" stroke-opacity="{stroke_alpha:.4f}" stroke-width="{c.style.penwidth}"/>')
+        label_width = max(0, (right-left)*72-2*LABEL_INSET_X)
+        clip_id = f"container_label_clip_{c.id}"
+        out.append(f'<clipPath id="{clip_id}"><rect x="{x+LABEL_INSET_X:.4f}" y="{y+LABEL_INSET_TOP:.4f}" width="{label_width:.4f}" height="{LABEL_HEIGHT}"/></clipPath>')
+        caption_text = elide_text(c.label, label_width, FONT_SIZE*1.08)
+        out.append(f'<text data-container-label="{c.id}" clip-path="url(#{clip_id})" x="{x+LABEL_INSET_X:.4f}" y="{y+LABEL_INSET_TOP+FONT_SIZE:.4f}" fill="{caption}" fill-opacity="{text_alpha:.4f}" font-family="Arial,sans-serif" font-size="{FONT_SIZE}" font-weight="700"><title>{html.escape(c.label)}</title>{html.escape(caption_text)}</text>')
     edges = {e.id: e for e in project.edges}
     arrow_elements = []
     for g in layout["edges"]:
@@ -86,8 +80,12 @@ def render_scene(project, layout, background=None):
                 arrow_elements.append(f'<path data-arrow="{edge.id}:{endpoint}" d="{data(marker.polygon, closed)}" fill="{edge_color if closed else "none"}" fill-opacity="{edge_alpha:.4f}" stroke="{edge_color}" stroke-opacity="{edge_alpha:.4f}" stroke-width="{1.5*marker.scale:.4f}"/>')
         if edge.label:
             x, y = point(g["labelX"] or 0, g["labelY"] or 0)
-            label_color, label_alpha = color(text)
-            out.append(f'<text x="{x:.4f}" y="{y:.4f}" text-anchor="middle" fill="{label_color}" fill-opacity="{label_alpha:.4f}" font-family="Arial,sans-serif" font-size="10">{html.escape(edge.label)}</text>')
+            label_color, label_alpha = color(edge.style.text or text)
+            if not style.label_background_transparent:
+                label_width = estimated_text_width(edge.label, 9) + 10
+                label_background = "#352C43" if dark else "#FFFFFF"
+                out.append(f'<rect data-edge-label-background="{edge.id}" x="{x-label_width/2:.4f}" y="{y-8:.4f}" width="{label_width:.4f}" height="16" rx="6" fill="{label_background}"/>')
+            out.append(f'<text data-edge-label="{edge.id}" x="{x:.4f}" y="{y+3:.4f}" text-anchor="middle" fill="{label_color}" fill-opacity="{label_alpha:.4f}" font-family="Arial,sans-serif" font-size="9" font-weight="500">{html.escape(edge.label)}</text>')
     # Keep equal-depth objects in their project order, while honoring the
     # editor's explicit paint order in both SVG and the native canvas.
     ordered_nodes = sorted(enumerate(project.nodes), key=lambda pair: (pair[1].z_index, pair[0]))
@@ -99,10 +97,11 @@ def render_scene(project, layout, background=None):
         fill, fill_alpha = color(node.style.fill); stroke, stroke_alpha = color(node.style.stroke)
         closed_indices = [i for i, value in enumerate(closed) if value]
         base_index = max(closed_indices, key=lambda i: _area(paths[i])) if closed_indices else None
+        dash = {"dashed": ' stroke-dasharray="6 4"', "dotted": ' stroke-dasharray="1.5 3"'}.get(node.style.line_style, "")
         for path_index, (path, close) in enumerate(zip(paths, closed)):
             points = [point(n["x"]+(x-.5)*n["width"], n["y"]+(y-.5)*n["height"]) for x, y in path]
             fill_value = fill if close and path_index == base_index else "none"
-            out.append(f'<path d="{data(points, close)}" fill="{fill_value}" fill-opacity="{fill_alpha:.4f}" stroke="{stroke}" stroke-opacity="{stroke_alpha:.4f}" stroke-width="{node.style.penwidth}" stroke-linecap="round" stroke-linejoin="round"/>')
+            out.append(f'<path d="{data(points, close)}" fill="{fill_value}" fill-opacity="{fill_alpha:.4f}" stroke="{stroke}" stroke-opacity="{stroke_alpha:.4f}" stroke-width="{node.style.penwidth}" stroke-linecap="round" stroke-linejoin="round"{dash}/>')
         left_x = point(n["x"]-n["width"]/2, n["y"])[0]
         center_x, center_y = point(n["x"], n["y"])
         right_x = point(n["x"]+n["width"]/2, n["y"])[0]
@@ -111,11 +110,30 @@ def render_scene(project, layout, background=None):
         horizontal_alignment = node.label_alignment
         vertical_alignment = node.label_vertical_alignment
         x = {"left": left_x+7, "center": center_x, "right": right_x-7}[horizontal_alignment]
-        y = {"top": top_y+13, "middle": center_y+4, "bottom": bottom_y-4}[vertical_alignment]
+        font_size = node.style.font_size
+        y = {"top": top_y+6+font_size*.8, "middle": center_y+font_size*.3, "bottom": bottom_y-6-font_size*.2}[vertical_alignment]
         text_anchor = {"left": "start", "center": "middle", "right": "end"}[horizontal_alignment]
-        label_color = "#FFFFFF" if node.icon and dark and node.style.text[:7].upper() in {"#172238", "#0F172A"} else node.style.text
+        label_color = "#FFFFFF" if node.icon and dark and node.style.text.upper() in {"#172238", "#0F172A"} else node.style.text
         label_color, label_alpha = color(label_color)
-        out.append(f'<text x="{x:.4f}" y="{y:.4f}" text-anchor="{text_anchor}" fill="{label_color}" fill-opacity="{label_alpha:.4f}" font-family="Arial,sans-serif" font-size="11" font-weight="600">{html.escape(node.label)}</text></g>')
+        if node.label_wrap or "\n" in node.label or "\r" in node.label:
+            inset_x = min(8, n["width"]*72*.08)
+            inset_y = min(6, n["height"]*72*.08)
+            label_width = max(.01, n["width"]*72-inset_x*2)
+            label_height = max(.01, n["height"]*72-inset_y*2)
+            lines = label_lines(node.label, label_width, font_size, node.label_wrap)
+            line_height = font_size*1.25
+            block_height = len(lines)*line_height
+            block_top = {"top": top_y+inset_y, "middle": center_y-block_height/2,
+                         "bottom": bottom_y-inset_y-block_height}[vertical_alignment]
+            x = {"left": left_x+inset_x, "center": center_x, "right": right_x-inset_x}[horizontal_alignment]
+            clip_id = f"label_clip_{node.id}"
+            out.append(f'<clipPath id="{clip_id}"><rect x="{left_x+inset_x:.4f}" y="{top_y+inset_y:.4f}" width="{label_width:.4f}" height="{label_height:.4f}"/></clipPath>')
+            out.append(f'<text clip-path="url(#{clip_id})" text-anchor="{text_anchor}" fill="{label_color}" fill-opacity="{label_alpha:.4f}" font-family="Arial,sans-serif" font-size="{font_size:g}" font-weight="600">')
+            for index, line in enumerate(lines):
+                out.append(f'<tspan x="{x:.4f}" y="{block_top+font_size*.95+index*line_height:.4f}">{html.escape(line)}</tspan>')
+            out.append('</text></g>')
+        else:
+            out.append(f'<text x="{x:.4f}" y="{y:.4f}" text-anchor="{text_anchor}" fill="{label_color}" fill-opacity="{label_alpha:.4f}" font-family="Arial,sans-serif" font-size="{font_size:g}" font-weight="600">{html.escape(node.label)}</text></g>')
     out.extend(arrow_elements)
     out.append("</svg>")
     return "\n".join(out)

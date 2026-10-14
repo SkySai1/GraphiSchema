@@ -1,0 +1,16 @@
+[
+  {"text":"ab ab","width":20,"font_size":10,"wrap":true,"expected":["ab","ab"]},
+  {"text":"ab ab","width":20,"font_size":10,"wrap":false,"expected":["ab ab"]},
+  {"text":"ABCDEF","width":20,"font_size":10,"wrap":true,"expected":["AB","CD","EF"]},
+  {"text":"абв абв","width":20,"font_size":10,"wrap":true,"expected":["абв","абв"]},
+  {"text":"one\r\n\r\ntwo\rthree","width":200,"font_size":10,"wrap":false,"expected":["one","","two","three"]},
+  {"text":"ab ab\n\nab","width":20,"font_size":10,"wrap":true,"expected":["ab","ab","","ab"]},
+  {"text":"a  b","width":20,"font_size":10,"wrap":true,"expected":["a b"]},
+  {"text":"a  b","width":20,"font_size":10,"wrap":false,"expected":["a  b"]},
+  {"text":"ab ab","width":40,"font_size":10,"wrap":true,"expected":["ab ab"]},
+  {"text":"ab ab","width":40,"font_size":20,"wrap":true,"expected":["ab","ab"]},
+  {"text":"a","width":0.01,"font_size":144,"wrap":true,"expected":["a"]},
+  {"text":"е́е́","width":8,"font_size":10,"wrap":true,"expected":["е́","е́"]},
+  {"text":"👨‍👩‍👧‍👦👨‍👩‍👧‍👦","width":12,"font_size":10,"wrap":true,"expected":["👨‍👩‍👧‍👦","👨‍👩‍👧‍👦"]},
+  {"text":"🇷🇺🇷🇺","width":12,"font_size":10,"wrap":true,"expected":["🇷🇺","🇷🇺"]}
+]

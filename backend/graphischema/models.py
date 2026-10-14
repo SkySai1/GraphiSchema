@@ -49,6 +49,7 @@ class ContainerStyle(StrictModel):
     fill: Color = "#F1F5F9"
     stroke: Color = "#94A3B8"
     text: Color = "#334155"
+    penwidth: float = Field(default=1.2, ge=0.5, le=10, allow_inf_nan=False)
 
     @field_validator("fill", "stroke", "text")
     @classmethod
@@ -80,6 +81,8 @@ class NodeStyle(StrictModel):
     stroke: Color = "#2563EB"
     text: Color = "#0F172A"
     penwidth: float = Field(default=1.5, ge=0.5, le=10)
+    font_size: float = Field(default=10.0, ge=1, le=144, allow_inf_nan=False)
+    line_style: Literal["solid", "dashed", "dotted"] = "solid"
 
     @field_validator("fill", "stroke", "text")
     @classmethod
@@ -105,6 +108,7 @@ class DiagramNode(StrictModel):
     z_index: int = Field(default=0, ge=-1_000_000, le=1_000_000)
     label_alignment: Literal["left", "center", "right"] = "center"
     label_vertical_alignment: Literal["top", "middle", "bottom"] = "middle"
+    label_wrap: bool = False
 
     @field_validator("icon")
     @classmethod
@@ -121,6 +125,9 @@ class DiagramNode(StrictModel):
         if self.icon and self.width is None:
             from .geometry import icon_size
             self.width, self.height = icon_size(self.icon)
+        elif self.label_wrap and self.width is None:
+            # Automatic label sizing would widen the figure instead of wrapping.
+            self.width, self.height = 1.6, 0.62
         return self
 
     @field_validator("id", "container_id")
@@ -134,6 +141,8 @@ class DiagramNode(StrictModel):
 class EdgeStyle(StrictModel):
     line_style: Literal["solid", "dashed", "dotted", "bold"] = "solid"
     color: Color = "#64748B"
+    text: Color | None = None
+    label_background_transparent: bool = False
     penwidth: float = Field(default=1.5, ge=0.5, le=10)
     arrowhead: Literal["normal", "vee", "none", "diamond", "dot", "box", "crow", "tee"] = "normal"
     arrowtail: Literal["normal", "vee", "none", "diamond", "dot", "box", "crow", "tee"] = "none"
@@ -141,10 +150,10 @@ class EdgeStyle(StrictModel):
     weight: int = Field(default=1, ge=0, le=100)
     minlen: int = Field(default=1, ge=1, le=20)
 
-    @field_validator("color")
+    @field_validator("color", "text")
     @classmethod
-    def valid_color(cls, value: str) -> str:
-        return _validate_color(value)
+    def valid_color(cls, value: str | None) -> str | None:
+        return _validate_color(value) if value is not None else None
 
 
 class RoutePoint(StrictModel):

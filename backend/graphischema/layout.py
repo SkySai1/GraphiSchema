@@ -153,10 +153,10 @@ def _fallback_layout(project: DiagramProject, engine: str) -> dict[str, object]:
         buckets[ranks[node.id]].append(node)
     max_rank = max(ranks.values(), default=0)
     node_widths = {
-        node.id: node.width or min(2.5, max(0.85, 0.16 + len(node.label) * 0.085))
+        node.id: node.width or min(10, max(0.85, min(2.5, 0.16 + len(node.label) * 0.085) * node.style.font_size / 10))
         for node in project.nodes
     }
-    node_heights = {node.id: node.height or 0.62 for node in project.nodes}
+    node_heights = {node.id: node.height or max(0.62, node.style.font_size / 72 * 1.6) for node in project.nodes}
     positions: dict[str, tuple[float, float]] = {}
     rank_widths = {rank: max((node_widths[node.id] for node in bucket), default=0.85) for rank, bucket in buckets.items()}
     rank_heights = {rank: max((node_heights[node.id] for node in bucket), default=0.62) for rank, bucket in buckets.items()}

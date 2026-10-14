@@ -24,7 +24,6 @@ final class OllamaAssistantWindowController: NSWindowController {
         )
         window.title = "GraphiSchema · Ollama"
         window.minSize = NSSize(width: 560, height: 500)
-        window.center()
         super.init(window: window)
         buildInterface()
         loadPreferences()
@@ -125,9 +124,9 @@ final class OllamaAssistantWindowController: NSWindowController {
     }
 
     func showVariables() {
-        if let existing = variablesWindow { existing.showWindow(nil); existing.window?.makeKeyAndOrderFront(nil); return }
+        if let existing = variablesWindow { existing.showNearCursor(nil); return }
         let controller = PromptVariablesWindowController(model: model) { [weak self] in self?.systemPromptView.string ?? "" }
-        variablesWindow = controller; controller.showWindow(nil)
+        variablesWindow = controller; controller.showNearCursor(nil)
     }
 
     private func loadPreferences() {

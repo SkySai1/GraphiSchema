@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pydantic import ValidationError
 
 from .models import DiagramProject
+from .container_layout import FONT_SIZE as CONTAINER_FONT_SIZE
 
 
 MAX_DOT_BYTES = 512 * 1024
@@ -74,7 +75,7 @@ class _Parser:
         if self.index != len(self.tokens):
             raise self._error("Лишний текст после закрывающей скобки графа")
         _check_attrs(self.node_defaults, {"fontname", "fontsize", "margin", "label", "shape", "style", "fillcolor", "color", "fontcolor", "penwidth", "tooltip", "pos"}, "узлов по умолчанию")
-        _check_attrs(self.edge_defaults, {"fontname", "fontsize", "label", "color", "style", "penwidth", "arrowhead", "arrowtail", "dir", "constraint", "weight", "minlen"}, "связей по умолчанию")
+        _check_attrs(self.edge_defaults, {"fontname", "fontsize", "label", "color", "fontcolor", "style", "penwidth", "arrowhead", "arrowtail", "dir", "constraint", "weight", "minlen", "gs_label_background_transparent"}, "связей по умолчанию")
         return self.nodes, self.containers, self.edges
 
     def _statements(self, parent_id: str | None) -> None:
@@ -82,11 +83,11 @@ class _Parser:
             if self._peek_value(";") or self._peek_value(","):
                 self._take()
                 continue
-            if self._peek_value("subgraph"):
+            if self._peek_value("subgraph") and not self.tokens[self.index].quoted:
                 self._subgraph(parent_id)
                 continue
             first = self._take()
-            if first.value in {"graph", "node", "edge"} and self._peek_value("["):
+            if not first.quoted and first.value in {"graph", "node", "edge"} and self._peek_value("["):
                 attrs = self._attributes()
                 if first.value == "graph":
                     if parent_id is None:
@@ -217,9 +218,11 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
     containers = []
     for container_id, statement in container_statements.items():
         attrs = statement.attrs
-        _check_attrs(attrs, {"label", "style", "color", "fillcolor", "fontcolor", "penwidth", "margin", "gs_x", "gs_y", "gs_width", "gs_height"}, f"контейнера {container_id}")
+        _check_attrs(attrs, {"label", "style", "color", "fillcolor", "fontcolor", "fontname", "fontsize", "labeljust", "penwidth", "margin", "gs_x", "gs_y", "gs_width", "gs_height"}, f"контейнера {container_id}")
         _require_value(attrs, "style", "rounded,filled", f"контейнера {container_id}")
-        _require_number(attrs, "penwidth", "1.2", f"контейнера {container_id}")
+        _require_value(attrs, "fontname", "Arial", f"контейнера {container_id}")
+        _require_number(attrs, "fontsize", str(CONTAINER_FONT_SIZE), f"контейнера {container_id}")
+        _require_value(attrs, "labeljust", "l", f"контейнера {container_id}")
         old = existing_containers.get(container_id)
         original_margin = generated_containers.get(container_id)
         padding = _container_padding(attrs, old.padding if old else None, container_id)
@@ -238,6 +241,7 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
                 "fill": attrs.get("fillcolor", old.style.fill if old else "#F1F5F9"),
                 "stroke": attrs.get("color", old.style.stroke if old else "#94A3B8"),
                 "text": attrs.get("fontcolor", old.style.text if old else "#334155"),
+                "penwidth": _number(attrs.get("penwidth", str(old.style.penwidth if old else 1.2)), f"penwidth контейнера {container_id}"),
             },
         })
 
@@ -250,13 +254,21 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
                 all_node_statements[node_id] = NodeStatement(None, {})
     for node_id, statement in all_node_statements.items():
         attrs = statement.attrs
-        allowed = {"label", "shape", "style", "fillcolor", "color", "fontcolor", "penwidth", "tooltip", "pos", "fontname", "fontsize", "margin", "fixedsize", "width", "height", "gs_icon", "gs_label_alignment", "gs_label_vertical_alignment"}
+        allowed = {"label", "shape", "style", "fillcolor", "color", "fontcolor", "penwidth", "tooltip", "pos", "fontname", "fontsize", "margin", "fixedsize", "width", "height", "gs_icon", "gs_label_alignment", "gs_label_vertical_alignment", "gs_label_wrap"}
         _check_attrs(attrs, allowed, f"узла {node_id}")
         old = existing_nodes.get(node_id)
-        _require_value(attrs, "style", "filled,rounded", f"узла {node_id}")
+        line_style = old.style.line_style if old else "solid"
+        if "style" in attrs:
+            styles = {value.strip() for value in attrs["style"].split(",")}
+            line_styles = styles & {"solid", "dashed", "dotted"}
+            if not {"filled", "rounded"}.issubset(styles) or styles - {"filled", "rounded", "solid", "dashed", "dotted"} or len(line_styles) > 1:
+                raise DOTEditError(f"Стиль узла {node_id}: поддерживаются filled,rounded и один из solid, dashed, dotted.")
+            line_style = next(iter(line_styles), "solid")
         _require_value(attrs, "fontname", "Arial", f"узла {node_id}")
-        _require_value(attrs, "fontsize", "10", f"узла {node_id}")
         _require_value(attrs, "margin", "0.16,0.1", f"узла {node_id}")
+        wrap_value = attrs.get("gs_label_wrap", "true" if old and old.label_wrap else "false")
+        if wrap_value not in {"true", "false"}:
+            raise DOTEditError(f"Для gs_label_wrap узла {node_id} допустимы true и false.")
         if "width" in attrs or "height" in attrs or "fixedsize" in attrs:
             _require_value(attrs, "fixedsize", "true", f"узла {node_id}")
             if "width" not in attrs or "height" not in attrs:
@@ -279,6 +291,7 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
             "icon": attrs.get("gs_icon", old.icon if old else None),
             "label_alignment": attrs.get("gs_label_alignment", old.label_alignment if old else "center"),
             "label_vertical_alignment": attrs.get("gs_label_vertical_alignment", old.label_vertical_alignment if old else "middle"),
+            "label_wrap": wrap_value == "true",
             "z_index": old.z_index if old else 0,
             "container_id": statement.parent_id,
             "style": {
@@ -286,6 +299,8 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
                 "stroke": attrs.get("color", old.style.stroke if old else "#2563EB"),
                 "text": attrs.get("fontcolor", old.style.text if old else "#0F172A"),
                 "penwidth": _number(attrs.get("penwidth", str(old.style.penwidth if old else 1.5)), f"penwidth узла {node_id}"),
+                "font_size": _number(attrs.get("fontsize", str(old.style.font_size if old else 10)), f"fontsize узла {node_id}"),
+                "line_style": line_style,
             },
             "x": position[0] if position else old.x if old else None,
             "y": position[1] if position else old.y if old else None,
@@ -346,7 +361,7 @@ def _build_edges(project: DiagramProject, statements: list[EdgeStatement]) -> li
     result = []
     for index, statement in enumerate(statements):
         attrs = statement.attrs
-        _check_attrs(attrs, {"label", "color", "style", "penwidth", "arrowhead", "arrowtail", "dir", "constraint", "weight", "minlen", "fontname", "fontsize", "headport", "tailport", "gs_source_port", "gs_target_port", "gs_routing", "gs_waypoints"}, f"связи {statement.source} -> {statement.target}")
+        _check_attrs(attrs, {"label", "color", "fontcolor", "style", "penwidth", "arrowhead", "arrowtail", "dir", "constraint", "weight", "minlen", "fontname", "fontsize", "headport", "tailport", "gs_source_port", "gs_target_port", "gs_routing", "gs_waypoints", "gs_label_background_transparent"}, f"связи {statement.source} -> {statement.target}")
         _require_value(attrs, "fontname", "Arial", "связи")
         _require_value(attrs, "fontsize", "9", "связи")
         old_candidates = old_by_pair.get((statement.source, statement.target), [])
@@ -365,6 +380,9 @@ def _build_edges(project: DiagramProject, statements: list[EdgeStatement]) -> li
         constraint = attrs.get("constraint", str(old.style.constraint if old else True)).lower()
         if constraint not in {"true", "false"}:
             raise DOTEditError(f"constraint должен быть true или false, получено {constraint!r}")
+        label_background = attrs.get("gs_label_background_transparent", "true" if old and old.style.label_background_transparent else "false")
+        if label_background not in {"true", "false"}:
+            raise DOTEditError("gs_label_background_transparent должен быть true или false.")
         if ("headport" in attrs and "gs_target_port" in attrs) or ("tailport" in attrs and "gs_source_port" in attrs):
             raise DOTEditError("Укажите одну привязку на каждом конце связи: порт Graphviz либо вершину фигуры.")
         try:
@@ -384,6 +402,8 @@ def _build_edges(project: DiagramProject, statements: list[EdgeStatement]) -> li
             "style": {
                 "line_style": line_style,
                 "color": attrs.get("color", old.style.color if old else "#64748B"),
+                "text": attrs.get("fontcolor", old.style.text if old else None),
+                "label_background_transparent": label_background == "true",
                 "penwidth": _number(attrs.get("penwidth", str(old.style.penwidth if old else 1.5)), "penwidth связи"),
                 "arrowhead": attrs.get("arrowhead", old.style.arrowhead if old else "normal"),
                 "arrowtail": attrs.get("arrowtail", old.style.arrowtail if old else "none"),

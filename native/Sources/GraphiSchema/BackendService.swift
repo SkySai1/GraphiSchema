@@ -117,6 +117,13 @@ final class BackendService: ObservableObject {
                 && payload["edge_routing"] == "graphviz_v1"
                 && payload["dot_sync"] == "three_way_v1"
                 && payload["canvas_geometry"] == "icon_ports_v1"
+                && payload["node_text"] == "fontsize_v1"
+                && payload["label_wrap"] == "renderer_v1"
+                && payload["selection_colors"] == "rgba_v1"
+                && payload["edge_label_background"] == "toggle_v1"
+                && payload["outline_styles"] == "nodes_clusters_v1"
+                && payload["version_preview"] == "snapshot_layout_v1"
+                && payload["container_headers"] == "fixed_11pt_v1"
                 && payload["prompt_templates"] == "jinja_v1"
                 && payload["storage_scope"] == "application-support"
         } catch {
