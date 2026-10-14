@@ -220,6 +220,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
         workspace.onMoveNode = { [weak self] id, x, y, containerID in
             self?.model.moveNode(id, x: x, y: y, containerID: containerID)
         }
+        workspace.onDetachNodeFromContainer = { [weak self] id in self?.model.detachNodeFromContainer(id) }
         workspace.onSetNodeZIndex = { [weak self] id, value in self?.model.setNodeZIndex(id, value) }
         workspace.onMoveNodeInStack = { [weak self] id, front in
             if front { self?.model.moveNodeToFront(id) } else { self?.model.moveNodeToBack(id) }
@@ -1642,6 +1643,7 @@ private final class SidebarElementButton: NSButton {
 private final class WorkspaceView: NSView {
     var onSelectElement: ((DiagramSelection) -> Void)?
     var onMoveNode: ((String, Double, Double, String?) -> Void)?
+    var onDetachNodeFromContainer: ((String) -> Void)?
     var onSetNodeZIndex: ((String, Int) -> Void)?
     var onMoveNodeInStack: ((String, Bool) -> Void)?
     var onMoveNodes: ((Set<String>, Double, Double) -> Void)?
@@ -1799,6 +1801,7 @@ private final class WorkspaceView: NSView {
         [applyProposalButton, cancelProposalButton].forEach { $0.controlSize = .small; $0.isHidden = true }
         canvasView.onSelect = { [weak self] selection in self?.onSelectElement?(selection) }
         canvasView.onMoveNode = { [weak self] id, x, y, containerID in self?.onMoveNode?(id, x, y, containerID) }
+        canvasView.onDetachNodeFromContainer = { [weak self] id in self?.onDetachNodeFromContainer?(id) }
         canvasView.onSetNodeZIndex = { [weak self] id, value in self?.onSetNodeZIndex?(id, value) }
         canvasView.onMoveNodeInStack = { [weak self] id, front in self?.onMoveNodeInStack?(id, front) }
         canvasView.onMoveNodes = { [weak self] ids, dx, dy in self?.onMoveNodes?(ids, dx, dy) }
@@ -2127,7 +2130,7 @@ private final class InspectorView: NSView {
     private let heading = NSTextField(labelWithString: "СВОЙСТВА")
     private let title = NSTextField(labelWithString: "Проект")
     private let scrollView = NSScrollView()
-    private let stack = NSStackView()
+    private let stack = TopAlignedStackView()
     private let header = NSStackView()
     private var actions: [ControlAction] = []
     private var editableControls: [NSControl] = []
@@ -2140,7 +2143,7 @@ private final class InspectorView: NSView {
     private var figureNodeID: String?
 
     var preferredWindowContentHeight: CGFloat {
-        min(620, max(280, documentHeight(for: stack) + 63))
+        min(620, max(280, documentHeight(for: stack) + 50))
     }
     var preferredWindowContentWidth: CGFloat { 360 }
 
@@ -2306,14 +2309,19 @@ private final class InspectorView: NSView {
     }
 
     private func build() {
+        wantsLayer = true
+        layer?.name = "theme-surface-window"
+        layer?.backgroundColor = AppTheme.surface("window").cgColor
         heading.font = .systemFont(ofSize: 8, weight: .bold)
         heading.textColor = .secondaryLabelColor
         heading.stringValue = "СВОЙСТВА"
+        title.identifier = NSUserInterfaceItemIdentifier("inspector-title")
         title.font = .systemFont(ofSize: 14, weight: .bold)
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 9
-        stack.edgeInsets = NSEdgeInsets(top: 14, left: 14, bottom: 14, right: 14)
+        stack.distribution = .fill
+        stack.spacing = 7
+        stack.edgeInsets = NSEdgeInsets(top: 6, left: 14, bottom: 10, right: 14)
         stack.translatesAutoresizingMaskIntoConstraints = false
         scrollView.documentView = stack
         scrollView.identifier = NSUserInterfaceItemIdentifier("inspector-properties-scroll")
@@ -2347,14 +2355,14 @@ private final class InspectorView: NSView {
 
     override func layout() {
         super.layout()
-        let headerHeight: CGFloat = 42
+        let headerHeight: CGFloat = 32
         let topPadding: CGFloat = 14
-        let scrollTopGap: CGFloat = 7
+        let scrollTopGap: CGFloat = 4
         header.frame = NSRect(x: 16, y: max(0, bounds.height - topPadding - headerHeight), width: max(0, bounds.width - 32), height: headerHeight)
         scrollView.frame = NSRect(x: 0, y: 0, width: bounds.width, height: max(0, bounds.height - topPadding - headerHeight - scrollTopGap))
         let width = scrollView.contentView.bounds.width
         let height = documentHeight(for: stack)
-        stack.frame = NSRect(x: 0, y: 0, width: width, height: max(height, scrollView.contentView.bounds.height))
+        stack.frame = NSRect(x: 0, y: 0, width: width, height: height)
         stack.layoutSubtreeIfNeeded()
     }
 
@@ -2389,6 +2397,7 @@ private final class InspectorView: NSView {
 
     private func addSection(_ text: String) {
         let label = makeLabel(text, size: 8, weight: .bold, color: .secondaryLabelColor)
+        label.identifier = NSUserInterfaceItemIdentifier("inspector-section-\(text)")
         addFullWidth(label)
     }
 

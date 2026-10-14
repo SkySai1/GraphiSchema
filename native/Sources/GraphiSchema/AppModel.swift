@@ -281,9 +281,28 @@ final class AppModel: ObservableObject {
         }
         current.nodes[index].x = min(1000, max(-1000, x))
         current.nodes[index].y = min(1000, max(-1000, y))
-        current.nodes[index].containerId = containerID.flatMap { target in
-            current.containers.contains(where: { $0.id == target }) ? target : nil
+        if current.nodes[index].containerId == nil {
+            current.nodes[index].containerId = containerID.flatMap { target in
+                current.containers.contains(where: { $0.id == target }) ? target : nil
+            }
         }
+        diagram = current
+        selection = .node(id)
+        changed()
+    }
+
+    func detachNodeFromContainer(_ id: String) {
+        guard !isEditingLocked, var current = diagram,
+              let index = current.nodes.firstIndex(where: { $0.id == id }),
+              current.nodes[index].containerId != nil else { return }
+        // Preserve the displayed position when removing Graphviz cluster membership.
+        let positions = Dictionary(uniqueKeysWithValues: (layout?.nodes ?? []).map { ($0.id, $0) })
+        current.diagram.layoutMode = "manual"
+        for nodeIndex in current.nodes.indices {
+            if current.nodes[nodeIndex].x == nil { current.nodes[nodeIndex].x = positions[current.nodes[nodeIndex].id]?.x }
+            if current.nodes[nodeIndex].y == nil { current.nodes[nodeIndex].y = positions[current.nodes[nodeIndex].id]?.y }
+        }
+        current.nodes[index].containerId = nil
         diagram = current
         selection = .node(id)
         changed()

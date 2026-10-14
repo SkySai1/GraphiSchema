@@ -1,6 +1,24 @@
 import AppKit
 import Darwin
 
+private final class CanvasScrollFixtureEvent: NSEvent {
+    private let rawDelta: NSPoint
+    private let natural: Bool
+    init(delta: NSPoint, natural: Bool) {
+        rawDelta = delta
+        self.natural = natural
+        super.init()
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+    override var type: NSEvent.EventType { .scrollWheel }
+    override var scrollingDeltaX: CGFloat { rawDelta.x }
+    override var scrollingDeltaY: CGFloat { rawDelta.y }
+    override var hasPreciseScrollingDeltas: Bool { true }
+    override var isDirectionInvertedFromDevice: Bool { natural }
+    override var modifierFlags: NSEvent.ModifierFlags { [] }
+    override var locationInWindow: NSPoint { .zero }
+}
+
 @MainActor
 enum NativeUISmokeTest {
     private static var restorePreferences: (() -> Void)?
@@ -34,6 +52,9 @@ enum NativeUISmokeTest {
         }
         checkNodeStacking(starter)
         checkContainerDragBehavior(starter)
+        checkEmptyContainerDragThroughController(starter)
+        checkCanvasControlGeometry(starter)
+        checkTrackpadNavigation()
         checkNodeStackContextMenu()
         model.diagram = starter
         model.jsonDraft = model.prettyJSON(starter)
@@ -225,6 +246,7 @@ enum NativeUISmokeTest {
         guard deleteButton?.isHidden == true else {
             fail("Project style settings must not show an element deletion button.")
         }
+        checkProjectPropertiesSpacing(styleWindow: styleWindow)
         let projectPropertiesHeight = styleWindow?.contentView?.frame.height ?? 0
         let routingPicker = findView(identifier: "inspector-field-Маршрут связей", in: styleContent) as? NSPopUpButton
         guard let routingPicker,
@@ -313,7 +335,7 @@ enum NativeUISmokeTest {
         }
         checkNewCanvasFeatures(model: model, controller: mainWindow, assistant: assistantWindow, root: root,
                                inspector: styleContent, firstPaletteTile: firstPaletteTile)
-        print("Native UI smoke test passed: z-index stacking and JSON persistence, container attach/detach and live empty-container movement, synchronized trackpad direction, vector figures, canvas controls, project styles, JSON, version history and Ollama.")
+        print("Native UI smoke test passed: container drag preview through controller refresh, retained membership and explicit detachment, physical trackpad directions, aligned circular controls, compact project properties, JSON, version history and Ollama.")
     }
 
     private static func fail(_ message: String, file: StaticString = #fileID, line: UInt = #line) -> Never {
@@ -474,6 +496,7 @@ enum NativeUISmokeTest {
         window.contentView = canvas
         window.orderFront(nil)
         canvas.update(diagram: project, layout: layout, selection: .project)
+        canvas.onSelect = { selection in canvas.update(diagram: project, layout: layout, selection: selection) }
         window.displayIfNeeded()
         var moveResult: (String, Double, Double, String?)?
         canvas.onMoveNode = { id, x, y, containerID in moveResult = (id, x, y, containerID) }
@@ -493,16 +516,24 @@ enum NativeUISmokeTest {
 
         moveResult = nil
         node.containerId = "target_zone"; node.x = 7; node.y = 3
-        project.nodes = [node]
-        layout.nodes = [LayoutNode(id: node.id, x: 7, y: 3, width: 1, height: 1)]
+        var anchor = node; anchor.id = "stationary_member"; anchor.x = 6
+        project.nodes = [node, anchor]
+        layout.nodes = [LayoutNode(id: node.id, x: 7, y: 3, width: 1, height: 1),
+                        LayoutNode(id: anchor.id, x: 6, y: 3, width: 1, height: 1)]
         canvas.update(diagram: project, layout: layout, selection: .node(node.id))
+        let initialContainerFrame = canvas.containerScreenFrame(for: "target_zone")!
         let attached = canvas.screenPoint(for: NSPoint(x: 7, y: 3))
         let outside = canvas.screenPoint(for: NSPoint(x: 10, y: 3))
         canvas.mouseDown(with: event(.leftMouseDown, attached, 2))
         canvas.mouseDragged(with: event(.leftMouseDragged, outside, 2))
+        guard let expanded = canvas.containerScreenFrame(for: "target_zone"), expanded.contains(outside),
+              abs(expanded.minX - initialContainerFrame.minX) < 0.01,
+              expanded.width > initialContainerFrame.width + 1 else {
+            fail("The container must expand around its dragged member before the pointer is released.")
+        }
         canvas.mouseUp(with: event(.leftMouseUp, outside, 2))
-        guard moveResult?.3 == nil else {
-            fail("Dragging a node beyond every container boundary must detach it. Result=\(String(describing: moveResult)).")
+        guard moveResult?.3 == "target_zone" else {
+            fail("Dragging a member beyond the old container boundary must keep its membership. Result=\(String(describing: moveResult)).")
         }
 
         let modelProbe = AppModel(); modelProbe.diagram = project; modelProbe.layout = layout
@@ -511,8 +542,25 @@ enum NativeUISmokeTest {
             fail("The application model must persist node attachment after a canvas drop.")
         }
         modelProbe.moveNode(node.id, x: 10, y: 3, containerID: nil)
-        guard modelProbe.nodes.first?.containerId == nil else {
-            fail("The application model must persist node detachment after it leaves a container.")
+        guard modelProbe.nodes.first?.containerId == "target_zone", modelProbe.nodes.first?.x == 10 else {
+            fail("A movement callback must preserve container membership while updating position.")
+        }
+        modelProbe.moveNode(node.id, x: 10, y: 3, containerID: "empty_zone")
+        guard modelProbe.nodes.first?.containerId == "target_zone" else {
+            fail("Dragging an attached member into another container must not reparent it.")
+        }
+        var detachedID: String?
+        canvas.onDetachNodeFromContainer = { id in detachedID = id; modelProbe.detachNodeFromContainer(id) }
+        guard let detach = canvas.detachContainerMenuItem(for: node.id), let action = detach.action else {
+            fail("Attached nodes must have a context menu action to remove container membership.")
+        }
+        _ = NSApp.sendAction(action, to: detach.target, from: detach)
+        let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let saved = try? decoder.decode(DiagramProject.self, from: Data(modelProbe.jsonDraft.utf8))
+        guard detachedID == node.id, modelProbe.nodes.first?.containerId == nil,
+              modelProbe.nodes.first?.x == 10, modelProbe.nodes.first?.y == 3,
+              saved?.nodes.first?.containerId == nil, saved?.nodes.first?.x == 10 else {
+            fail("Explicit detachment must update JSON without changing node position.")
         }
 
         guard let originalFrame = canvas.containerScreenFrame(for: "empty_zone") else {
@@ -529,6 +577,181 @@ enum NativeUISmokeTest {
         }
         canvas.mouseUp(with: event(.leftMouseUp, containerEnd, 3))
         window.close()
+    }
+
+    private static func checkEmptyContainerDragThroughController(_ starter: DiagramProject) {
+        var project = starter
+        project.nodes = []; project.edges = []
+        project.diagram.layoutMode = "manual"
+        project.containers = [DiagramContainer(id: "empty", label: "Empty drag preview", parentId: nil,
+            style: ContainerStyle(fill: "#FFFFFF", stroke: "#FF0000", text: "#172238"),
+            x: 4, y: 3, width: 3, height: 2)]
+        let model = AppModel(); model.diagram = project
+        model.layout = DiagramLayout(engine: "neato", width: 8, height: 6, minX: 0, minY: 0, nodes: [], edges: [])
+        let controller = MainWindowController(model: model)
+        controller.refreshAll(); controller.showWindow(nil)
+        guard let window = controller.window, let root = window.contentView,
+              let canvas = findView(identifier: "diagram-canvas", in: root) as? DiagramCanvasView else {
+            fail("Container preview regression needs the real controller and canvas.")
+        }
+        root.layoutSubtreeIfNeeded(); window.displayIfNeeded()
+        func event(_ type: NSEvent.EventType, _ point: NSPoint) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: canvas.convert(point, to: nil), modifierFlags: [], timestamp: 0,
+                               windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1)!
+        }
+        for delta in [NSPoint(x: 36, y: 24), NSPoint(x: -36, y: 0), NSPoint(x: 0, y: -24)] {
+            guard let before = canvas.containerScreenFrame(for: "empty"), let original = model.containers.first else {
+                fail("Empty container fixture must have a visible frame.")
+            }
+            let start = NSPoint(x: before.midX, y: before.midY)
+            let end = NSPoint(x: start.x + delta.x, y: start.y + delta.y)
+            canvas.mouseDown(with: event(.leftMouseDown, start))
+            canvas.mouseDragged(with: event(.leftMouseDragged, end))
+            controller.refreshAll() // A selection/status refresh must preserve the live preview.
+            window.displayIfNeeded()
+            guard let preview = canvas.containerScreenFrame(for: "empty"),
+                  abs(preview.midX - before.midX - delta.x) < 0.01,
+                  abs(preview.midY - before.midY - delta.y) < 0.01,
+                  model.containers.first?.x == original.x, model.containers.first?.y == original.y else {
+                fail("An empty container must follow the pointer through controller refreshes before committing.")
+            }
+            guard let bitmap = canvas.bitmapImageRepForCachingDisplay(in: canvas.bounds) else { fail("Cannot capture empty container preview.") }
+            canvas.cacheDisplay(in: canvas.bounds, to: bitmap)
+            let border = NSPoint(x: preview.maxX, y: preview.midY)
+            let pixelX = Int((border.x * CGFloat(bitmap.pixelsWide) / canvas.bounds.width).rounded())
+            let pixelY = Int((border.y * CGFloat(bitmap.pixelsHigh) / canvas.bounds.height).rounded())
+            let borderVisible = [pixelY, bitmap.pixelsHigh - pixelY].contains { y in
+                (-2...2).contains { dx in
+                    let x = pixelX + dx
+                    guard x >= 0, x < bitmap.pixelsWide, y >= 0, y < bitmap.pixelsHigh,
+                          let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { return false }
+                    return color.redComponent > 0.7 && color.greenComponent < 0.35 && color.blueComponent < 0.35
+                }
+            }
+            guard borderVisible else { fail("The dragged empty container border must be painted at its preview coordinates before mouse-up.") }
+            capture(canvas, name: "empty-container-live-drag")
+            let expected = canvas.worldPoint(for: end)
+            canvas.mouseUp(with: event(.leftMouseUp, end))
+            guard let committed = model.containers.first,
+                  abs((committed.x ?? 0) - expected.x) < 1e-6,
+                  abs((committed.y ?? 0) - expected.y) < 1e-6,
+                  let frame = canvas.containerScreenFrame(for: "empty"),
+                  abs(frame.midX - preview.midX) < 0.01, abs(frame.midY - preview.midY) < 0.01 else {
+                fail("Mouse-up must commit the preview position without a visible jump.")
+            }
+        }
+        window.close()
+    }
+
+    private static func checkCanvasControlGeometry(_ starter: DiagramProject) {
+        var project = starter
+        var source = starter.nodes[0]; source.id = "control_source"; source.icon = nil; source.shape = "box"
+        source.containerId = nil; source.width = 2; source.height = 1; source.x = 2; source.y = 2
+        var target = source; target.id = "control_target"; target.x = 6
+        project.nodes = [source, target]; project.containers = []; project.edges = []; project.diagram.layoutMode = "manual"
+        let layout = DiagramLayout(engine: "neato", width: 8, height: 4, minX: 0, minY: 0,
+            nodes: [LayoutNode(id: source.id, x: 2, y: 2, width: 2, height: 1),
+                    LayoutNode(id: target.id, x: 6, y: 2, width: 2, height: 1)], edges: [])
+        let canvas = DiagramCanvasView(frame: NSRect(x: 0, y: 0, width: 800, height: 450))
+        let window = NSWindow(contentRect: canvas.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = canvas; window.orderFront(nil)
+        canvas.update(diagram: project, layout: layout, selection: .node(source.id)); window.displayIfNeeded()
+        guard let controls = canvas.nodeControlFrames(for: source.id),
+              controls.resize.width == controls.resize.height,
+              controls.resize.size == controls.connection.size,
+              abs(controls.resize.midX - controls.connection.midX) < 0.01,
+              !controls.resize.intersects(controls.connection) else { fail("Circular canvas controls must have equal size, align vertically, and remain separate.") }
+        let center = NSPoint(x: controls.resize.midX, y: controls.resize.midY)
+        let triangles = DiagramCanvasView.resizeGlyphTriangles(center: center)
+        let outward = NSPoint(x: 24, y: -24)
+        guard triangles.count == 2, triangles.allSatisfy({ $0.count == 3 }),
+              triangles.allSatisfy({ triangle in
+                  let tip = triangle[0], rear = NSPoint(x: (triangle[1].x + triangle[2].x) / 2, y: (triangle[1].y + triangle[2].y) / 2)
+                  let axis = NSPoint(x: tip.x - rear.x, y: tip.y - rear.y)
+                  return abs(axis.x * outward.y - axis.y * outward.x) < 1e-6
+              }), (triangles[0][0].x - center.x) * (triangles[1][0].x - center.x) < 0 else {
+            fail("Scale triangles must face opposite ways along the pointer's outward/inward resize diagonal.")
+        }
+        func event(_ type: NSEvent.EventType, _ point: NSPoint) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: canvas.convert(point, to: nil), modifierFlags: [], timestamp: 0,
+                               windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1)!
+        }
+        for direction in [CGFloat(1), CGFloat(-1)] {
+            canvas.update(diagram: project, layout: layout, selection: .node(source.id))
+            var resized: (Double, Double)?
+            canvas.onResizeNode = { _, width, height in resized = (width, height) }
+            let control = canvas.nodeControlFrames(for: source.id)!.resize
+            let start = NSPoint(x: control.midX, y: control.midY)
+            let end = NSPoint(x: start.x + direction * outward.x, y: start.y + direction * outward.y)
+            canvas.mouseDown(with: event(.leftMouseDown, start)); canvas.mouseDragged(with: event(.leftMouseDragged, end))
+            canvas.mouseUp(with: event(.leftMouseUp, end))
+            guard let resized, direction * (resized.0 - 2) > 0, direction * (resized.1 - 1) > 0 else {
+                fail("Dragging the visible resize circle along either triangle must grow/shrink both dimensions.")
+            }
+            // Commit the callback result so the next interaction starts from canonical geometry.
+            project.nodes[0].width = resized.0; project.nodes[0].height = resized.1
+            canvas.update(diagram: project, layout: layout, selection: .node(source.id))
+            project.nodes[0] = source
+            canvas.update(diagram: project, layout: layout, selection: .node(source.id))
+        }
+        var connection: (String, String)?
+        canvas.onCreateEdge = { connection = ($0, $1) }
+        let start = NSPoint(x: controls.connection.midX, y: controls.connection.midY)
+        let end = canvas.screenPoint(for: NSPoint(x: 6, y: 2))
+        canvas.mouseDown(with: event(.leftMouseDown, start)); canvas.mouseDragged(with: event(.leftMouseDragged, end))
+        canvas.mouseUp(with: event(.leftMouseUp, end))
+        guard connection?.0 == source.id, connection?.1 == target.id else { fail("Dragging the visible connection circle must create a connection, without resizing the node.") }
+        capture(canvas, name: "canvas-circular-controls")
+        window.close()
+    }
+
+    private static func checkTrackpadNavigation() {
+        let canvas = DiagramCanvasView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        // Device coordinates for natural scrolling: right/up fingers produce +X/-Y.
+        // With natural scrolling disabled, macOS reverses both event deltas.
+        let motions = [NSPoint(x: 12, y: 0), NSPoint(x: -12, y: 0), NSPoint(x: 0, y: 9),
+                       NSPoint(x: 0, y: -9), NSPoint(x: 12, y: 9), NSPoint(x: -12, y: -9),
+                       NSPoint(x: 12, y: -9), NSPoint(x: -12, y: 9)]
+        for natural in [true, false] {
+            for inverse in [false, true] {
+                canvas.inverseTrackpad = inverse
+                for fingers in motions {
+                    let sign: CGFloat = natural ? 1 : -1
+                    let event = CanvasScrollFixtureEvent(delta: NSPoint(x: sign * fingers.x, y: -sign * fingers.y), natural: natural)
+                    let before = canvas.screenPoint(for: .zero)
+                    canvas.scrollWheel(with: event)
+                    let after = canvas.screenPoint(for: .zero)
+                    let expected: CGFloat = inverse ? -1 : 1
+                    guard abs(after.x - before.x - expected * fingers.x) < 1e-6,
+                          abs(after.y - before.y - expected * fingers.y) < 1e-6 else {
+                        fail("Canvas must follow physical fingers on BOTH axes: fingers=\(fingers), natural=\(natural), inverse=\(inverse), movement=\(NSPoint(x: after.x - before.x, y: after.y - before.y)).")
+                    }
+                }
+            }
+        }
+    }
+
+    private static func checkProjectPropertiesSpacing(styleWindow: NSWindow?) {
+        guard let window = styleWindow, let content = window.contentView,
+              let title = findView(identifier: "inspector-title", in: content),
+              let firstSection = findView(identifier: "inspector-section-СВЕДЕНИЯ", in: content) else {
+            fail("Project properties need a header and the first settings section.")
+        }
+        let originalSize = content.bounds.size
+        for height in [originalSize.height, CGFloat(740)] {
+            window.setContentSize(NSSize(width: originalSize.width, height: height))
+            content.layoutSubtreeIfNeeded(); window.displayIfNeeded()
+            let titleFrame = title.convert(title.bounds, to: content)
+            let sectionFrame = firstSection.convert(firstSection.bounds, to: content)
+            let gap = titleFrame.minY - sectionFrame.maxY
+            guard gap >= 0, gap <= 28 else {
+                fail("Project property fields must stay within 2em of the header at every window height: gap=\(gap), title=\(titleFrame), section=\(sectionFrame).")
+            }
+            print("Project properties: height=\(height), header-to-fields gap=\(gap)pt (limit 28pt).")
+        }
+        window.setContentSize(originalSize)
+        content.layoutSubtreeIfNeeded()
+        capture(content, name: "compact-project-properties")
     }
 
     private static func checkNodeStackContextMenu() {
@@ -768,14 +991,15 @@ enum NativeUISmokeTest {
         guard let geometry = CanvasGeometry.icons[cloud.icon!], let width = cloud.width, let height = cloud.height,
               abs(width/height-geometry.aspectRatio) < 1e-6 else { fail("Canvas collection figures must preserve SVG proportions") }
         guard let canvas = findView(identifier: "diagram-canvas", in: root) as? DiagramCanvasView,
-              let cloudPosition = canvas.nodePositions.first(where: { $0.id == cloud.id }) else { fail("Cloud geometry missing") }
+              canvas.nodePositions.contains(where: { $0.id == cloud.id }) else { fail("Cloud geometry missing") }
         controller.refreshAll()
         canvas.displayIfNeeded()
         guard canvas.toolTip?.contains("Стрелка справа создаёт связь") == true,
               canvas.toolTip?.contains("значок масштабирует объект") == true else {
             fail("Selected node controls must identify the connection arrow and scale glyph.")
         }
-        let handle = canvas.screenPoint(for: NSPoint(x: cloudPosition.x+width/2, y: cloudPosition.y-height/2))
+        guard let cloudControl = canvas.nodeControlFrames(for: cloud.id)?.resize else { fail("Selected cloud must have a resize circle.") }
+        let handle = NSPoint(x: cloudControl.midX, y: cloudControl.midY)
         let resized = NSPoint(x: handle.x+24, y: handle.y)
         func resizeEvent(_ type: NSEvent.EventType, point: NSPoint) -> NSEvent {
             NSEvent.mouseEvent(with: type, location: canvas.convert(point, to: nil), modifierFlags: [], timestamp: 0,
@@ -826,11 +1050,11 @@ enum NativeUISmokeTest {
               DiagramCanvasView.scrollDirection(precise: true, natural: true, inverse: true) == -1,
               DiagramCanvasView.scrollDirection(precise: true, natural: false, inverse: true) == 1,
               DiagramCanvasView.scrollDirection(precise: false, natural: true, inverse: true) == 1,
-              naturalFollowDelta == NSPoint(x: 6, y: -4),
-              naturalInverseDelta == NSPoint(x: -6, y: 4),
-              systemInverseDelta == NSPoint(x: 6, y: -4),
-              systemDirectionDelta == NSPoint(x: -6, y: 4) else {
-            fail("Trackpad inversion must map horizontal and vertical deltas consistently across both system directions, while mouse wheels stay unchanged")
+              naturalFollowDelta == NSPoint(x: 6, y: 4),
+              naturalInverseDelta == NSPoint(x: -6, y: -4),
+              systemInverseDelta == NSPoint(x: 6, y: 4),
+              systemDirectionDelta == NSPoint(x: -6, y: -4) else {
+            fail("Trackpad inversion must convert device Y-down to canvas Y-up and apply the same physical direction to both axes")
         }
         model.inverseTrackpad = false
         guard !canvas.inverseTrackpad else { fail("Navigation preference must apply immediately") }
