@@ -265,6 +265,7 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
             "icon": attrs.get("gs_icon", old.icon if old else None),
             "label_alignment": attrs.get("gs_label_alignment", old.label_alignment if old else "center"),
             "label_vertical_alignment": attrs.get("gs_label_vertical_alignment", old.label_vertical_alignment if old else "middle"),
+            "z_index": old.z_index if old else 0,
             "container_id": statement.parent_id,
             "style": {
                 "fill": attrs.get("fillcolor", old.style.fill if old else "#FFFFFF"),

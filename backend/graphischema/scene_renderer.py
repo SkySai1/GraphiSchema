@@ -88,7 +88,10 @@ def render_scene(project, layout, background=None):
             x, y = point(g["labelX"] or 0, g["labelY"] or 0)
             label_color, label_alpha = color(text)
             out.append(f'<text x="{x:.4f}" y="{y:.4f}" text-anchor="middle" fill="{label_color}" fill-opacity="{label_alpha:.4f}" font-family="Arial,sans-serif" font-size="10">{html.escape(edge.label)}</text>')
-    for node in project.nodes:
+    # Keep equal-depth objects in their project order, while honoring the
+    # editor's explicit paint order in both SVG and the native canvas.
+    ordered_nodes = sorted(enumerate(project.nodes), key=lambda pair: (pair[1].z_index, pair[0]))
+    for _, node in ordered_nodes:
         n = positions[node.id]
         paths = normalized_paths(node)
         closed = icon_library()[node.icon]["closed"] if node.icon else [True]+[False]*(len(paths)-1)

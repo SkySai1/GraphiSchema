@@ -89,6 +89,13 @@ def test_dot_can_add_nodes_and_edges_with_stable_safe_ids() -> None:
     assert changes["edges"] == [f"+ {candidate.edges[0].id}"]
 
 
+def test_dot_edit_preserves_app_layer_z_index() -> None:
+    project = DiagramProject.model_validate({"nodes": [{"id": "a", "label": "A"}]})
+    project.nodes[0].z_index = 19
+    candidate, _ = apply_dot(project, to_dot(project))
+    assert candidate.nodes[0].z_index == 19
+
+
 @pytest.mark.parametrize(("before", "after", "reason"), [
     ('label="WAF"', 'label="WAF", URL="https://example.test"', "URL"),
     ('label="WAF"', 'label="WAF", image="/tmp/private.png"', "image"),

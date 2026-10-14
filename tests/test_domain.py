@@ -78,6 +78,17 @@ def test_node_size_is_optional_but_must_be_a_valid_pair(project: DiagramProject)
         DiagramProject.model_validate(data)
 
 
+def test_node_z_index_defaults_round_trips_and_is_bounded(project: DiagramProject) -> None:
+    assert all(node.z_index == 0 for node in project.nodes)
+    project.nodes[0].z_index = 7
+    encoded = project.model_dump(mode="json")
+    decoded = DiagramProject.model_validate(encoded)
+    assert decoded.nodes[0].z_index == 7
+    encoded["nodes"][0]["z_index"] = 1_000_001
+    with pytest.raises(ValidationError, match="less than or equal to 1000000"):
+        DiagramProject.model_validate(encoded)
+
+
 def test_dot_generation_is_deterministic_and_escapes_labels(project: DiagramProject) -> None:
     project.nodes[0].label = 'Client "A"'
     dot = to_dot(project)

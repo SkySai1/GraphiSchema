@@ -100,6 +100,9 @@ class DiagramNode(StrictModel):
     y: float | None = None
     width: float | None = Field(default=None, ge=0.5, le=10)
     height: float | None = Field(default=None, ge=0.5, le=10)
+    # App-layer paint order. Graphviz's `z` is a geometric coordinate, not a
+    # reliable SVG/native stacking order, so the renderer consumes this field.
+    z_index: int = Field(default=0, ge=-1_000_000, le=1_000_000)
     label_alignment: Literal["left", "center", "right"] = "center"
     label_vertical_alignment: Literal["top", "middle", "bottom"] = "middle"
 

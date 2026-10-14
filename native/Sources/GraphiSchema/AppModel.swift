@@ -40,7 +40,7 @@ final class AppModel: ObservableObject {
     var activeProposal: DiagramProposal? { dotPreview ?? ollamaProposal }
     var isEditingLocked: Bool { jsonDraftIsDirty || activeProposal != nil }
     var inverseTrackpad: Bool {
-        get { UserDefaults.standard.object(forKey: "GraphiSchema.inverseTrackpad") as? Bool ?? true }
+        get { UserDefaults.standard.object(forKey: "GraphiSchema.inverseTrackpad") as? Bool ?? false }
         set { UserDefaults.standard.set(newValue, forKey: "GraphiSchema.inverseTrackpad"); onModelChange?() }
     }
     var themeMode: String { UserDefaults.standard.string(forKey: "GraphiSchema.themeMode") ?? "system" }
@@ -269,7 +269,7 @@ final class AppModel: ObservableObject {
         changed()
     }
 
-    func moveNode(_ id: String, x: Double, y: Double) {
+    func moveNode(_ id: String, x: Double, y: Double, containerID: String? = nil) {
         guard !isEditingLocked else { return }
         guard var current = diagram, let index = current.nodes.firstIndex(where: { $0.id == id }) else { return }
         current.diagram.layoutMode = "manual"
@@ -281,6 +281,31 @@ final class AppModel: ObservableObject {
         }
         current.nodes[index].x = min(1000, max(-1000, x))
         current.nodes[index].y = min(1000, max(-1000, y))
+        current.nodes[index].containerId = containerID.flatMap { target in
+            current.containers.contains(where: { $0.id == target }) ? target : nil
+        }
+        diagram = current
+        selection = .node(id)
+        changed()
+    }
+
+    func setNodeZIndex(_ id: String, _ value: Int) {
+        guard !isEditingLocked, (-1_000_000...1_000_000).contains(value) else { return }
+        editNode(id) { $0.zIndex = value }
+    }
+
+    func moveNodeToFront(_ id: String) {
+        setNodeToStackExtreme(id, front: true)
+    }
+
+    func moveNodeToBack(_ id: String) {
+        setNodeToStackExtreme(id, front: false)
+    }
+
+    private func setNodeToStackExtreme(_ id: String, front: Bool) {
+        guard !isEditingLocked, var current = diagram,
+              current.nodes.contains(where: { $0.id == id }) else { return }
+        current.nodes = DiagramNodeStackOrder.moving(id, in: current.nodes, toFront: front)
         diagram = current
         selection = .node(id)
         changed()

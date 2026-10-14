@@ -193,7 +193,8 @@ def render_fallback_svg(project: DiagramProject) -> str:
             mx, my = (sx + tx) / 2, (sy + ty) / 2 - 7
             output.append(f'<text x="{mx:.1f}" y="{my:.1f}" text-anchor="middle" fill="{text_muted}" font-family="Arial,sans-serif" font-size="11">{html.escape(edge.label)}</text>')
 
-    for node in nodes:
+    ordered_nodes = sorted(enumerate(nodes), key=lambda pair: (pair[1].z_index, pair[0]))
+    for _, node in ordered_nodes:
         x, y = positions[node.id]
         card_w, card_h = card_sizes[node.id]
         style = node.style

@@ -30,6 +30,14 @@ def test_fallback_svg_is_deterministic(project: DiagramProject) -> None:
     assert render_fallback_svg(project) == render_fallback_svg(project)
 
 
+def test_fallback_svg_paints_nodes_by_z_index(project: DiagramProject) -> None:
+    project.nodes[0].z_index = 3
+    root = ElementTree.fromstring(render_fallback_svg(project))
+    labels = [item.text for item in root.iter() if item.tag.endswith("text") and item.text in {node.label for node in project.nodes}]
+    expected = [node.label for _, node in sorted(enumerate(project.nodes), key=lambda pair: (pair[1].z_index, pair[0]))]
+    assert labels == expected
+
+
 @pytest.mark.parametrize(("routing", "segments"), [
     ("straight", 1),
     ("angled", 2),
@@ -92,6 +100,15 @@ def test_empty_container_exports_with_stored_geometry() -> None:
     root = ElementTree.fromstring(svg)
     assert any(item.tag.endswith("rect") and item.get("fill") == "#F1F5F9" for item in root.iter())
     assert any(item.tag.endswith("text") and item.text == "Пустая зона" for item in root.iter())
+
+
+def test_svg_paints_nodes_by_z_index_and_keeps_stable_order_for_ties(project: DiagramProject) -> None:
+    project.nodes[0].z_index = 2
+    project.nodes[1].z_index = -1
+    root = ElementTree.fromstring(render_svg(project)[0])
+    painted_ids = [item.get("data-node") for item in root.iter() if item.tag.endswith("g") and item.get("data-node")]
+    expected = [node.id for _, node in sorted(enumerate(project.nodes), key=lambda pair: (pair[1].z_index, pair[0]))]
+    assert painted_ids == expected
 
 
 @pytest.mark.skipif(not shutil.which("dot"), reason="Graphviz dot is not installed")

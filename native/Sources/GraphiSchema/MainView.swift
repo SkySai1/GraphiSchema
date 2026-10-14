@@ -203,7 +203,6 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
     private func connectModel() {
         sidebar.onAddNode = { [weak self] item in self?.model.addNode(item) }
         sidebar.onAddContainer = { [weak self] in self?.model.addContainer() }
-        sidebar.onAddEdge = { [weak self] in self?.model.addEdge() }
         sidebar.onSelect = { [weak self] selection in
             self?.model.selection = selection
             self?.refreshInspector()
@@ -218,8 +217,12 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
             self.refreshSidebar()
             self.refreshCanvas(force: true)
         }
-        workspace.onMoveNode = { [weak self] id, x, y in
-            self?.model.moveNode(id, x: x, y: y)
+        workspace.onMoveNode = { [weak self] id, x, y, containerID in
+            self?.model.moveNode(id, x: x, y: y, containerID: containerID)
+        }
+        workspace.onSetNodeZIndex = { [weak self] id, value in self?.model.setNodeZIndex(id, value) }
+        workspace.onMoveNodeInStack = { [weak self] id, front in
+            if front { self?.model.moveNodeToFront(id) } else { self?.model.moveNodeToBack(id) }
         }
         workspace.onMoveNodes = { [weak self] ids, dx, dy in self?.model.moveNodes(ids, deltaX: dx, deltaY: dy) }
         workspace.onScaleNodes = { [weak self] ids, factor in self?.model.scaleNodes(ids, factor: factor) }
@@ -1279,7 +1282,6 @@ private final class TopAlignedStackView: NSStackView {
 private final class SidebarView: NSView {
     var onAddNode: ((PaletteObject) -> Void)?
     var onAddContainer: (() -> Void)?
-    var onAddEdge: (() -> Void)?
     var onSelect: ((DiagramSelection) -> Void)?
     var onShowProperties: (() -> Void)?
 
@@ -1506,9 +1508,6 @@ private final class SidebarView: NSView {
         let addContainer = actionButton("Добавить контейнер", symbol: "rectangle.3.group") { [weak self] in self?.onAddContainer?() }
         addContainer.isEnabled = !model.isEditingLocked
         addArranged(addContainer, to: contentStack)
-        let addEdge = actionButton("Добавить связь", symbol: "arrow.up.right", key: "e") { [weak self] in self?.onAddEdge?() }
-        addEdge.isEnabled = !model.isEditingLocked
-        addArranged(addEdge, to: contentStack)
         addArranged(separator(), to: contentStack)
         addArranged(section("КОНТЕЙНЕРЫ · \(model.containers.count)"), to: contentStack)
         if model.containers.isEmpty { addArranged(hint("Нет контейнеров"), to: contentStack) }
@@ -1642,7 +1641,9 @@ private final class SidebarElementButton: NSButton {
 @MainActor
 private final class WorkspaceView: NSView {
     var onSelectElement: ((DiagramSelection) -> Void)?
-    var onMoveNode: ((String, Double, Double) -> Void)?
+    var onMoveNode: ((String, Double, Double, String?) -> Void)?
+    var onSetNodeZIndex: ((String, Int) -> Void)?
+    var onMoveNodeInStack: ((String, Bool) -> Void)?
     var onMoveNodes: ((Set<String>, Double, Double) -> Void)?
     var onResizeNode: ((String, Double, Double) -> Void)?
     var onScaleNodes: ((Set<String>, Double) -> Void)?
@@ -1797,7 +1798,9 @@ private final class WorkspaceView: NSView {
         cancelProposalButton = makeButton("Отменить", symbol: "xmark") { [weak self] _ in self?.onCancelProposal?() }
         [applyProposalButton, cancelProposalButton].forEach { $0.controlSize = .small; $0.isHidden = true }
         canvasView.onSelect = { [weak self] selection in self?.onSelectElement?(selection) }
-        canvasView.onMoveNode = { [weak self] id, x, y in self?.onMoveNode?(id, x, y) }
+        canvasView.onMoveNode = { [weak self] id, x, y, containerID in self?.onMoveNode?(id, x, y, containerID) }
+        canvasView.onSetNodeZIndex = { [weak self] id, value in self?.onSetNodeZIndex?(id, value) }
+        canvasView.onMoveNodeInStack = { [weak self] id, front in self?.onMoveNodeInStack?(id, front) }
         canvasView.onMoveNodes = { [weak self] ids, dx, dy in self?.onMoveNodes?(ids, dx, dy) }
         canvasView.onResizeNode = { [weak self] id, width, height in self?.onResizeNode?(id, width, height) }
         canvasView.onScaleNodes = { [weak self] ids, factor in self?.onScaleNodes?(ids, factor) }
@@ -2150,6 +2153,7 @@ private final class InspectorView: NSView {
 
     func update(model: AppModel) {
         currentModel = model
+        deleteButton?.isHidden = model.selection == .project
         if displayedDiagram == model.diagram && displayedSelection == model.selection {
             setInteractionState(isEditingLocked: model.isEditingLocked)
             return
@@ -2173,7 +2177,7 @@ private final class InspectorView: NSView {
             ], tooltip: "Задаёт направление ранжирования компонентов: слева направо, сверху вниз или в обратную сторону.") { value in model.updateDirection(value) }
             addEdgeRouting(model: model, label: "Маршрут связей")
             addPopup("Тема", value: model.themeMode, choices: [("system", "Системная"), ("light", "Светлая"), ("dark", "Тёмная")]) { model.updateThemeMode($0) }
-            addPopup("Тачпад", value: model.inverseTrackpad ? "inverse" : "system", choices: [("inverse", "Инверсная навигация"), ("system", "Системная навигация")]) { model.inverseTrackpad = $0 == "inverse" }
+            addPopup("Тачпад", value: model.inverseTrackpad ? "inverse" : "follow", choices: [("follow", "За пальцами"), ("inverse", "Против пальцев")], tooltip: "Задаёт, движется ли холст вслед за пальцами по обеим осям или в обратную сторону.") { model.inverseTrackpad = $0 == "inverse" }
             addSection("КОМПОНОВКА")
             addPopup("Движок Graphviz", value: model.diagram?.diagram.layoutEngine ?? "dot", choices: [
                 ("dot", "dot · иерархия"), ("neato", "neato · свободная сеть"), ("fdp", "fdp · силовая компоновка"),
@@ -2194,6 +2198,10 @@ private final class InspectorView: NSView {
                 addSection("ОБЩЕЕ")
                 addText("Название", value: node.label) { value in model.editNode(id) { $0.label = value } }
                 addText("Тип", value: node.kind, tooltip: "Семантический класс компонента. Учитывается при анализе и генерации Ollama, но не меняет форму и геометрию.") { value in model.editNode(id) { $0.kind = value } }
+                addText("Z-index", value: String(node.effectiveZIndex), tooltip: "Порядок отрисовки перекрывающихся объектов. Большее число рисуется поверх меньшего; Graphviz не управляет этим порядком.") { value in
+                    guard let index = Int(value), (-1_000_000...1_000_000).contains(index) else { return }
+                    model.setNodeZIndex(id, index)
+                }
                 addReadOnly("ID", value: node.id)
                 addPopup("Контейнер", value: node.containerId ?? "", choices: [("", "Без контейнера")] + model.containers.map { ($0.id, $0.label) }) { value in
                     model.editNode(id) { $0.containerId = value.isEmpty ? nil : value }
@@ -2293,6 +2301,7 @@ private final class InspectorView: NSView {
     func setInteractionState(isEditingLocked: Bool) {
         self.isEditingLocked = isEditingLocked
         for control in editableControls { control.isEnabled = !isEditingLocked }
+        deleteButton?.isHidden = title.stringValue == "Проект"
         deleteButton?.isEnabled = !isEditingLocked && title.stringValue != "Проект"
     }
 

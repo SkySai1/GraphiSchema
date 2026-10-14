@@ -103,9 +103,41 @@ struct DiagramNode: Codable, Equatable, Identifiable {
     var icon: String? = nil
     var labelAlignment: String? = nil
     var labelVerticalAlignment: String? = nil
+    var zIndex: Int? = nil
 
     var effectiveLabelAlignment: String { labelAlignment ?? "center" }
     var effectiveLabelVerticalAlignment: String { labelVerticalAlignment ?? "middle" }
+    var effectiveZIndex: Int { zIndex ?? 0 }
+}
+
+enum DiagramNodeStackOrder {
+    static func sorted(_ nodes: [DiagramNode]) -> [DiagramNode] {
+        nodes.enumerated().sorted {
+            if $0.element.effectiveZIndex != $1.element.effectiveZIndex {
+                return $0.element.effectiveZIndex < $1.element.effectiveZIndex
+            }
+            return $0.offset < $1.offset
+        }.map(\.element)
+    }
+
+    static func moving(_ id: String, in nodes: [DiagramNode], toFront: Bool) -> [DiagramNode] {
+        guard let selectedIndex = nodes.firstIndex(where: { $0.id == id }) else { return nodes }
+        var result = nodes
+        let zValues = nodes.map(\.effectiveZIndex)
+        let extreme = toFront ? (zValues.max() ?? 0) : (zValues.min() ?? 0)
+        if toFront, extreme < 1_000_000 {
+            result[selectedIndex].zIndex = extreme + 1
+        } else if !toFront, extreme > -1_000_000 {
+            result[selectedIndex].zIndex = extreme - 1
+        } else {
+            for (rank, node) in sorted(nodes).enumerated() {
+                guard let index = result.firstIndex(where: { $0.id == node.id }) else { continue }
+                result[index].zIndex = rank
+            }
+            result[selectedIndex].zIndex = toFront ? nodes.count : -1
+        }
+        return result
+    }
 }
 
 struct NodeStyle: Codable, Equatable {

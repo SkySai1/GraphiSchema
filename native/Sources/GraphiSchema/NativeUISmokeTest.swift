@@ -17,7 +17,9 @@ enum NativeUISmokeTest {
             UserDefaults.standard.set(starterBackup, forKey: "GraphiSchema.loadStarterOnLaunch")
         }
         defer { restorePreferences?(); restorePreferences = nil }
+        UserDefaults.standard.removeObject(forKey: "GraphiSchema.inverseTrackpad")
         let model = AppModel()
+        guard !model.inverseTrackpad else { fail("Trackpad navigation must default to following finger movement.") }
         let candidates = [
             Bundle.main.resourceURL?.appendingPathComponent("GraphiSchema/examples/starter.json"),
             URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("examples/starter.json"),
@@ -30,6 +32,9 @@ enum NativeUISmokeTest {
         guard let starter = try? decoder.decode(DiagramProject.self, from: starterData) else {
             fail("Native UI smoke test cannot decode the starter project.")
         }
+        checkNodeStacking(starter)
+        checkContainerDragBehavior(starter)
+        checkNodeStackContextMenu()
         model.diagram = starter
         model.jsonDraft = model.prettyJSON(starter)
         var localEdit = starter
@@ -106,6 +111,9 @@ enum NativeUISmokeTest {
               hasJSONCode
         else {
             fail("Native UI smoke test failed: palette, readable JSON, chat, and panel widths must be visible. panels=\(editorSplit.arrangedSubviews.map(\.frame.width)), paletteScroll=\(paletteScroll?.contentView.bounds ?? .zero), firstTile=\(firstPaletteTile?.frame ?? .zero), picker=\(collectionPicker?.itemArray.count ?? -1), objects=\(PaletteLibrary.allObjects.count), visibleTiles=\(hasAllPaletteItems), icons=\(hasBundledPaletteIcons), chat=\(hasChat), json=\(hasJSONCode).")
+        }
+        guard findButton(title: "Добавить связь", in: root) == nil else {
+            fail("Project actions must create connections from the selected node control, not a separate sidebar button.")
         }
         checkPaletteLayout(root: root, split: editorSplit, collectionPicker: collectionPicker!, firstTile: firstPaletteTile!)
         checkSynchronizedGroupScaling(starter)
@@ -214,6 +222,9 @@ enum NativeUISmokeTest {
         }
         model.selection = .project
         mainWindow.refreshAll()
+        guard deleteButton?.isHidden == true else {
+            fail("Project style settings must not show an element deletion button.")
+        }
         let projectPropertiesHeight = styleWindow?.contentView?.frame.height ?? 0
         let routingPicker = findView(identifier: "inspector-field-Маршрут связей", in: styleContent) as? NSPopUpButton
         guard let routingPicker,
@@ -302,7 +313,7 @@ enum NativeUISmokeTest {
         }
         checkNewCanvasFeatures(model: model, controller: mainWindow, assistant: assistantWindow, root: root,
                                inspector: styleContent, firstPaletteTile: firstPaletteTile)
-        print("Native UI smoke test passed: vector collection figures, figure replacement, edge ports and mouse route handles, day/night UI, inverse trackpad, prompt variables CRUD/reset, version history, JSON and Ollama.")
+        print("Native UI smoke test passed: z-index stacking and JSON persistence, container attach/detach and live empty-container movement, synchronized trackpad direction, vector figures, canvas controls, project styles, JSON, version history and Ollama.")
     }
 
     private static func fail(_ message: String, file: StaticString = #fileID, line: UInt = #line) -> Never {
@@ -389,6 +400,144 @@ enum NativeUISmokeTest {
         }
         split.setPosition(oldSidebarWidth, ofDividerAt: 0)
         root.layoutSubtreeIfNeeded()
+    }
+
+    private static func checkNodeStacking(_ project: DiagramProject) {
+        guard project.nodes.count >= 3 else { fail("z-index regression needs three nodes.") }
+        var nodes = Array(project.nodes.prefix(3))
+        for index in nodes.indices { nodes[index].zIndex = 0 }
+        let originalOrder = nodes.map(\.id)
+        guard DiagramNodeStackOrder.sorted(nodes).map(\.id) == originalOrder else {
+            fail("Equal z-index values must preserve canonical model order.")
+        }
+        nodes[0].zIndex = 8
+        guard DiagramNodeStackOrder.sorted(nodes).map(\.id) == [nodes[1].id, nodes[2].id, nodes[0].id] else {
+            fail("Higher z-index objects must render later and appear above lower values.")
+        }
+        let front = DiagramNodeStackOrder.moving(nodes[1].id, in: nodes, toFront: true)
+        let back = DiagramNodeStackOrder.moving(nodes[0].id, in: front, toFront: false)
+        guard DiagramNodeStackOrder.sorted(front).last?.id == nodes[1].id,
+              DiagramNodeStackOrder.sorted(back).first?.id == nodes[0].id else {
+            fail("Bring-to-front and send-to-back must update deterministic paint order.")
+        }
+        var saturated = nodes
+        for index in saturated.indices { saturated[index].zIndex = 1_000_000 }
+        let rebased = DiagramNodeStackOrder.moving(saturated[0].id, in: saturated, toFront: true)
+        guard DiagramNodeStackOrder.sorted(rebased).last?.id == saturated[0].id,
+              rebased.allSatisfy({ (-1_000_000...1_000_000).contains($0.effectiveZIndex) }) else {
+            fail("Reordering a saturated z-index stack must preserve order and legal values.")
+        }
+
+        var saved = project
+        saved.nodes[0].zIndex = 42
+        let encoder = JSONEncoder(); encoder.keyEncodingStrategy = .convertToSnakeCase
+        let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
+        guard let data = try? encoder.encode(saved),
+              String(data: data, encoding: .utf8)?.contains("\"z_index\"") == true,
+              let restored = try? decoder.decode(DiagramProject.self, from: data),
+              restored.nodes[0].effectiveZIndex == 42 else {
+            fail("z-index must survive the canonical JSON save and load cycle.")
+        }
+        let probe = AppModel(); probe.diagram = project
+        probe.moveNodeToFront(nodes[0].id)
+        guard DiagramNodeStackOrder.sorted(probe.nodes).last?.id == nodes[0].id else {
+            fail("Application commands must route bring-to-front through the project model.")
+        }
+        probe.moveNodeToBack(nodes[0].id)
+        guard DiagramNodeStackOrder.sorted(probe.nodes).first?.id == nodes[0].id else {
+            fail("Application commands must route send-to-back through the project model.")
+        }
+        probe.setNodeZIndex(nodes[0].id, 23)
+        guard probe.nodes.first(where: { $0.id == nodes[0].id })?.effectiveZIndex == 23 else {
+            fail("Manual z-index input must update the project model.")
+        }
+    }
+
+    private static func checkContainerDragBehavior(_ starter: DiagramProject) {
+        var project = starter
+        guard var node = project.nodes.first else { fail("Container drag regression needs a node.") }
+        node.id = "drag_node"; node.x = 2; node.y = 3; node.width = 1; node.height = 1; node.containerId = nil
+        project.nodes = [node]
+        project.edges = []
+        project.diagram.layoutMode = "manual"
+        let style = ContainerStyle(fill: "#E8EEF8", stroke: "#607090", text: "#172238")
+        project.containers = [
+            DiagramContainer(id: "target_zone", label: "Target", parentId: nil, style: style, x: 7, y: 3, width: 3, height: 2),
+            DiagramContainer(id: "empty_zone", label: "Empty", parentId: nil, style: style, x: 10, y: 7, width: 3, height: 2),
+        ]
+        var layout = DiagramLayout(engine: "dot", edgeRouting: "angled", width: 13, height: 10,
+                                   minX: 0, minY: 0,
+                                   nodes: [LayoutNode(id: node.id, x: 2, y: 3, width: 1, height: 1)], edges: [])
+        let canvas = DiagramCanvasView(frame: NSRect(x: 0, y: 0, width: 1200, height: 900))
+        canvas.isGridVisible = false
+        let window = NSWindow(contentRect: canvas.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = canvas
+        window.orderFront(nil)
+        canvas.update(diagram: project, layout: layout, selection: .project)
+        window.displayIfNeeded()
+        var moveResult: (String, Double, Double, String?)?
+        canvas.onMoveNode = { id, x, y, containerID in moveResult = (id, x, y, containerID) }
+        canvas.onMoveContainer = { _, _, _ in }
+        func event(_ type: NSEvent.EventType, _ point: NSPoint, _ number: Int) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: canvas.convert(point, to: nil), modifierFlags: [], timestamp: 0,
+                               windowNumber: window.windowNumber, context: nil, eventNumber: number, clickCount: 1, pressure: 1)!
+        }
+        let source = canvas.screenPoint(for: NSPoint(x: 2, y: 3))
+        let inside = canvas.screenPoint(for: NSPoint(x: 7, y: 3))
+        canvas.mouseDown(with: event(.leftMouseDown, source, 1))
+        canvas.mouseDragged(with: event(.leftMouseDragged, inside, 1))
+        canvas.mouseUp(with: event(.leftMouseUp, inside, 1))
+        guard moveResult?.0 == node.id, moveResult?.3 == "target_zone" else {
+            fail("Dropping a node inside a container must assign that container. Result=\(String(describing: moveResult)).")
+        }
+
+        moveResult = nil
+        node.containerId = "target_zone"; node.x = 7; node.y = 3
+        project.nodes = [node]
+        layout.nodes = [LayoutNode(id: node.id, x: 7, y: 3, width: 1, height: 1)]
+        canvas.update(diagram: project, layout: layout, selection: .node(node.id))
+        let attached = canvas.screenPoint(for: NSPoint(x: 7, y: 3))
+        let outside = canvas.screenPoint(for: NSPoint(x: 10, y: 3))
+        canvas.mouseDown(with: event(.leftMouseDown, attached, 2))
+        canvas.mouseDragged(with: event(.leftMouseDragged, outside, 2))
+        canvas.mouseUp(with: event(.leftMouseUp, outside, 2))
+        guard moveResult?.3 == nil else {
+            fail("Dragging a node beyond every container boundary must detach it. Result=\(String(describing: moveResult)).")
+        }
+
+        let modelProbe = AppModel(); modelProbe.diagram = project; modelProbe.layout = layout
+        modelProbe.moveNode(node.id, x: 7, y: 3, containerID: "target_zone")
+        guard modelProbe.nodes.first?.containerId == "target_zone" else {
+            fail("The application model must persist node attachment after a canvas drop.")
+        }
+        modelProbe.moveNode(node.id, x: 10, y: 3, containerID: nil)
+        guard modelProbe.nodes.first?.containerId == nil else {
+            fail("The application model must persist node detachment after it leaves a container.")
+        }
+
+        guard let originalFrame = canvas.containerScreenFrame(for: "empty_zone") else {
+            fail("Empty container frame is needed for live drag preview regression.")
+        }
+        let containerStart = NSPoint(x: originalFrame.midX, y: originalFrame.midY)
+        let containerEnd = NSPoint(x: containerStart.x + 36, y: containerStart.y + 24)
+        canvas.mouseDown(with: event(.leftMouseDown, containerStart, 3))
+        canvas.mouseDragged(with: event(.leftMouseDragged, containerEnd, 3))
+        guard let previewFrame = canvas.containerScreenFrame(for: "empty_zone"),
+              abs(previewFrame.midX - containerStart.x - 36) < 1,
+              abs(previewFrame.midY - containerStart.y - 24) < 1 else {
+            fail("An empty container must visibly follow the pointer before mouse-up. Original=\(originalFrame), preview=\(String(describing: canvas.containerScreenFrame(for: "empty_zone"))).")
+        }
+        canvas.mouseUp(with: event(.leftMouseUp, containerEnd, 3))
+        window.close()
+    }
+
+    private static func checkNodeStackContextMenu() {
+        let canvas = DiagramCanvasView(frame: .zero)
+        let titles = canvas.nodeStackMenuItems(for: "fixture")
+        guard titles.map(\.title) == ["Переместить на передний план", "Переместить на задний план", "Указать z-index…"],
+              titles.allSatisfy({ $0.representedObject as? String == "fixture" && $0.target === canvas }) else {
+            fail("Node context menu must provide forward, back and manual z-index actions for the selected node.")
+        }
     }
 
     private static func checkSynchronizedGroupScaling(_ project: DiagramProject) {
@@ -621,6 +770,11 @@ enum NativeUISmokeTest {
         guard let canvas = findView(identifier: "diagram-canvas", in: root) as? DiagramCanvasView,
               let cloudPosition = canvas.nodePositions.first(where: { $0.id == cloud.id }) else { fail("Cloud geometry missing") }
         controller.refreshAll()
+        canvas.displayIfNeeded()
+        guard canvas.toolTip?.contains("Стрелка справа создаёт связь") == true,
+              canvas.toolTip?.contains("значок масштабирует объект") == true else {
+            fail("Selected node controls must identify the connection arrow and scale glyph.")
+        }
         let handle = canvas.screenPoint(for: NSPoint(x: cloudPosition.x+width/2, y: cloudPosition.y-height/2))
         let resized = NSPoint(x: handle.x+24, y: handle.y)
         func resizeEvent(_ type: NSEvent.EventType, point: NSPoint) -> NSEvent {
@@ -662,13 +816,17 @@ enum NativeUISmokeTest {
         guard model.edges.first?.waypoints.isEmpty == true else { fail("Reset route action failed") }
 
         model.inverseTrackpad = true
+        let naturalFollowDelta = DiagramCanvasView.scrollOffsetDelta(x: 6, y: -4, precise: true, natural: true, inverse: false)
         let naturalInverseDelta = DiagramCanvasView.scrollOffsetDelta(x: 6, y: -4, precise: true, natural: true, inverse: true)
         let systemInverseDelta = DiagramCanvasView.scrollOffsetDelta(x: 6, y: -4, precise: true, natural: false, inverse: true)
         let systemDirectionDelta = DiagramCanvasView.scrollOffsetDelta(x: 6, y: -4, precise: true, natural: false, inverse: false)
         guard canvas.inverseTrackpad,
+              DiagramCanvasView.scrollDirection(precise: true, natural: true, inverse: false) == 1,
+              DiagramCanvasView.scrollDirection(precise: true, natural: false, inverse: false) == -1,
               DiagramCanvasView.scrollDirection(precise: true, natural: true, inverse: true) == -1,
               DiagramCanvasView.scrollDirection(precise: true, natural: false, inverse: true) == 1,
               DiagramCanvasView.scrollDirection(precise: false, natural: true, inverse: true) == 1,
+              naturalFollowDelta == NSPoint(x: 6, y: -4),
               naturalInverseDelta == NSPoint(x: -6, y: 4),
               systemInverseDelta == NSPoint(x: 6, y: -4),
               systemDirectionDelta == NSPoint(x: -6, y: 4) else {
