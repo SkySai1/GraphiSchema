@@ -7,8 +7,10 @@ final class DiagramCanvasView: NSView {
     var onResizeNode: ((String, Double, Double) -> Void)?
     var onCreateEdge: ((String, String) -> Void)?
     var onSetEdgeWaypoints: ((String, [RoutePoint], [LayoutNode]) -> Void)?
+    var onReattachEdge: ((String, Bool, String) -> Void)?
     var onMoveContainer: ((String, Double, Double) -> Void)?
     var onResizeContainer: ((String, Double) -> Void)?
+    var onResizeEmptyContainer: ((String, Double, Double) -> Void)?
     var onDropPaletteItem: ((PaletteObject, Double, Double, String?) -> Void)?
     var onRequestStyle: (() -> Void)?
     var onDeleteSelection: (() -> Void)?
@@ -47,6 +49,12 @@ final class DiagramCanvasView: NSView {
     private var didResizeContainer = false
     private var dragPreview: [String: NSPoint] = [:]
     private var containerPaddingPreview: [String: Double] = [:]
+    private var emptyContainerSizePreview: [String: (width: Double, height: Double)] = [:]
+    private var resizingEmptyContainerID: String?
+    private var emptyContainerResizeStart: NSPoint?
+    private var initialEmptyContainerSize: (width: Double, height: Double)?
+    private var endpointDrag: (id: String, source: Bool)?
+    private var endpointPointer: NSPoint?
 
     private var draggingWaypoint: (id: String, index: Int)?
     private var waypointPreview: [String: [RoutePoint]] = [:]
@@ -67,12 +75,14 @@ final class DiagramCanvasView: NSView {
 
     func update(diagram: DiagramProject?, layout: DiagramLayout?, selection: DiagramSelection) {
         let wasEmpty = diagramLayout == nil
+        let previousSelection = self.selection
+        let previousEdges = Dictionary(uniqueKeysWithValues: (self.diagram?.edges ?? []).map { ($0.id, $0) })
         self.diagram = diagram
         nodeByID = Dictionary(uniqueKeysWithValues: (diagram?.nodes ?? []).map { ($0.id, $0) })
         if let diagram {
             let base = layout ?? DiagramLayout(engine: diagram.diagram.layoutEngine, width: 4, height: 2.5,
                                                minX: 0, minY: 0, nodes: [], edges: [])
-            diagramLayout = layoutWithPendingGeometry(diagram, base: base)
+            diagramLayout = layoutWithPendingGeometry(diagram, base: base, previousEdges: previousEdges)
         } else {
             diagramLayout = nil
         }
@@ -86,12 +96,19 @@ final class DiagramCanvasView: NSView {
         nodeSizePreview.removeAll()
         waypointPreview.removeAll()
         containerPaddingPreview.removeAll()
+        emptyContainerSizePreview.removeAll()
+        endpointDrag = nil
+        endpointPointer = nil
         if wasEmpty, diagramLayout != nil { shouldFitOnLayout = true }
         needsDisplay = true
-        if shouldFitOnLayout { fitToContent() }
+        let selectedEmptyContainer: Bool
+        if case .container(let id) = selection, let diagram {
+            selectedEmptyContainer = memberPositionsByContainer[id]?.isEmpty != false && diagram.containers.contains(where: { $0.id == id })
+        } else { selectedEmptyContainer = false }
+        if shouldFitOnLayout || (selectedEmptyContainer && previousSelection != selection) { fitToContent() }
     }
 
-    private func layoutWithPendingGeometry(_ diagram: DiagramProject, base: DiagramLayout) -> DiagramLayout {
+    private func layoutWithPendingGeometry(_ diagram: DiagramProject, base: DiagramLayout, previousEdges: [String: DiagramEdge]) -> DiagramLayout {
         let currentIDs = Set(diagram.nodes.map(\.id))
         var nodes = base.nodes.filter { currentIDs.contains($0.id) }
         let originalPositions = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
@@ -143,6 +160,7 @@ final class DiagramCanvasView: NSView {
             if (base.edgeRouting ?? diagram.diagram.edgeRouting) == diagram.diagram.edgeRouting,
                let oldSource = originalPositions[edge.source], let oldTarget = originalPositions[edge.target],
                sameGeometry(source, oldSource), sameGeometry(target, oldTarget),
+               previousEdges[edge.id] == edge,
                let existing = existingEdges[edge.id], existing.source == edge.source, existing.target == edge.target {
                 edges.append(existing)
                 continue
@@ -155,6 +173,15 @@ final class DiagramCanvasView: NSView {
                 id: edge.id, source: edge.source, target: edge.target, points: points, label: edge.label,
                 labelX: (start.x + end.x) / 2, labelY: (start.y + end.y) / 2
             ))
+        }
+        let containers = Dictionary(uniqueKeysWithValues: diagram.containers.map { ($0.id, $0) })
+        var occupiedContainers: Set<String> = []
+        for node in diagram.nodes {
+            var parent = node.containerId
+            while let id = parent, let container = containers[id] {
+                occupiedContainers.insert(id)
+                parent = container.parentId
+            }
         }
         var minX = base.minX, minY = base.minY
         var maxX = base.minX+base.width, maxY = base.minY+base.height
@@ -173,6 +200,12 @@ final class DiagramCanvasView: NSView {
                 minX = min(minX, point.x); minY = min(minY, point.y)
                 maxX = max(maxX, point.x); maxY = max(maxY, point.y)
             }
+        }
+        for container in diagram.containers where !occupiedContainers.contains(container.id) {
+            let centerX = container.x ?? base.minX+1.6
+            let centerY = container.y ?? base.minY+1.2
+            minX = min(minX, centerX-container.width/2); minY = min(minY, centerY-container.height/2)
+            maxX = max(maxX, centerX+container.width/2); maxY = max(maxY, centerY+container.height/2)
         }
         return DiagramLayout(engine: base.engine, edgeRouting: diagram.diagram.edgeRouting, width: maxX - minX,
                              height: maxY - minY, minX: minX, minY: minY, nodes: nodes, edges: edges)
@@ -285,6 +318,17 @@ final class DiagramCanvasView: NSView {
             return
         }
         if isReadOnly { return }
+        if case .edge(let id) = selection,
+           let edge = edgeByID[id], let geometry = diagramLayout?.edges.first(where: { $0.id == id }),
+           let settings = diagram?.diagram {
+            let points = displayedEdgePoints(edge, geometry: geometry, settings: settings)
+            if let first = points.first, hypot(screenPoint(for: first).x-point.x, screenPoint(for: first).y-point.y) <= 11 {
+                endpointDrag = (id, true); endpointPointer = point; return
+            }
+            if let last = points.last, hypot(screenPoint(for: last).x-point.x, screenPoint(for: last).y-point.y) <= 11 {
+                endpointDrag = (id, false); endpointPointer = point; return
+            }
+        }
         if case .edge(let id) = selection, let edge = edgeByID[id], let geometry = diagramLayout?.edges.first(where: { $0.id == id }), let settings = diagram?.diagram {
             let handles = edge.waypoints.isEmpty
                 ? [routeMidpoint(displayedEdgePoints(edge, geometry: geometry, settings: settings))]
@@ -305,6 +349,12 @@ final class DiagramCanvasView: NSView {
            let rect = containerScreenRect(id, diagram: diagram, layout: layout) {
             let handle = NSRect(x: rect.maxX - 9, y: rect.maxY - 9, width: 18, height: 18)
             if handle.contains(point) {
+                if memberPositions(id, diagram: diagram, layout: layout).isEmpty {
+                    resizingEmptyContainerID = id
+                    emptyContainerResizeStart = point
+                    initialEmptyContainerSize = (container.width, container.height)
+                    return
+                }
                 resizingContainerID = id
                 resizeStart = point
                 initialContainerPadding = container.padding
@@ -412,6 +462,11 @@ final class DiagramCanvasView: NSView {
         let style = NSMenuItem(title: "Оформление и свойства…", action: #selector(openContextStyle), keyEquivalent: "")
         style.target = self
         menu.addItem(style)
+        if case .edge(let edgeID) = selection, edgeByID[edgeID]?.waypoints.isEmpty == false {
+            let resetRoute = NSMenuItem(title: "Сбросить маршрут этой связи", action: #selector(resetContextRoute), keyEquivalent: "")
+            resetRoute.target = self
+            menu.addItem(resetRoute)
+        }
         let delete = NSMenuItem(title: "Удалить", action: #selector(deleteContextSelection), keyEquivalent: "")
         delete.target = self
         menu.addItem(delete)
@@ -452,9 +507,19 @@ final class DiagramCanvasView: NSView {
 
     @objc private func openContextStyle() { onRequestStyle?() }
     @objc private func deleteContextSelection() { onDeleteSelection?() }
+    @objc private func resetContextRoute() {
+        guard case .edge(let id) = selection, let edge = edgeByID[id] else { return }
+        onSetEdgeWaypoints?(id, [], diagramLayout?.nodes ?? [])
+        waypointPreview.removeValue(forKey: edge.id)
+    }
 
     override func mouseDragged(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        if endpointDrag != nil {
+            endpointPointer = point
+            needsDisplay = true
+            return
+        }
         if let handle = draggingWaypoint, var bends = waypointPreview[handle.id] {
             let world = worldPoint(for: point)
             bends[handle.index] = RoutePoint(x: min(1000, max(-1000, world.x)), y: min(1000, max(-1000, world.y)))
@@ -489,6 +554,15 @@ final class DiagramCanvasView: NSView {
             needsDisplay = true
             return
         }
+        if let id = resizingEmptyContainerID, let emptyContainerResizeStart, let initialEmptyContainerSize {
+            let startWorld = worldPoint(for: emptyContainerResizeStart)
+            let endWorld = worldPoint(for: point)
+            emptyContainerSizePreview[id] = (min(20, max(1, initialEmptyContainerSize.width+Double(endWorld.x-startWorld.x))),
+                                             min(20, max(1, initialEmptyContainerSize.height+Double(endWorld.y-startWorld.y))))
+            didResizeContainer = true
+            needsDisplay = true
+            return
+        }
         if let panStart {
             offset = NSPoint(
                 x: initialOffset.x + point.x - panStart.x,
@@ -515,6 +589,15 @@ final class DiagramCanvasView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        if let drag = endpointDrag {
+            let point = convert(event.locationInWindow, from: nil)
+            if let diagram, let layout = diagramLayout, let node = hitNode(at: point, diagram: diagram, layout: layout) {
+                onReattachEdge?(drag.id, drag.source, node.id)
+            }
+            endpointDrag = nil; endpointPointer = nil
+            needsDisplay = true
+            return
+        }
         if let handle = draggingWaypoint {
             let bends = waypointPreview[handle.id] ?? []
             draggingWaypoint = nil
@@ -551,6 +634,14 @@ final class DiagramCanvasView: NSView {
             resizingContainerID = nil
             resizeStart = nil
             initialContainerPadding = nil
+            didResizeContainer = false
+            return
+        }
+        if let id = resizingEmptyContainerID {
+            if didResizeContainer, let size = emptyContainerSizePreview[id] { onResizeEmptyContainer?(id, size.width, size.height) }
+            resizingEmptyContainerID = nil
+            emptyContainerResizeStart = nil
+            initialEmptyContainerSize = nil
             didResizeContainer = false
             return
         }
@@ -639,7 +730,13 @@ final class DiagramCanvasView: NSView {
 
     private func containerWorldRect(_ id: String, diagram: DiagramProject, layout: DiagramLayout) -> NSRect? {
         let nodes = memberPositions(id, diagram: diagram, layout: layout)
-        guard let container = containerByID[id], let first = nodes.first else { return nil }
+        guard let container = containerByID[id] else { return nil }
+        if nodes.isEmpty {
+            let center = NSPoint(x: container.x ?? layout.minX+1.6, y: container.y ?? layout.minY+1.2)
+            let size = emptyContainerSizePreview[id] ?? (container.width, container.height)
+            return NSRect(x: center.x-size.width/2, y: center.y-size.height/2, width: size.width, height: size.height)
+        }
+        guard let first = nodes.first else { return nil }
         let firstCenter = dragPreview[first.id] ?? NSPoint(x: CGFloat(first.x), y: CGFloat(first.y))
         var rect = NSRect(x: firstCenter.x - CGFloat(first.width) / 2, y: firstCenter.y - CGFloat(first.height) / 2,
                           width: CGFloat(first.width), height: CGFloat(first.height))
@@ -693,7 +790,8 @@ final class DiagramCanvasView: NSView {
         for container in orderedContainers.reversed() {
             guard let rect = containerScreenRect(container.id, diagram: diagram, layout: layout) else { continue }
             let path = NSBezierPath(roundedRect: rect, xRadius: 11, yRadius: 11)
-            NSColor(hex: container.style.fill).withAlphaComponent(0.42).setFill()
+            let fill = NSColor(hex: container.style.fill)
+            fill.withAlphaComponent(fill.alphaComponent * 0.42).setFill()
             NSColor(hex: container.style.stroke).setStroke()
             path.lineWidth = 1.2
             path.fill()
@@ -744,6 +842,11 @@ final class DiagramCanvasView: NSView {
                 drawArrow(to: points[0], from: points[1], color: NSColor(hex: edge.style.color), kind: edge.style.arrowtail)
             }
             if isSelected {
+                for (index, endpoint) in [points[0], points[points.count-1]].enumerated() {
+                    let marker = NSBezierPath(ovalIn: NSRect(x: endpoint.x-6, y: endpoint.y-6, width: 12, height: 12))
+                    (index == 0 ? NSColor.systemGreen : NSColor.systemOrange).setFill(); marker.fill()
+                    NSColor.white.setStroke(); marker.lineWidth = 1.5; marker.stroke()
+                }
                 let handles = (waypointPreview[edge.id] ?? edge.waypoints).map { NSPoint(x: $0.x, y: $0.y) }
                 let centers = handles.isEmpty ? [routeMidpoint(points.map { worldPoint(for: $0) })] : handles
                 for center in centers {
@@ -752,6 +855,13 @@ final class DiagramCanvasView: NSView {
                     NSColor.controlAccentColor.setFill(); marker.fill()
                     NSColor.white.setStroke(); marker.lineWidth = 1; marker.stroke()
                 }
+            }
+            if let drag = endpointDrag, drag.id == edge.id, let pointer = endpointPointer {
+                let fixed = drag.source ? points.last! : points[0]
+                let preview = NSBezierPath(); preview.lineWidth = 2; preview.move(to: fixed); preview.line(to: pointer)
+                NSColor.controlAccentColor.setStroke(); preview.stroke()
+                let target = NSBezierPath(ovalIn: NSRect(x: pointer.x-6, y: pointer.y-6, width: 12, height: 12))
+                NSColor.controlAccentColor.setFill(); target.fill()
             }
             if !edge.label.isEmpty, let x = edgeLayout.labelX, let y = edgeLayout.labelY {
                 let followsPath = !edge.waypoints.isEmpty || waypointPreview[edge.id] != nil || edge.routing != nil
@@ -780,6 +890,15 @@ final class DiagramCanvasView: NSView {
             let selected = selection == .node(node.id)
             let contours = CanvasGeometry.paths(node)
             let closed = node.icon.flatMap { CanvasGeometry.icons[$0]?.closed } ?? [true]
+            let baseContour = contours.indices.filter { closed.indices.contains($0) && closed[$0] }
+                .max { contourArea(contours[$0]) < contourArea(contours[$1]) }
+            if let baseContour {
+                let points = contours[baseContour].map { NSPoint(x: rect.minX+$0.x*rect.width, y: rect.minY+$0.y*rect.height) }
+                if let first = points.first {
+                    let fill = NSBezierPath(); fill.move(to: first); appendEdgeSegments(points, to: fill); fill.close()
+                    NSColor(hex: node.style.fill).setFill(); fill.fill()
+                }
+            }
             for (index, contour) in contours.enumerated() {
                 let path = NSBezierPath()
                 let points = contour.map { NSPoint(x: rect.minX+$0.x*rect.width, y: rect.minY+$0.y*rect.height) }
@@ -787,9 +906,7 @@ final class DiagramCanvasView: NSView {
                 path.move(to: first); appendEdgeSegments(points, to: path)
                 path.lineJoinStyle = .round; path.lineCapStyle = .round
                 path.lineWidth = selected ? 2.6 : max(1, CGFloat(node.style.penwidth))
-                if closed.indices.contains(index) && closed[index] {
-                    path.close(); NSColor(hex: node.style.fill).setFill(); path.fill()
-                }
+                if closed.indices.contains(index) && closed[index] { path.close() }
                 (selected ? NSColor.controlAccentColor : NSColor(hex: node.style.stroke)).setStroke()
                 path.stroke()
             }
@@ -797,7 +914,7 @@ final class DiagramCanvasView: NSView {
             let textRect = node.icon == nil ? rect.insetBy(dx: 7, dy: 4)
                 : NSRect(x: rect.midX-max(rect.width, 170)/2, y: rect.minY-24, width: max(rect.width, 170), height: 20)
             let autoContrast = node.icon != nil && diagram.presentation.theme == "dark"
-                && ["#172238", "#0F172A"].contains(node.style.text.uppercased())
+                && ["#172238", "#0F172A"].contains(String(node.style.text.uppercased().prefix(7)))
             let color = autoContrast ? NSColor.white : NSColor(hex: node.style.text)
             drawText(node.label, in: textRect, color: color, size: fontSize, weight: .semibold, alignment: .center)
             if selected {
@@ -871,6 +988,11 @@ final class DiagramCanvasView: NSView {
 
     private func appendEdgeSegments(_ points: [NSPoint], to path: NSBezierPath) {
         for point in points.dropFirst() { path.line(to: point) }
+    }
+
+    private func contourArea(_ points: [NSPoint]) -> CGFloat {
+        let closed = Array(points.dropFirst()) + [points.first ?? .zero]
+        return abs(zip(points, closed).reduce(CGFloat.zero) { $0 + $1.0.x*$1.1.y-$1.1.x*$1.0.y })/2
     }
 
     private func hitEdge(at point: NSPoint, diagram: DiagramProject, layout: DiagramLayout) -> String? {

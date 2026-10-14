@@ -211,7 +211,7 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
     containers = []
     for container_id, statement in container_statements.items():
         attrs = statement.attrs
-        _check_attrs(attrs, {"label", "style", "color", "fillcolor", "fontcolor", "penwidth", "margin"}, f"контейнера {container_id}")
+        _check_attrs(attrs, {"label", "style", "color", "fillcolor", "fontcolor", "penwidth", "margin", "gs_x", "gs_y", "gs_width", "gs_height"}, f"контейнера {container_id}")
         _require_value(attrs, "style", "rounded,filled", f"контейнера {container_id}")
         _require_number(attrs, "penwidth", "1.2", f"контейнера {container_id}")
         old = existing_containers.get(container_id)
@@ -220,6 +220,10 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
             "label": attrs.get("label", old.label if old else container_id),
             "parent_id": statement.parent_id,
             "padding": _container_padding(attrs, old.padding if old else None, container_id),
+            "x": _number(attrs["gs_x"], f"gs_x контейнера {container_id}") if "gs_x" in attrs else old.x if old else None,
+            "y": _number(attrs["gs_y"], f"gs_y контейнера {container_id}") if "gs_y" in attrs else old.y if old else None,
+            "width": _number(attrs["gs_width"], f"gs_width контейнера {container_id}") if "gs_width" in attrs else old.width if old else 3,
+            "height": _number(attrs["gs_height"], f"gs_height контейнера {container_id}") if "gs_height" in attrs else old.height if old else 2,
             "style": {
                 "fill": attrs.get("fillcolor", old.style.fill if old else "#F1F5F9"),
                 "stroke": attrs.get("color", old.style.stroke if old else "#94A3B8"),
@@ -300,10 +304,10 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
     if direction not in {"TB", "LR", "BT", "RL"}:
         raise DOTEditError(f"Неподдерживаемый rankdir: {direction!r}")
     candidate_data["diagram"]["direction"] = direction
-    routing = graph_attrs.get("splines", {"straight": "line", "angled": "polyline", "orthogonal": "ortho"}[project.diagram.edge_routing])
-    routing_by_dot = {"line": "straight", "false": "straight", "polyline": "angled", "ortho": "orthogonal"}
+    routing = graph_attrs.get("splines", {"straight": "line", "angled": "polyline", "orthogonal": "ortho", "curved": "curved"}[project.diagram.edge_routing])
+    routing_by_dot = {"line": "straight", "false": "straight", "polyline": "angled", "ortho": "orthogonal", "curved": "curved"}
     if routing not in routing_by_dot:
-        raise DOTEditError(f"Неподдерживаемый splines: {routing!r}. Используйте line, polyline или ortho")
+        raise DOTEditError(f"Неподдерживаемый splines: {routing!r}. Используйте line, polyline, ortho или curved")
     candidate_data["diagram"]["edge_routing"] = routing_by_dot[routing]
     if "nodesep" in graph_attrs:
         candidate_data["diagram"]["node_spacing"] = _number(graph_attrs["nodesep"], "nodesep")

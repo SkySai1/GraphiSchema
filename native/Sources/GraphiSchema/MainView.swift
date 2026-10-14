@@ -3,12 +3,22 @@ import ObjectiveC
 import UniformTypeIdentifiers
 
 @MainActor
+private final class ThemeRootView: NSView {
+    var onAppearanceChange: (() -> Void)?
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        onAppearanceChange?()
+    }
+}
+
+@MainActor
 final class MainWindowController: NSWindowController, NSSplitViewDelegate {
     private let model: AppModel
-    private let rootView = NSView()
+    private let rootView = ThemeRootView()
     private let sidebar = SidebarView()
     private let workspace = WorkspaceView()
     private let codePanel = JSONCodePanelView()
+    private let splitView = NSSplitView()
     private var styleInspector: InspectorView?
     private var styleWindowController: NSWindowController?
     private var historyWindowController: VersionHistoryWindowController?
@@ -16,11 +26,15 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
     private let statusLabel = NSTextField(labelWithString: "Подключение…")
     private var undoButton: NSButton?
     private var redoButton: NSButton?
-    private var importButton: NSButton?
     private var ollamaWindowController: OllamaAssistantWindowController?
-    private var themeButton: NSButton?
     private var retainedActions: [ControlAction] = []
     private var didSetInitialSplitPositions = false
+    private var sidebarVisible = true
+    private var codePanelVisible = true
+    private var projectFileURL = UserDefaults.standard.string(forKey: "GraphiSchema.projectFile").map(URL.init(fileURLWithPath:))
+    private var sidebarMinimumWidth: NSLayoutConstraint?
+    private var codeMinimumWidth: NSLayoutConstraint?
+    private var menuItems: [String: NSMenuItem] = [:]
     private var lastCanvasDiagram: DiagramProject?
     private var lastCanvasLayout: DiagramLayout?
     private var lastCanvasSelection: DiagramSelection?
@@ -34,12 +48,14 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
             defer: false
         )
         window.title = "GraphiSchema"
-        window.minSize = NSSize(width: 1280, height: 720)
+        window.minSize = NSSize(width: 960, height: 620)
         window.center()
         super.init(window: window)
         window.contentView = rootView
         buildInterface()
         connectModel()
+        installMainMenu()
+        rootView.onAppearanceChange = { [weak self] in self?.model.updateSystemTheme() }
         AppTheme.configure(window)
     }
 
@@ -61,17 +77,16 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
         let header = buildHeader()
         let divider = NSBox()
         divider.boxType = .separator
-        let split = NSSplitView()
-        split.isVertical = true
-        split.dividerStyle = .thin
-        split.delegate = self
-        split.addArrangedSubview(sidebar)
-        split.addArrangedSubview(workspace)
-        split.addArrangedSubview(codePanel)
+        splitView.isVertical = true
+        splitView.dividerStyle = .thin
+        splitView.delegate = self
+        splitView.addArrangedSubview(sidebar)
+        splitView.addArrangedSubview(workspace)
+        splitView.addArrangedSubview(codePanel)
         sidebar.setContentCompressionResistancePriority(.required, for: .horizontal)
         codePanel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        [header, divider, split].forEach {
+        [header, divider, splitView].forEach {
             $0.translatesAutoresizingMaskIntoConstraints = false
             rootView.addSubview($0)
         }
@@ -83,13 +98,15 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
             divider.leadingAnchor.constraint(equalTo: rootView.leadingAnchor),
             divider.trailingAnchor.constraint(equalTo: rootView.trailingAnchor),
             divider.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 8),
-            split.leadingAnchor.constraint(equalTo: rootView.leadingAnchor),
-            split.trailingAnchor.constraint(equalTo: rootView.trailingAnchor),
-            split.topAnchor.constraint(equalTo: divider.bottomAnchor),
-            split.bottomAnchor.constraint(equalTo: rootView.bottomAnchor),
+            splitView.leadingAnchor.constraint(equalTo: rootView.leadingAnchor),
+            splitView.trailingAnchor.constraint(equalTo: rootView.trailingAnchor),
+            splitView.topAnchor.constraint(equalTo: divider.bottomAnchor),
+            splitView.bottomAnchor.constraint(equalTo: rootView.bottomAnchor),
         ])
-        sidebar.widthAnchor.constraint(greaterThanOrEqualToConstant: 225).isActive = true
-        codePanel.widthAnchor.constraint(greaterThanOrEqualToConstant: 380).isActive = true
+        sidebarMinimumWidth = sidebar.widthAnchor.constraint(greaterThanOrEqualToConstant: 225)
+        codeMinimumWidth = codePanel.widthAnchor.constraint(greaterThanOrEqualToConstant: 380)
+        sidebarMinimumWidth?.isActive = true
+        codeMinimumWidth?.isActive = true
     }
 
     func splitViewDidResizeSubviews(_ notification: Notification) {
@@ -102,11 +119,15 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
     }
 
     func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposedMinimumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
+        if dividerIndex == 0 && !sidebarVisible { return 0 }
+        if dividerIndex == 1 && !codePanelVisible { return splitView.subviews[0].frame.width + splitView.subviews[1].frame.width }
         if dividerIndex == 0 { return 225 }
         return splitView.subviews[0].frame.width + splitView.dividerThickness + 600
     }
 
     func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposedMaximumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
+        if dividerIndex == 0 && !sidebarVisible { return 0 }
+        if dividerIndex == 1 && !codePanelVisible { return splitView.bounds.width - splitView.dividerThickness }
         if dividerIndex == 0 { return 310 }
         return splitView.bounds.width - 380 - splitView.dividerThickness
     }
@@ -133,7 +154,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
         brand.orientation = .horizontal
         brand.alignment = .centerY
         brand.spacing = 10
-        brand.widthAnchor.constraint(equalToConstant: 205).isActive = true
+        brand.widthAnchor.constraint(equalToConstant: 175).isActive = true
 
         let titleStack = NSStackView(views: [
             makeLabel("ЛОКАЛЬНЫЙ ПРОЕКТ", size: 8, weight: .bold, color: .secondaryLabelColor),
@@ -142,6 +163,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
         titleStack.orientation = .vertical
         titleStack.alignment = .leading
         titleStack.spacing = 2
+        titleStack.widthAnchor.constraint(equalToConstant: 400).isActive = true
         titleField.isBordered = false
         titleField.drawsBackground = false
         titleField.font = .systemFont(ofSize: 15, weight: .semibold)
@@ -161,29 +183,18 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
         status.spacing = 7
         status.widthAnchor.constraint(greaterThanOrEqualToConstant: 130).isActive = true
 
-        importButton = makeButton("Импорт", symbol: "square.and.arrow.down") { [weak self] _ in self?.importJSON() }
-        let exportButton = makeButton("Экспорт", symbol: "square.and.arrow.up") { [weak self] _ in self?.exportJSON() }
-        let pngButton = makeButton("PNG", symbol: "photo") { [weak self] _ in self?.exportPNG() }
-        let historyButton = makeButton("История", symbol: "clock.arrow.circlepath") { [weak self] _ in self?.showHistory() }
-        let ollamaButton = makeButton("Настройки ИИ", symbol: "gearshape") { [weak self] _ in self?.showOllamaAssistant() }
-        let theme = makeButton("", symbol: "moon.circle") { [weak self] _ in
-            guard let self else { return }
-            self.model.updateTheme(self.model.diagram?.presentation.theme == "dark" ? "light" : "dark")
-        }
-        theme.imagePosition = .imageOnly; theme.toolTip = "Переключить дневную/ночную тему"
-        theme.identifier = NSUserInterfaceItemIdentifier("theme-toggle"); themeButton = theme
         undoButton = makeButton("Отменить", symbol: "arrow.uturn.backward") { [weak self] _ in self?.performHistoryCommand(redo: false) }
-        redoButton = makeButton("Повторить", symbol: "arrow.uturn.forward") { [weak self] _ in self?.performHistoryCommand(redo: true) }
         undoButton?.keyEquivalent = "z"
         undoButton?.keyEquivalentModifierMask = .command
-        redoButton?.keyEquivalent = "z"
-        redoButton?.keyEquivalentModifierMask = [.command, .shift]
+        redoButton = makeButton("Повторить", symbol: "arrow.uturn.forward") { [weak self] _ in self?.performHistoryCommand(redo: true) }
+        redoButton?.keyEquivalent = "y"
+        redoButton?.keyEquivalentModifierMask = .command
         let saveButton = makeButton("Сохранить", symbol: "checkmark.circle.fill", prominent: true) { [weak self] _ in self?.saveProject() }
 
-        let stack = NSStackView(views: [brand, titleStack, status, theme, importButton!, exportButton, pngButton, historyButton, ollamaButton, undoButton!, redoButton!, saveButton])
+        let stack = NSStackView(views: [brand, titleStack, status, NSView(), undoButton!, redoButton!, saveButton])
         stack.orientation = .horizontal
         stack.alignment = .centerY
-        stack.spacing = 12
+        stack.spacing = 10
         return stack
     }
 
@@ -197,6 +208,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
             self?.refreshSidebar()
             if let self { self.refreshCanvas(force: true) }
         }
+        sidebar.onShowProperties = { [weak self] in self?.showStyleWindow() }
         workspace.onSelectElement = { [weak self] selection in
             guard let self else { return }
             self.model.selection = selection
@@ -213,6 +225,9 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
         workspace.onSetEdgeWaypoints = { [weak self] id, points, positions in
             self?.model.setEdgeWaypoints(id, points: points, positions: positions)
         }
+        workspace.onReattachEdge = { [weak self] id, source, nodeID in
+            self?.model.setEdgeEndpoint(id, source: source, nodeID: nodeID)
+        }
         workspace.onCreateEdge = { [weak self] source, target in
             self?.model.addEdge(from: source, to: target)
         }
@@ -221,6 +236,16 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
         }
         workspace.onResizeContainer = { [weak self] id, padding in
             self?.model.editContainer(id) { $0.padding = padding }
+        }
+        workspace.onResizeEmptyContainer = { [weak self] id, width, height in
+            self?.model.resizeContainer(id, width: width, height: height)
+        }
+        workspace.onOptimizeRoutes = { [weak self] in self?.model.optimizeAllRoutes() }
+        workspace.onToggleSidebar = { [weak self] in self?.toggleSidebar() }
+        workspace.onToggleCodePanel = { [weak self] in self?.toggleCodePanel() }
+        workspace.onToggleChat = { [weak self] in
+            guard let self else { return }
+            self.workspace.setChatVisible(!self.workspace.isChatVisible)
         }
         workspace.onDropPaletteItem = { [weak self] item, x, y, containerID in
             guard let self else { return }
@@ -296,6 +321,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
               let window = styleWindowController?.window,
               window.isVisible
         else { return }
+        if NSApp.windows.contains(where: { $0 is NSColorPanel && $0.isVisible }) { return }
         inspector.update(model: model)
         let targetHeight = inspector.preferredWindowContentHeight
         if abs((window.contentView?.frame.height ?? 0) - targetHeight) > 2 {
@@ -320,12 +346,123 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
         titleField.stringValue = model.diagram?.project.title ?? ""
         statusLabel.stringValue = model.status
         statusLabel.toolTip = model.backend.status
-        AppTheme.apply(dark: model.diagram?.presentation.theme == "dark")
-        themeButton?.isEnabled = !model.isEditingLocked
-        importButton?.isEnabled = !model.isEditingLocked
+        AppTheme.apply(dark: model.diagram?.presentation.theme == "dark", mode: model.themeMode)
         undoButton?.isEnabled = model.history.canUndo && !model.isEditingLocked
         redoButton?.isEnabled = model.history.canRedo && !model.isEditingLocked
+        menuItems["startup-template"]?.state = model.loadStarterOnLaunch ? .on : .off
+        menuItems["theme-system"]?.state = model.themeMode == "system" ? .on : .off
+        menuItems["theme-light"]?.state = model.themeMode == "light" ? .on : .off
+        menuItems["theme-dark"]?.state = model.themeMode == "dark" ? .on : .off
+        menuItems["inverse-trackpad"]?.state = model.inverseTrackpad ? .on : .off
     }
+
+    private func installMainMenu() {
+        let main = NSMenu()
+        let appRoot = NSMenuItem(title: ProcessInfo.processInfo.processName, action: nil, keyEquivalent: ""); main.addItem(appRoot)
+        let appMenu = NSMenu()
+        appMenu.addItem(NSMenuItem(title: "О GraphiSchema", action: nil, keyEquivalent: ""))
+        appMenu.addItem(.separator())
+        appMenu.addItem(menuItem("Завершить GraphiSchema", #selector(NSApplication.terminate(_:)), key: "q", modifiers: .command, target: NSApp))
+        appRoot.submenu = appMenu
+
+        let fileRoot = NSMenuItem(title: "Файл", action: nil, keyEquivalent: ""); main.addItem(fileRoot)
+        let file = NSMenu()
+        file.addItem(menuItem("Открыть проект…", #selector(openProjectFromMenu(_:)), key: "o", modifiers: .command))
+        file.addItem(menuItem("Сохранить проект", #selector(saveProjectFromMenu(_:)), key: "s", modifiers: .command))
+        file.addItem(menuItem("Сохранить проект как…", #selector(saveProjectAsFromMenu(_:)), key: "s", modifiers: [.command, .shift]))
+        file.addItem(.separator())
+        file.addItem(menuItem("Загрузить базовый шаблон…", #selector(loadStarterFromMenu(_:))))
+        file.addItem(.separator())
+        file.addItem(menuItem("Импортировать JSON…", #selector(importJSONFromMenu(_:))))
+        file.addItem(menuItem("Экспортировать JSON…", #selector(exportJSONFromMenu(_:))))
+        file.addItem(menuItem("Экспортировать PNG…", #selector(exportPNGFromMenu(_:))))
+        file.addItem(menuItem("История версий…", #selector(showHistoryFromMenu(_:))))
+        fileRoot.submenu = file
+
+        let editRoot = NSMenuItem(title: "Правка", action: nil, keyEquivalent: ""); main.addItem(editRoot)
+        let edit = NSMenu()
+        edit.addItem(menuItem("Отменить", #selector(undoFromMenu(_:)), key: "z", modifiers: .command))
+        edit.addItem(menuItem("Повторить", #selector(redoFromMenu(_:)), key: "y", modifiers: .command))
+        edit.addItem(.separator())
+        edit.addItem(NSMenuItem(title: "Вырезать", action: #selector(NSText.cut(_:)), keyEquivalent: "x"))
+        edit.addItem(NSMenuItem(title: "Копировать", action: #selector(NSText.copy(_:)), keyEquivalent: "c"))
+        edit.addItem(NSMenuItem(title: "Вставить", action: #selector(NSText.paste(_:)), keyEquivalent: "v"))
+        edit.addItem(NSMenuItem(title: "Выбрать всё", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a"))
+        editRoot.submenu = edit
+
+        let viewRoot = NSMenuItem(title: "Вид", action: nil, keyEquivalent: ""); main.addItem(viewRoot)
+        let view = NSMenu()
+        view.addItem(menuItem("Показать/скрыть левую панель", #selector(toggleSidebarFromMenu(_:)), key: "1", modifiers: [.command, .option]))
+        view.addItem(menuItem("Показать/скрыть свойства и код", #selector(toggleCodePanelFromMenu(_:)), key: "2", modifiers: [.command, .option]))
+        view.addItem(menuItem("Показать/скрыть чат", #selector(toggleChatFromMenu(_:)), key: "3", modifiers: [.command, .option]))
+        view.addItem(.separator())
+        view.addItem(menuItem("Оптимизировать все линии", #selector(optimizeRoutesFromMenu(_:))))
+        viewRoot.submenu = view
+
+        let settingsRoot = NSMenuItem(title: "Настройки", action: nil, keyEquivalent: ""); main.addItem(settingsRoot)
+        let settings = NSMenu()
+        settings.addItem(menuItem("Ollama и системный промпт…", #selector(showOllamaFromMenu(_:))))
+        settings.addItem(menuItem("Переменные промпта…", #selector(showPromptVariablesFromMenu(_:))))
+        let startup = menuItem("Загружать базовый шаблон при пустом проекте", #selector(toggleStarterOnLaunch(_:)))
+        startup.identifier = NSUserInterfaceItemIdentifier("startup-template")
+        menuItems["startup-template"] = startup; settings.addItem(startup)
+        let themeRoot = NSMenuItem(title: "Цветовая тема", action: nil, keyEquivalent: "")
+        let themeMenu = NSMenu()
+        for (mode, title, key) in [("system", "Системная", "theme-system"), ("light", "Светлая", "theme-light"), ("dark", "Тёмная", "theme-dark")] {
+            let item = menuItem(title, #selector(changeThemeFromMenu(_:)))
+            item.representedObject = mode; item.identifier = NSUserInterfaceItemIdentifier(key)
+            menuItems[key] = item; themeMenu.addItem(item)
+        }
+        themeRoot.submenu = themeMenu; settings.addItem(themeRoot)
+        let inverse = menuItem("Инверсная прокрутка тачпада", #selector(toggleTrackpadFromMenu(_:)))
+        inverse.identifier = NSUserInterfaceItemIdentifier("inverse-trackpad")
+        menuItems["inverse-trackpad"] = inverse; settings.addItem(inverse)
+        settingsRoot.submenu = settings
+        NSApp.mainMenu = main
+    }
+
+    private func menuItem(_ title: String, _ action: Selector, key: String = "", modifiers: NSEvent.ModifierFlags = [], target: AnyObject? = nil) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+        item.keyEquivalentModifierMask = modifiers
+        item.target = target ?? self
+        return item
+    }
+
+    private func toggleSidebar() {
+        sidebarVisible.toggle(); sidebar.isHidden = !sidebarVisible
+        sidebarMinimumWidth?.isActive = sidebarVisible
+        splitView.adjustSubviews()
+        if sidebarVisible { splitView.setPosition(250, ofDividerAt: 0) }
+        else { splitView.setPosition(0, ofDividerAt: 0) }
+    }
+
+    private func toggleCodePanel() {
+        codePanelVisible.toggle(); codePanel.isHidden = !codePanelVisible
+        codeMinimumWidth?.isActive = codePanelVisible
+        splitView.adjustSubviews()
+        if codePanelVisible { splitView.setPosition(splitView.bounds.width-420, ofDividerAt: 1) }
+        else { splitView.setPosition(splitView.bounds.width-splitView.dividerThickness, ofDividerAt: 1) }
+    }
+
+    @objc private func openProjectFromMenu(_ sender: Any?) { openProjectFile() }
+    @objc private func saveProjectFromMenu(_ sender: Any?) { saveProject() }
+    @objc private func saveProjectAsFromMenu(_ sender: Any?) { saveProjectAs() }
+    @objc private func importJSONFromMenu(_ sender: Any?) { importJSON() }
+    @objc private func exportJSONFromMenu(_ sender: Any?) { exportJSON() }
+    @objc private func exportPNGFromMenu(_ sender: Any?) { exportPNG() }
+    @objc private func showHistoryFromMenu(_ sender: Any?) { showHistory() }
+    @objc private func undoFromMenu(_ sender: Any?) { performHistoryCommand(redo: false) }
+    @objc private func redoFromMenu(_ sender: Any?) { performHistoryCommand(redo: true) }
+    @objc private func toggleSidebarFromMenu(_ sender: Any?) { toggleSidebar() }
+    @objc private func toggleCodePanelFromMenu(_ sender: Any?) { toggleCodePanel() }
+    @objc private func toggleChatFromMenu(_ sender: Any?) { workspace.setChatVisible(!workspace.isChatVisible) }
+    @objc private func optimizeRoutesFromMenu(_ sender: Any?) { model.optimizeAllRoutes() }
+    @objc private func showOllamaFromMenu(_ sender: Any?) { showOllamaAssistant() }
+    @objc private func showPromptVariablesFromMenu(_ sender: Any?) { showOllamaAssistant(showVariables: true) }
+    @objc private func changeThemeFromMenu(_ sender: NSMenuItem) { model.updateThemeMode(sender.representedObject as? String ?? "system") }
+    @objc private func toggleTrackpadFromMenu(_ sender: NSMenuItem) { model.inverseTrackpad.toggle() }
+    @objc private func toggleStarterOnLaunch(_ sender: NSMenuItem) { model.loadStarterOnLaunch.toggle() }
+    @objc private func loadStarterFromMenu(_ sender: Any?) { loadStarterTemplate() }
 
     private func selectTab(_ tab: WorkspaceTab) {
         Task { @MainActor in
@@ -414,19 +551,92 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
 
     private func saveProject() {
         Task { @MainActor in
-            guard model.activeProposal == nil else {
-                showAlert("Сначала примените или отмените предложение.")
-                return
-            }
-            if model.jsonDraftIsDirty {
-                do { try await model.applyJSONDraft() }
-                catch { showAlert(error.localizedDescription); return }
-            } else {
-                do { try await model.saveNow() }
-                catch { showAlert("Не удалось сохранить проект: \(error.localizedDescription)"); refreshHeader(); return }
-            }
-            refreshHeader()
+            guard let projectFileURL else { saveProjectAs(); return }
+            do {
+                try await prepareForFileSave()
+                try model.exportData().write(to: projectFileURL, options: .atomic)
+                model.status = "Сохранено · \(projectFileURL.lastPathComponent)"
+                refreshHeader()
+            } catch { showAlert("Не удалось сохранить проект: \(error.localizedDescription)"); refreshHeader() }
         }
+    }
+
+    private func saveProjectAs() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await prepareForFileSave()
+                let panel = NSSavePanel()
+                panel.appearance = NSApp.appearance
+                panel.allowedContentTypes = [.json]
+                panel.nameFieldStringValue = "\((model.diagram?.project.title ?? "graphischema-project").replacingOccurrences(of: "/", with: "-" )).json"
+                panel.beginSheetModal(for: window!) { [weak self] response in
+                    guard response == .OK, let url = panel.url, let self else { return }
+                    do {
+                        try self.model.exportData().write(to: url, options: .atomic)
+                        self.setProjectFile(url)
+                        self.model.status = "Сохранено · \(url.lastPathComponent)"
+                        self.refreshHeader()
+                    } catch { self.showAlert("Не удалось сохранить файл: \(error.localizedDescription)") }
+                }
+            } catch { showAlert("Не удалось подготовить проект к сохранению: \(error.localizedDescription)") }
+        }
+    }
+
+    private func prepareForFileSave() async throws {
+        guard model.activeProposal == nil else { throw NSError(domain: "GraphiSchema", code: 1, userInfo: [NSLocalizedDescriptionKey: "Сначала примените или отмените предложение."]) }
+        if model.jsonDraftIsDirty { try await model.applyJSONDraft() }
+        else { try await model.saveNow() }
+    }
+
+    private func setProjectFile(_ url: URL) {
+        projectFileURL = url
+        UserDefaults.standard.set(url.path, forKey: "GraphiSchema.projectFile")
+    }
+
+    private func openProjectFile() {
+        guard !model.isEditingLocked else { showAlert("Сначала примените или сбросьте текущий черновик."); return }
+        let panel = NSOpenPanel()
+        panel.appearance = NSApp.appearance
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.beginSheetModal(for: window!) { [weak self] response in
+            guard response == .OK, let url = panel.url, let self else { return }
+            Task { @MainActor in
+                do {
+                    let scoped = url.startAccessingSecurityScopedResource()
+                    defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                    let data = try Data(contentsOf: url)
+                    if await self.model.importJSON(data) { self.setProjectFile(url) }
+                    self.refreshAll()
+                } catch { self.showAlert("Не удалось открыть проект: \(error.localizedDescription)") }
+            }
+        }
+    }
+
+    private func starterTemplateData() -> Data? {
+        let candidates = [
+            Bundle.main.resourceURL?.appendingPathComponent("GraphiSchema/examples/starter.json"),
+            URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("examples/starter.json"),
+        ].compactMap { $0 }
+        return candidates.lazy.compactMap { try? Data(contentsOf: $0) }.first
+    }
+
+    private func loadStarterTemplate() {
+        guard !model.isEditingLocked else { showAlert("Сначала примените или сбросьте текущий черновик."); return }
+        guard let data = starterTemplateData() else { showAlert("Файл базового шаблона не найден."); return }
+        Task { @MainActor in
+            if await model.importJSON(data) { projectFileURL = nil; UserDefaults.standard.removeObject(forKey: "GraphiSchema.projectFile") }
+            refreshAll()
+        }
+    }
+
+    func loadStarterTemplateIfNeeded() async {
+        guard model.loadStarterOnLaunch, model.nodes.isEmpty, model.containers.isEmpty, model.edges.isEmpty,
+              let data = starterTemplateData() else { return }
+        await model.importJSON(data)
+        refreshAll()
     }
 
     private func performHistoryCommand(redo: Bool) {
@@ -455,7 +665,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
                 do {
                     let scoped = url.startAccessingSecurityScopedResource()
                     defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-                    await self.model.importJSON(try Data(contentsOf: url))
+                    _ = await self.model.importJSON(try Data(contentsOf: url))
                     self.refreshAll()
                 } catch { self.showAlert(error.localizedDescription) }
             }
@@ -580,16 +790,18 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
         }
     }
 
-    private func showOllamaAssistant() {
+    private func showOllamaAssistant(showVariables: Bool = false) {
         if let controller = ollamaWindowController {
             controller.showWindow(self)
             controller.window?.makeKeyAndOrderFront(self)
+            if showVariables { controller.showVariables() }
             return
         }
         let controller = OllamaAssistantWindowController(model: model)
         ollamaWindowController = controller
         controller.showWindow(self)
         controller.window?.makeKeyAndOrderFront(self)
+        if showVariables { controller.showVariables() }
     }
 
     private func runOllamaPrompt(_ prompt: String, mode: Int) {
@@ -952,6 +1164,7 @@ private final class SidebarView: NSView {
     var onAddContainer: (() -> Void)?
     var onAddEdge: (() -> Void)?
     var onSelect: ((DiagramSelection) -> Void)?
+    var onShowProperties: (() -> Void)?
 
     private let scrollView = NSScrollView()
     private let stack = NSStackView()
@@ -966,6 +1179,7 @@ private final class SidebarView: NSView {
     private var paletteItemViews: [String: PaletteItemView] = [:]
     private var widthConstraints: [ObjectIdentifier: NSLayoutConstraint] = [:]
     private var actions: [ControlAction] = []
+    private var rowActions: [ControlAction] = []
     private weak var currentModel: AppModel?
 
     override init(frame frameRect: NSRect) {
@@ -996,6 +1210,10 @@ private final class SidebarView: NSView {
         collectionPicker.target = self
         collectionPicker.action = #selector(selectCollection)
         collectionPicker.font = .systemFont(ofSize: 10)
+        addArranged(section("КОЛЛЕКЦИЯ ОБЪЕКТОВ"), to: paletteStack)
+        addArranged(collectionPicker, to: paletteStack)
+        addArranged(searchField, to: paletteStack)
+        addArranged(hint("Нажмите или перетащите объект на холст"), to: paletteStack)
         scrollView.documentView = stack
         scrollView.identifier = NSUserInterfaceItemIdentifier("palette-scroll")
         scrollView.hasVerticalScroller = true
@@ -1047,15 +1265,15 @@ private final class SidebarView: NSView {
     }
 
     private func rebuildPalette(model: AppModel, query: String) {
-        clearArrangedSubviews(from: paletteStack)
-        actions.removeAll()
+        let scrollOrigin = scrollView.contentView.bounds.origin
+        for view in Array(paletteStack.arrangedSubviews.dropFirst(4)) {
+            widthConstraints.removeValue(forKey: ObjectIdentifier(view))?.isActive = false
+            paletteStack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
         if let selected = collectionPicker.itemArray.first(where: { ($0.representedObject as? String) == selectedCollectionID }) {
             collectionPicker.select(selected)
         }
-        addArranged(section("КОЛЛЕКЦИЯ ОБЪЕКТОВ"), to: paletteStack)
-        addArranged(collectionPicker, to: paletteStack)
-        addArranged(searchField, to: paletteStack)
-        addArranged(hint("Нажмите или перетащите объект на холст"), to: paletteStack)
         let paletteItems = (PaletteLibrary.collection(id: selectedCollectionID)?.objects ?? []).filter {
             query.isEmpty || $0.title.localizedLowercase.contains(query) || $0.detail.localizedLowercase.contains(query) || $0.kind.localizedLowercase.contains(query)
         }
@@ -1068,11 +1286,16 @@ private final class SidebarView: NSView {
             addArranged(paletteItem, to: paletteStack)
         }
         if paletteItems.isEmpty { addArranged(hint("Объекты не найдены"), to: paletteStack) }
+        needsLayout = true
+        layoutSubtreeIfNeeded()
+        scrollView.contentView.scroll(to: scrollOrigin)
+        scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
     private func rebuildContent(model: AppModel) {
         clearArrangedSubviews(from: contentStack)
         actions.removeAll()
+        rowActions.removeAll()
         addArranged(separator(), to: contentStack)
         addArranged(section("ДЕЙСТВИЯ"), to: contentStack)
         let addContainer = actionButton("Добавить контейнер", symbol: "rectangle.3.group") { [weak self] in self?.onAddContainer?() }
@@ -1085,13 +1308,13 @@ private final class SidebarView: NSView {
         addArranged(section("КОНТЕЙНЕРЫ · \(model.containers.count)"), to: contentStack)
         if model.containers.isEmpty { addArranged(hint("Нет контейнеров"), to: contentStack) }
         for container in model.containers {
-            addArranged(elementButton(container.label, symbol: "rectangle.dashed", color: NSColor(hex: container.style.stroke), selected: model.selection == .container(container.id)) { [weak self] in self?.onSelect?(.container(container.id)) }, to: contentStack)
+            addArranged(elementButton(container.label, symbol: "rectangle.dashed", color: NSColor(hex: container.style.stroke), selected: model.selection == .container(container.id), action: { [weak self] in self?.onSelect?(.container(container.id)) }, context: { [weak self] in self?.onSelect?(.container(container.id)); self?.onShowProperties?() }), to: contentStack)
         }
         addArranged(separator(), to: contentStack)
         addArranged(section("КОМПОНЕНТЫ · \(model.nodes.count)"), to: contentStack)
         if model.nodes.isEmpty { addArranged(hint("Нет компонентов"), to: contentStack) }
         for node in model.nodes {
-            addArranged(elementButton(node.label, symbol: "square", color: NSColor(hex: node.style.stroke), selected: model.selection == .node(node.id)) { [weak self] in self?.onSelect?(.node(node.id)) }, to: contentStack)
+            addArranged(elementButton(node.label, symbol: "square", color: NSColor(hex: node.style.stroke), selected: model.selection == .node(node.id), action: { [weak self] in self?.onSelect?(.node(node.id)) }, context: { [weak self] in self?.onSelect?(.node(node.id)); self?.onShowProperties?() }), to: contentStack)
         }
         addArranged(separator(), to: contentStack)
         addArranged(section("СВЯЗИ · \(model.edges.count)"), to: contentStack)
@@ -1101,7 +1324,7 @@ private final class SidebarView: NSView {
             let source = nodeLabels[edge.source] ?? edge.source
             let target = nodeLabels[edge.target] ?? edge.target
             let title = edge.label.isEmpty ? "\(source) → \(target)" : edge.label
-            addArranged(elementButton(title, symbol: "arrow.right", color: NSColor(hex: edge.style.color), selected: model.selection == .edge(edge.id)) { [weak self] in self?.onSelect?(.edge(edge.id)) }, to: contentStack)
+            addArranged(elementButton(title, symbol: "arrow.right", color: NSColor(hex: edge.style.color), selected: model.selection == .edge(edge.id), action: { [weak self] in self?.onSelect?(.edge(edge.id)) }, context: { [weak self] in self?.onSelect?(.edge(edge.id)); self?.onShowProperties?() }), to: contentStack)
         }
         addArranged(separator(), to: contentStack)
         let local = makeLabel("●  Данные и backend остаются локально", size: 9, weight: .medium, color: NSColor(hex: "#3F8064"))
@@ -1121,7 +1344,6 @@ private final class SidebarView: NSView {
     @objc private func searchPalette() {
         guard let currentModel else { return }
         update(model: currentModel)
-        window?.makeFirstResponder(searchField)
     }
 
     @objc private func selectCollection() {
@@ -1163,8 +1385,19 @@ private final class SidebarView: NSView {
         return button
     }
 
-    private func elementButton(_ title: String, symbol: String, color: NSColor, selected: Bool, action: @escaping () -> Void) -> NSButton {
-        let button = makeButton(title, symbol: symbol) { _ in action() }
+    private func elementButton(_ title: String, symbol: String, color: NSColor, selected: Bool,
+                               action: @escaping () -> Void, context: @escaping () -> Void) -> NSButton {
+        let button = SidebarElementButton(title: title, target: nil, action: nil)
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
+        button.imagePosition = .imageLeading
+        button.controlSize = .small
+        button.bezelStyle = .rounded
+        button.font = .systemFont(ofSize: 11)
+        button.onContext = context
+        let proxy = ControlAction { _ in action() }
+        button.target = proxy
+        button.action = #selector(ControlAction.invoke(_:))
+        rowActions.append(proxy)
         button.isBordered = false
         button.alignment = .left
         button.contentTintColor = selected ? .controlAccentColor : color
@@ -1192,15 +1425,27 @@ private final class SidebarView: NSView {
 }
 
 @MainActor
+private final class SidebarElementButton: NSButton {
+    var onContext: (() -> Void)?
+    override func rightMouseDown(with event: NSEvent) { onContext?() }
+}
+
+@MainActor
 private final class WorkspaceView: NSView {
     var onSelectElement: ((DiagramSelection) -> Void)?
     var onMoveNode: ((String, Double, Double) -> Void)?
     var onResizeNode: ((String, Double, Double) -> Void)?
     var onCreateEdge: ((String, String) -> Void)?
     var onSetEdgeWaypoints: ((String, [RoutePoint], [LayoutNode]) -> Void)?
+    var onReattachEdge: ((String, Bool, String) -> Void)?
     var onMoveContainer: ((String, Double, Double) -> Void)?
     var onResizeContainer: ((String, Double) -> Void)?
+    var onResizeEmptyContainer: ((String, Double, Double) -> Void)?
     var onDropPaletteItem: ((PaletteObject, Double, Double, String?) -> Void)?
+    var onOptimizeRoutes: (() -> Void)?
+    var onToggleSidebar: (() -> Void)?
+    var onToggleCodePanel: (() -> Void)?
+    var onToggleChat: (() -> Void)?
     var onShowStyle: (() -> Void)?
     var onConfigureOllama: (() -> Void)?
     var onOllamaMessage: ((String, Int) -> Void)?
@@ -1220,6 +1465,8 @@ private final class WorkspaceView: NSView {
     private var cancelProposalButton = NSButton(title: "Отмена", target: nil, action: nil)
     private var actions: [ControlAction] = []
     private var showingProposal = false
+    private var chatHeightConstraint: NSLayoutConstraint?
+    private(set) var isChatVisible = true
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -1283,14 +1530,21 @@ private final class WorkspaceView: NSView {
 
     func appendChatMessage(role: String, text: String) { chatPanel.appendMessage(role: role, text: text) }
     func setOllamaBusy(_ busy: Bool) { chatPanel.setBusy(busy) }
+    func setChatVisible(_ visible: Bool) {
+        isChatVisible = visible
+        chatPanel.isHidden = !visible
+        chatHeightConstraint?.constant = visible ? 205 : 0
+    }
 
     private func updateCanvasStatus(_ model: AppModel) {
         footer.stringValue = "Ревизия \(model.revision.isEmpty ? "—" : model.revision) · узлы: движение/размер · синий маркер: связь · ⌥ панорама"
         footer.toolTip = "Перетаскивайте компоненты из левой палитры на холст. Выберите узел: нижний правый маркер меняет размер, синий маркер справа создаёт связь перетаскиванием к другому узлу. Нажмите линию, чтобы выбрать связь и открыть её стиль. Option панорамирует; Command + прокрутка и щипок меняют масштаб."
         if model.diagram?.diagram.layoutMode == "manual" {
-            layoutLabel.stringValue = "Graphviz · neato · вручную"
+            layoutLabel.stringValue = "Размещение вручную · Graphviz маршрутизирует"
+            layoutLabel.toolTip = "В ручном режиме координаты узлов задаёт пользователь. Graphviz neato -n2 сохраняет эти координаты и рассчитывает пути связей."
         } else {
-            layoutLabel.stringValue = "Graphviz · \(model.layout?.engine ?? model.diagram?.diagram.layoutEngine ?? "dot")"
+            layoutLabel.stringValue = "Автоматически · Graphviz \(model.layout?.engine ?? model.diagram?.diagram.layoutEngine ?? "dot")"
+            layoutLabel.toolTip = "Graphviz \(model.layout?.engine ?? model.diagram?.diagram.layoutEngine ?? "dot") размещает узлы и рассчитывает соединения."
         }
     }
 
@@ -1317,6 +1571,14 @@ private final class WorkspaceView: NSView {
                 : NSColor.secondaryLabelColor
         }
         grid.toolTip = "Показать или скрыть сетку"
+        let sidebarToggle = makeButton("", symbol: "sidebar.left") { [weak self] _ in self?.onToggleSidebar?() }
+        sidebarToggle.imagePosition = .imageOnly; sidebarToggle.toolTip = "Показать или скрыть левую панель"
+        let codeToggle = makeButton("", symbol: "sidebar.right") { [weak self] _ in self?.onToggleCodePanel?() }
+        codeToggle.imagePosition = .imageOnly; codeToggle.toolTip = "Показать или скрыть панель свойств и кода"
+        let chatToggle = makeButton("", symbol: "bubble.left.and.bubble.right") { [weak self] _ in self?.onToggleChat?() }
+        chatToggle.imagePosition = .imageOnly; chatToggle.toolTip = "Показать или скрыть чат Ollama"
+        let optimize = makeButton("Оптимизировать линии", symbol: "arrow.trianglehead.2.clockwise") { [weak self] _ in self?.onOptimizeRoutes?() }
+        optimize.toolTip = "Удаляет ручные изгибы и индивидуальные настройки маршрута. Операция попадает в историю и отменяется через ⌘Z."
         styleButton = makeButton("Стиль", symbol: "paintpalette") { [weak self] _ in self?.onShowStyle?() }
         applyProposalButton = makeButton("Применить", symbol: "checkmark.circle.fill") { [weak self] _ in self?.onApplyProposal?() }
         cancelProposalButton = makeButton("Отменить", symbol: "xmark") { [weak self] _ in self?.onCancelProposal?() }
@@ -1325,9 +1587,11 @@ private final class WorkspaceView: NSView {
         canvasView.onMoveNode = { [weak self] id, x, y in self?.onMoveNode?(id, x, y) }
         canvasView.onResizeNode = { [weak self] id, width, height in self?.onResizeNode?(id, width, height) }
         canvasView.onSetEdgeWaypoints = { [weak self] id, points, positions in self?.onSetEdgeWaypoints?(id, points, positions) }
+        canvasView.onReattachEdge = { [weak self] id, source, nodeID in self?.onReattachEdge?(id, source, nodeID) }
         canvasView.onCreateEdge = { [weak self] source, target in self?.onCreateEdge?(source, target) }
         canvasView.onMoveContainer = { [weak self] id, x, y in self?.onMoveContainer?(id, x, y) }
         canvasView.onResizeContainer = { [weak self] id, padding in self?.onResizeContainer?(id, padding) }
+        canvasView.onResizeEmptyContainer = { [weak self] id, width, height in self?.onResizeEmptyContainer?(id, width, height) }
         canvasView.onDropPaletteItem = { [weak self] item, x, y, containerID in self?.onDropPaletteItem?(item, x, y, containerID) }
         canvasView.onRequestStyle = { [weak self] in self?.onShowStyle?() }
         canvasView.onDeleteSelection = { [weak self] in self?.onDeleteSelection?() }
@@ -1335,6 +1599,9 @@ private final class WorkspaceView: NSView {
         chatPanel.onSend = { [weak self] prompt, mode in self?.onOllamaMessage?(prompt, mode) }
         chatPanel.onApplyProposal = { [weak self] in self?.onApplyProposal?() }
         chatPanel.onCancelProposal = { [weak self] in self?.onCancelProposal?() }
+        chatPanel.onPromptExpansionChanged = { [weak self] expanded in
+            self?.chatHeightConstraint?.constant = expanded ? 270 : 205
+        }
         let spacer = NSView()
         countLabel.font = .systemFont(ofSize: 10)
         countLabel.textColor = .secondaryLabelColor
@@ -1347,6 +1614,10 @@ private final class WorkspaceView: NSView {
         header.addArrangedSubview(zoomIn)
         header.addArrangedSubview(fit)
         header.addArrangedSubview(grid)
+        header.addArrangedSubview(optimize)
+        header.addArrangedSubview(sidebarToggle)
+        header.addArrangedSubview(codeToggle)
+        header.addArrangedSubview(chatToggle)
         header.addArrangedSubview(spacer)
         header.addArrangedSubview(countLabel)
         header.addArrangedSubview(makeLabel("·", size: 10, weight: .regular, color: .tertiaryLabelColor))
@@ -1363,8 +1634,10 @@ private final class WorkspaceView: NSView {
             canvasView.leadingAnchor.constraint(equalTo: content.leadingAnchor), canvasView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             canvasView.topAnchor.constraint(equalTo: content.topAnchor), canvasView.bottomAnchor.constraint(equalTo: chatPanel.topAnchor),
             chatPanel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 8), chatPanel.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -8),
-            chatPanel.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -6), chatPanel.heightAnchor.constraint(equalToConstant: 205),
+            chatPanel.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -6),
         ])
+        chatHeightConstraint = chatPanel.heightAnchor.constraint(equalToConstant: 205)
+        chatHeightConstraint?.isActive = true
 
         footer.font = .systemFont(ofSize: 9)
         footer.textColor = .tertiaryLabelColor
@@ -1460,6 +1733,7 @@ private final class JSONCodePanelView: NSView, NSTextViewDelegate {
         modeControl.action = #selector(modeChanged(_:))
 
         codeTextView.isRichText = false
+        codeTextView.identifier = NSUserInterfaceItemIdentifier("diagram-json-editor")
         codeTextView.isAutomaticQuoteSubstitutionEnabled = false
         codeTextView.isAutomaticDashSubstitutionEnabled = false
         codeTextView.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
@@ -1613,6 +1887,7 @@ private final class InspectorView: NSView {
     private var deleteButton: NSButton?
     private var displayedDiagram: DiagramProject?
     private var displayedSelection: DiagramSelection?
+    private weak var currentModel: AppModel?
     private var figureCollectionID: String?
     private var figureNodeID: String?
 
@@ -1628,6 +1903,7 @@ private final class InspectorView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     func update(model: AppModel) {
+        currentModel = model
         if displayedDiagram == model.diagram && displayedSelection == model.selection {
             setInteractionState(isEditingLocked: model.isEditingLocked)
             return
@@ -1650,22 +1926,24 @@ private final class InspectorView: NSView {
                 ("LR", "Слева направо"), ("TB", "Сверху вниз"), ("RL", "Справа налево"), ("BT", "Снизу вверх"),
             ]) { value in model.updateDirection(value) }
             addEdgeRouting(model: model, label: "Маршрут связей")
-            addPopup("Тема", value: model.diagram?.presentation.theme ?? "light", choices: [("light", "Дневная"), ("dark", "Ночная")]) { model.updateTheme($0) }
+            addPopup("Тема", value: model.themeMode, choices: [("system", "Системная"), ("light", "Светлая"), ("dark", "Тёмная")]) { model.updateThemeMode($0) }
             addPopup("Тачпад", value: model.inverseTrackpad ? "inverse" : "system", choices: [("inverse", "Инверсная навигация"), ("system", "Системная навигация")]) { model.inverseTrackpad = $0 == "inverse" }
             addSection("КОМПОНОВКА")
-            let engine = model.diagram?.diagram.layoutMode == "manual"
-                ? "neato (ручной)"
-                : (model.diagram?.diagram.layoutEngine ?? "dot")
-            addReadOnly("Движок", value: engine)
+            addPopup("Движок Graphviz", value: model.diagram?.diagram.layoutEngine ?? "dot", choices: [
+                ("dot", "dot · иерархия"), ("neato", "neato · свободная сеть"), ("fdp", "fdp · силовая компоновка"),
+                ("sfdp", "sfdp · большая сеть"), ("twopi", "twopi · радиальная"), ("circo", "circo · кольцевая"),
+            ], tooltip: model.diagram?.diagram.layoutMode == "manual"
+                ? "При ручном размещении Graphviz neato -n2 сохраняет координаты узлов и маршрутизирует связи. Этот движок применяется после возврата в автоматический режим."
+                : "Выбранный Graphviz-движок размещает узлы и прокладывает связи.") { model.updateLayoutEngine($0) }
             addPopup("Режим", value: model.diagram?.diagram.layoutMode ?? "auto", choices: [
                 ("auto", "Автоматический"), ("manual", "Ручной"),
-            ]) { value in model.updateLayoutMode(value) }
+            ], tooltip: "Автоматический: Graphviz размещает узлы. Ручной: координаты остаются фиксированными, neato -n2 пересчитывает связи.") { value in model.updateLayoutMode(value) }
         case .node(let id):
             title.stringValue = "Компонент"
             if let node = model.nodes.first(where: { $0.id == id }) {
                 addSection("ОБЩЕЕ")
                 addText("Название", value: node.label) { value in model.editNode(id) { $0.label = value } }
-                addText("Тип", value: node.kind) { value in model.editNode(id) { $0.kind = value } }
+                addText("Тип", value: node.kind, tooltip: "Семантический класс компонента. Учитывается при анализе и генерации Ollama, но не меняет форму и геометрию.") { value in model.editNode(id) { $0.kind = value } }
                 addReadOnly("ID", value: node.id)
                 addPopup("Контейнер", value: node.containerId ?? "", choices: [("", "Без контейнера")] + model.containers.map { ($0.id, $0.label) }) { value in
                     model.editNode(id) { $0.containerId = value.isEmpty ? nil : value }
@@ -1733,7 +2011,7 @@ private final class InspectorView: NSView {
                 addPopup("Стиль линии", value: item.style.lineStyle, choices: [
                     ("solid", "Сплошная"), ("dashed", "Пунктирная"), ("dotted", "Точечная"), ("bold", "Жирная"),
                 ]) { value in model.editEdge(id) { $0.style.lineStyle = value } }
-                addPopup("Маршрут этой связи", value: item.routing ?? "", choices: [("", "Как у диаграммы"), ("straight", "Прямая"), ("angled", "Косая ломаная"), ("orthogonal", "Прямоугольная")]) { value in model.editEdge(id) { $0.routing = value.isEmpty ? nil : value } }
+                addPopup("Маршрут этой связи", value: item.routing ?? "", choices: [("", "Как у диаграммы"), ("straight", "Прямая"), ("angled", "Косая ломаная"), ("orthogonal", "Прямоугольная"), ("curved", "Кривая · Graphviz")]) { value in model.editEdge(id) { $0.routing = value.isEmpty ? nil : value } }
                 addPopup("Привязка источника", value: item.sourcePort, choices: CanvasGeometry.portChoices(model.nodes.first { $0.id == item.source })) { value in model.editEdge(id) { $0.sourcePort = value } }
                 addPopup("Привязка цели", value: item.targetPort, choices: CanvasGeometry.portChoices(model.nodes.first { $0.id == item.target })) { value in model.editEdge(id) { $0.targetPort = value } }
                 addPopup("Наконечник", value: item.style.arrowhead, choices: ["normal", "vee", "none", "diamond", "dot", "box", "crow", "tee"].map { ($0, $0) }) { value in model.editEdge(id) { $0.style.arrowhead = value } }
@@ -1845,14 +2123,15 @@ private final class InspectorView: NSView {
 
     private func addEdgeRouting(model: AppModel, label: String) {
         addPopup(label, value: model.diagram?.diagram.edgeRouting ?? "angled", choices: [
-            ("straight", "Прямые"), ("angled", "Косые ломаные"), ("orthogonal", "Прямоугольные"),
+            ("straight", "Прямые"), ("angled", "Косые ломаные"), ("orthogonal", "Прямоугольные"), ("curved", "Кривые · Graphviz"),
         ]) { value in model.updateEdgeRouting(value) }
     }
 
-    private func addText(_ label: String, value: String, changed: @escaping (String) -> Void) {
+    private func addText(_ label: String, value: String, tooltip: String? = nil, changed: @escaping (String) -> Void) {
         let field = NSTextField(string: value)
         field.identifier = NSUserInterfaceItemIdentifier("inspector-field-\(label)")
         field.font = .systemFont(ofSize: 11)
+        field.toolTip = tooltip
         field.cell?.sendsActionOnEndEditing = true
         addField(label, control: field) { sender in changed((sender as? NSTextField)?.stringValue ?? "") }
     }
@@ -1867,9 +2146,10 @@ private final class InspectorView: NSView {
         addField(label, control: field, action: nil)
     }
 
-    private func addPopup(_ label: String, value: String, choices: [(String, String)], changed: @escaping (String) -> Void) {
+    private func addPopup(_ label: String, value: String, choices: [(String, String)], tooltip: String? = nil, changed: @escaping (String) -> Void) {
         let popup = NSPopUpButton()
         popup.identifier = NSUserInterfaceItemIdentifier("inspector-field-\(label)")
+        popup.toolTip = tooltip
         for (key, title) in choices {
             popup.addItem(withTitle: title)
             popup.lastItem?.representedObject = key
@@ -1886,10 +2166,17 @@ private final class InspectorView: NSView {
     }
 
     private func addColor(_ label: String, value: String, changed: @escaping (String) -> Void) {
+        NSColorPanel.shared.showsAlpha = true
         let well = ThemedColorWell()
         well.identifier = NSUserInterfaceItemIdentifier("inspector-field-\(label)")
         well.color = NSColor(hex: value)
-        addField(label, control: well) { sender in changed((sender as? NSColorWell)?.color.hexRGB ?? value) }
+        well.isContinuous = true
+        well.onPanelClosed = { [weak self] in
+            guard let self, let model = self.currentModel else { return }
+            self.displayedDiagram = nil
+            self.update(model: model)
+        }
+        addField(label, control: well) { sender in changed((sender as? NSColorWell)?.color.hexRGBA ?? value) }
     }
 
     private func addField(_ label: String, control: NSControl, action: ((NSControl) -> Void)?) {

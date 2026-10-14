@@ -90,10 +90,34 @@ def test_dot_generation_is_deterministic_and_escapes_labels(project: DiagramProj
     ("straight", 'splines="line"'),
     ("angled", 'splines="polyline"'),
     ("orthogonal", 'splines="ortho"'),
+    ("curved", 'splines="curved"'),
 ])
 def test_edge_routing_maps_to_graphviz_splines(project: DiagramProject, routing: str, splines: str) -> None:
     project.diagram.edge_routing = routing
     assert splines in to_dot(project)
+
+
+def test_rgba_colors_preserve_transparency_in_model_and_dot(project: DiagramProject) -> None:
+    project.nodes[0].style.fill = "#AABBCC40"
+    project.nodes[0].style.stroke = "#11223380"
+    assert project.nodes[0].style.fill == "#AABBCC40"
+    assert 'fillcolor="#AABBCC40"' in to_dot(project)
+    assert 'color="#11223380"' in to_dot(project)
+
+
+def test_empty_container_geometry_is_retained_by_project_and_dot(project: DiagramProject) -> None:
+    from graphischema.dot_editor import apply_dot
+
+    data = project.model_dump(mode="json")
+    data["nodes"] = []
+    data["edges"] = []
+    data["containers"] = [{"id": "empty_zone", "label": "Empty", "x": 4, "y": 3, "width": 3.5, "height": 2.5}]
+    empty = DiagramProject.model_validate(data)
+    candidate, _ = apply_dot(empty, to_dot(empty))
+    assert candidate.containers[0].x == pytest.approx(4)
+    assert candidate.containers[0].y == pytest.approx(3)
+    assert candidate.containers[0].width == pytest.approx(3.5)
+    assert candidate.containers[0].height == pytest.approx(2.5)
 
 
 def test_quality_validation_reports_disconnected_node(project: DiagramProject) -> None:

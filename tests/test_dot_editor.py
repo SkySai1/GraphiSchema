@@ -27,6 +27,7 @@ def test_generated_dot_round_trips_without_changes() -> None:
     ("straight", "line"),
     ("angled", "polyline"),
     ("orthogonal", "ortho"),
+    ("curved", "curved"),
 ])
 def test_dot_splines_round_trip_into_edge_routing(routing: str, splines: str) -> None:
     project = starter()
@@ -38,7 +39,7 @@ def test_dot_splines_round_trip_into_edge_routing(routing: str, splines: str) ->
     assert changes["settings"] == expected
 
 
-@pytest.mark.parametrize("splines", ["true", "spline", "curved"])
+@pytest.mark.parametrize("splines", ["true", "spline"])
 def test_dot_rejects_routes_that_cannot_be_preserved(splines: str) -> None:
     project = starter()
     source = to_dot(project).replace('splines="polyline"', f'splines="{splines}"')

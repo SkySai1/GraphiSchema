@@ -91,7 +91,24 @@ def route(start, end, routing, horizontal):
         return [start, (start[0], middle), (end[0], middle), end]
     if routing == "angled":
         return [start, ((start[0]+end[0])/2, start[1]) if horizontal else (start[0], (start[1]+end[1])/2), end]
+    if routing == "curved":
+        dx, dy = end[0]-start[0], end[1]-start[1]
+        offset = min(.55, max(.12, math.hypot(dx, dy)*.12))
+        if horizontal:
+            controls = (start, (start[0]+dx/3, start[1]+offset), (start[0]+2*dx/3, end[1]+offset), end)
+        else:
+            controls = (start, (start[0]+offset, start[1]+dy/3), (end[0]+offset, start[1]+2*dy/3), end)
+        return sample_cubic(controls)
     return [start, end]
+
+
+def sample_cubic(points, segments=24):
+    p0, p1, p2, p3 = points
+    return [
+        ((1-t)**3*p0[0] + 3*(1-t)**2*t*p1[0] + 3*(1-t)*t*t*p2[0] + t**3*p3[0],
+         (1-t)**3*p0[1] + 3*(1-t)**2*t*p1[1] + 3*(1-t)*t*t*p2[1] + t**3*p3[1])
+        for t in (i/segments for i in range(segments+1))
+    ]
 
 
 def route_midpoint(points):
@@ -132,6 +149,11 @@ def normalize_edges(project, layout):
             points = [anchors[0]]
             for a, b in zip(anchors, anchors[1:]):
                 points.extend(route(a, b, "orthogonal", horizontal)[1:] if routing == "orthogonal" else [b])
+        elif routing == "curved" and edge.source_port == edge.target_port == "auto" and len(geometry["points"]) >= 4:
+            old = [(p["x"], p["y"]) for p in geometry["points"]]
+            start = attachment(nodes[edge.source], source, old[1])
+            end = attachment(nodes[edge.target], target, old[-2])
+            points = sample_cubic((start, old[1], old[-2], end))
         elif routing == "angled" and edge.routing is None and edge.source_port == edge.target_port == "auto":
             old = [(p["x"], p["y"]) for p in geometry["points"]]
             # Preserve Graphviz obstacle avoidance. Extend from the last control point to the contour.
@@ -155,4 +177,25 @@ def normalize_edges(project, layout):
         layout["minX"] = min(layout["minX"], *(p[0] for p in all_points))
         layout["minY"] = min(layout["minY"], *(p[1] for p in all_points))
         layout["width"], layout["height"] = max_x-layout["minX"], max_y-layout["minY"]
+    containers = {item.id: item for item in project.containers}
+    member_ids = {item.id: set() for item in project.containers}
+    for node in project.nodes:
+        parent = node.container_id
+        while parent:
+            member_ids[parent].add(node.id)
+            parent = containers[parent].parent_id
+    empty_bounds = []
+    for container in project.containers:
+        if member_ids[container.id]:
+            continue
+        cx = container.x if container.x is not None else layout["minX"] + 1.6
+        cy = container.y if container.y is not None else layout["minY"] + 1.2
+        empty_bounds.append((cx-container.width/2, cy-container.height/2, cx+container.width/2, cy+container.height/2))
+    if empty_bounds:
+        left = min(layout["minX"], *(box[0] for box in empty_bounds))
+        bottom = min(layout["minY"], *(box[1] for box in empty_bounds))
+        right = max(layout["minX"]+layout["width"], *(box[2] for box in empty_bounds))
+        top = max(layout["minY"]+layout["height"], *(box[3] for box in empty_bounds))
+        layout["minX"], layout["minY"] = left, bottom
+        layout["width"], layout["height"] = right-left, top-bottom
     return layout

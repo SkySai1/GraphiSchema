@@ -13,6 +13,7 @@ final class AppLifecycle: NSObject, NSApplicationDelegate {
         Task {
             await model.bootstrap()
             controller.refreshAll()
+            await controller.loadStarterTemplateIfNeeded()
             if ProcessInfo.processInfo.arguments.contains("--startup-smoke-test") {
                 let passed = model.backend.isReady && model.diagram != nil && model.layout != nil && model.alertMessage == nil
                 let message = passed

@@ -46,6 +46,9 @@ def _container_open(container: DiagramContainer, depth: int) -> list[str]:
         # Graphviz expresses cluster margins in inches while the model stores points.
         "margin": f"{container.padding / 72:.12f}",
     }
+    if container.x is not None and container.y is not None:
+        attrs.update({"gs_x": str(container.x), "gs_y": str(container.y),
+                      "gs_width": str(container.width), "gs_height": str(container.height)})
     rendered = ", ".join(f"{key}={value}" for key, value in attrs.items())
     return [f"{indent}subgraph {quote('cluster_' + container.id)} {{", f"{indent}    graph [{rendered}];"]
 
@@ -56,7 +59,7 @@ def to_dot(project: DiagramProject) -> str:
     lines = [f"digraph {graph_name} {{"]
     graph_attrs = [
         f"rankdir={quote(project.diagram.direction)}",
-        f"splines={quote({'straight': 'line', 'angled': 'polyline', 'orthogonal': 'ortho'}[project.diagram.edge_routing])}",
+        f"splines={quote({'straight': 'line', 'angled': 'polyline', 'orthogonal': 'ortho', 'curved': 'curved'}[project.diagram.edge_routing])}",
         f"bgcolor={quote(project.presentation.background)}",
         f"nodesep={project.diagram.node_spacing}",
         f"ranksep={project.diagram.rank_spacing}",

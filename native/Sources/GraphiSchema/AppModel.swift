@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 @MainActor
@@ -42,6 +43,11 @@ final class AppModel: ObservableObject {
         get { UserDefaults.standard.object(forKey: "GraphiSchema.inverseTrackpad") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "GraphiSchema.inverseTrackpad"); onModelChange?() }
     }
+    var themeMode: String { UserDefaults.standard.string(forKey: "GraphiSchema.themeMode") ?? "system" }
+    var loadStarterOnLaunch: Bool {
+        get { UserDefaults.standard.bool(forKey: "GraphiSchema.loadStarterOnLaunch") }
+        set { UserDefaults.standard.set(newValue, forKey: "GraphiSchema.loadStarterOnLaunch"); onModelChange?() }
+    }
 
     init() {
         if let data = UserDefaults.standard.data(forKey: "GraphiSchema.ollama.preferences"),
@@ -68,6 +74,7 @@ final class AppModel: ObservableObject {
             jsonDraftIsDirty = false
             lastSerializedJSON = jsonDraft
             status = "Сохранено"
+            updateSystemTheme()
             await refreshLayout()
             await refreshHistoryState()
             onModelChange?()
@@ -94,8 +101,17 @@ final class AppModel: ObservableObject {
         changed()
     }
 
+    func updateLayoutEngine(_ value: String) {
+        let allowed = ["dot", "neato", "fdp", "sfdp", "twopi", "circo"]
+        guard !isEditingLocked, allowed.contains(value), var current = diagram,
+              current.diagram.layoutEngine != value else { return }
+        current.diagram.layoutEngine = value
+        diagram = current
+        changed()
+    }
+
     func updateEdgeRouting(_ value: String) {
-        guard !isEditingLocked, ["straight", "angled", "orthogonal"].contains(value) else { return }
+        guard !isEditingLocked, ["straight", "angled", "orthogonal", "curved"].contains(value) else { return }
         guard var current = diagram, current.diagram.edgeRouting != value else { return }
         current.diagram.edgeRouting = value
         diagram = current
@@ -104,10 +120,39 @@ final class AppModel: ObservableObject {
 
     func updateTheme(_ value: String) {
         guard !isEditingLocked, var current = diagram, ["light", "dark"].contains(value) else { return }
+        let background = value == "dark" ? "#21172F" : "#FFFFFF"
+        guard current.presentation.theme != value || current.presentation.background != background else { return }
         current.presentation.theme = value
-        current.presentation.background = value == "dark" ? "#21172F" : "#FFFFFF"
+        current.presentation.background = background
         diagram = current
         changed()
+    }
+
+    func updateThemeMode(_ value: String) {
+        guard ["system", "light", "dark"].contains(value) else { return }
+        UserDefaults.standard.set(value, forKey: "GraphiSchema.themeMode")
+        if value == "system" {
+            NSApp.appearance = nil
+            for window in NSApp.windows { window.appearance = nil }
+        }
+        updateTheme(effectiveTheme(for: value))
+        AppTheme.apply(dark: effectiveTheme(for: value) == "dark", mode: value)
+        onModelChange?()
+    }
+
+    func updateSystemTheme() {
+        guard themeMode == "system" else { return }
+        let effective = effectiveTheme(for: "system")
+        updateTheme(effective)
+        AppTheme.apply(dark: effective == "dark", mode: "system")
+        onModelChange?()
+    }
+
+    private func effectiveTheme(for mode: String) -> String {
+        if mode == "system" {
+            return NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? "dark" : "light"
+        }
+        return mode
     }
 
     func replaceFigure(_ id: String, with item: PaletteObject) {
@@ -142,6 +187,38 @@ final class AppModel: ObservableObject {
             current.diagram.layoutMode = "manual"
         }
         current.edges[i].waypoints = Array(points.prefix(32))
+        diagram = current
+        changed()
+    }
+
+    func setEdgeEndpoint(_ id: String, source: Bool, nodeID: String) {
+        guard !isEditingLocked, var current = diagram,
+              current.nodes.contains(where: { $0.id == nodeID }),
+              let index = current.edges.firstIndex(where: { $0.id == id }) else { return }
+        if source { current.edges[index].source = nodeID; current.edges[index].sourcePort = "auto" }
+        else { current.edges[index].target = nodeID; current.edges[index].targetPort = "auto" }
+        current.edges[index].waypoints = []
+        diagram = current
+        selection = .edge(id)
+        changed()
+    }
+
+    func optimizeAllRoutes() {
+        guard !isEditingLocked, var current = diagram else { return }
+        guard current.edges.contains(where: { !$0.waypoints.isEmpty || $0.routing != nil }) else { return }
+        for index in current.edges.indices {
+            current.edges[index].waypoints = []
+            current.edges[index].routing = nil
+        }
+        diagram = current
+        changed()
+    }
+
+    func resetRoute(_ id: String) {
+        guard !isEditingLocked, var current = diagram,
+              let index = current.edges.firstIndex(where: { $0.id == id }),
+              !current.edges[index].waypoints.isEmpty else { return }
+        current.edges[index].waypoints = []
         diagram = current
         changed()
     }
@@ -231,8 +308,21 @@ final class AppModel: ObservableObject {
             current.nodes[index].x = min(1000, max(-1000, (current.nodes[index].x ?? 0) + deltaX))
             current.nodes[index].y = min(1000, max(-1000, (current.nodes[index].y ?? 0) + deltaY))
         }
+        if let index = current.containers.firstIndex(where: { $0.id == id }) {
+            current.containers[index].x = min(1000, max(-1000, (current.containers[index].x ?? ((layout?.minX ?? 0) + 1.6)) + deltaX))
+            current.containers[index].y = min(1000, max(-1000, (current.containers[index].y ?? ((layout?.minY ?? 0) + 1.2)) + deltaY))
+        }
         diagram = current
         selection = .container(id)
+        changed()
+    }
+
+    func resizeContainer(_ id: String, width: Double, height: Double) {
+        guard !isEditingLocked, var current = diagram,
+              let index = current.containers.firstIndex(where: { $0.id == id }) else { return }
+        current.containers[index].width = min(20, max(1, width))
+        current.containers[index].height = min(20, max(1, height))
+        diagram = current
         changed()
     }
 
@@ -295,7 +385,9 @@ final class AppModel: ObservableObject {
             id: id,
             label: "Новая зона",
             parentId: nil,
-            style: ContainerStyle(fill: "#EEF3FF", stroke: "#9CB4F5", text: "#3554A5")
+            style: ContainerStyle(fill: "#EEF3FF", stroke: "#9CB4F5", text: "#3554A5"),
+            x: (layout?.minX ?? 0) + 1.7 + Double(current.containers.count % 3) * 3.4,
+            y: (layout?.minY ?? 0) + 1.2 + Double(current.containers.count / 3) * 2.5
         ))
         diagram = current
         selection = .container(id)
@@ -607,11 +699,12 @@ final class AppModel: ObservableObject {
         onModelChange?()
     }
 
-    func importJSON(_ data: Data) async {
+    @discardableResult
+    func importJSON(_ data: Data) async -> Bool {
         guard !isEditingLocked else {
             alertMessage = "Сначала примените или сбросьте текущий черновик."
             onAlert?(alertMessage ?? "Текущий черновик не применён.")
-            return
+            return false
         }
         do {
             let _: ValidationResponse = try await request("api/validate", method: "POST", body: data)
@@ -627,9 +720,11 @@ final class AppModel: ObservableObject {
             await refreshLayout()
             await refreshHistoryState()
             onModelChange?()
+            return true
         } catch {
             alertMessage = "Импорт не выполнен: \(error.localizedDescription)"
             onAlert?(alertMessage ?? "Ошибка импорта")
+            return false
         }
     }
 

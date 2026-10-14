@@ -131,7 +131,22 @@ enum CanvasGeometry {
             let middle = (a.y+b.y)/2; return [a, .init(x: a.x, y: middle), .init(x: b.x, y: middle), b]
         }
         if routing == "angled" { return [a, horizontal ? .init(x: (a.x+b.x)/2, y: a.y) : .init(x: a.x, y: (a.y+b.y)/2), b] }
+        if routing == "curved" {
+            let dx = b.x-a.x, dy = b.y-a.y
+            let offset = min(0.55, max(0.12, hypot(dx, dy)*0.12))
+            let c1 = horizontal ? NSPoint(x: a.x+dx/3, y: a.y+offset) : NSPoint(x: a.x+offset, y: a.y+dy/3)
+            let c2 = horizontal ? NSPoint(x: a.x+2*dx/3, y: b.y+offset) : NSPoint(x: b.x+offset, y: a.y+2*dy/3)
+            return sampleCubic(a, c1, c2, b)
+        }
         return [a, b]
+    }
+
+    static func sampleCubic(_ p0: NSPoint, _ p1: NSPoint, _ p2: NSPoint, _ p3: NSPoint, segments: Int = 24) -> [NSPoint] {
+        (0...segments).map { step in
+            let t = CGFloat(step) / CGFloat(segments), u = 1-t
+            return NSPoint(x: u*u*u*p0.x+3*u*u*t*p1.x+3*u*t*t*p2.x+t*t*t*p3.x,
+                           y: u*u*u*p0.y+3*u*u*t*p1.y+3*u*t*t*p2.y+t*t*t*p3.y)
+        }
     }
 
     static func edgePoints(_ edge: DiagramEdge, source: LayoutNode, target: LayoutNode, sourceNode: DiagramNode, targetNode: DiagramNode,
@@ -157,6 +172,12 @@ enum CanvasGeometry {
             start = attachment(sourceNode, at: source, toward: proposed[1], port: "auto")
             end = attachment(targetNode, at: target, toward: proposed[proposed.count-2], port: "auto")
             result = [start] + proposed.dropFirst().dropLast() + [end]
+        } else if routing == "curved", edge.sourcePort == "auto", edge.targetPort == "auto",
+                  let proposed, proposed.count == 4 {
+            let p1 = proposed[1], p2 = proposed[2]
+            start = attachment(sourceNode, at: source, toward: p1, port: "auto")
+            end = attachment(targetNode, at: target, toward: p2, port: "auto")
+            result = sampleCubic(start, p1, p2, end)
         } else { result = route(start, end, routing: routing, horizontal: horizontal) }
         return result.reduce(into: []) { points, next in
             if let last = points.last, hypot(last.x-next.x, last.y-next.y) < 1e-7 { return }

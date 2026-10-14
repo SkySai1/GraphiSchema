@@ -12,6 +12,9 @@ def render_scene(project, layout, background=None):
         return (x-layout["minX"])*72+pad, (layout["minY"]+layout["height"]-y)*72+pad
     def data(points, closed=False):
         return "M " + " L ".join(f"{x:.4f} {y:.4f}" for x, y in points) + (" Z" if closed else "")
+    def color(value):
+        value = value.upper()
+        return (value[:7], int(value[7:9], 16)/255) if len(value) == 9 else (value, 1.0)
     dark = project.presentation.theme == "dark"
     canvas = background or ("#21172F" if dark else project.presentation.background)
     if background and background != "transparent":
@@ -37,15 +40,19 @@ def render_scene(project, layout, background=None):
         return result
     for c in sorted(project.containers, key=depth):
         group = members[c.id]
-        if not group:
-            continue
-        left = min(n["x"]-n["width"]/2 for n in group)-c.padding/72
-        right = max(n["x"]+n["width"]/2 for n in group)+c.padding/72
-        bottom = min(n["y"]-n["height"]/2 for n in group)-c.padding/72
-        top = max(n["y"]+n["height"]/2 for n in group)+c.padding/72
+        if group:
+            left = min(n["x"]-n["width"]/2 for n in group)-c.padding/72
+            right = max(n["x"]+n["width"]/2 for n in group)+c.padding/72
+            bottom = min(n["y"]-n["height"]/2 for n in group)-c.padding/72
+            top = max(n["y"]+n["height"]/2 for n in group)+c.padding/72
+        else:
+            cx, cy = c.x if c.x is not None else layout["minX"]+1.6, c.y if c.y is not None else layout["minY"]+1.2
+            left, right = cx-c.width/2, cx+c.width/2
+            bottom, top = cy-c.height/2, cy+c.height/2
         x, y = point(left, top)
-        out.append(f'<rect x="{x:.4f}" y="{y:.4f}" width="{(right-left)*72:.4f}" height="{(top-bottom)*72:.4f}" rx="11" fill="{c.style.fill}" fill-opacity="0.42" stroke="{c.style.stroke}" stroke-width="1.2"/>')
-        out.append(f'<text x="{x+10:.4f}" y="{y+17:.4f}" fill="{c.style.text}" font-family="Arial,sans-serif" font-size="11">{html.escape(c.label)}</text>')
+        fill, fill_alpha = color(c.style.fill); stroke, stroke_alpha = color(c.style.stroke); caption, text_alpha = color(c.style.text)
+        out.append(f'<rect x="{x:.4f}" y="{y:.4f}" width="{(right-left)*72:.4f}" height="{(top-bottom)*72:.4f}" rx="11" fill="{fill}" fill-opacity="{.42*fill_alpha:.4f}" stroke="{stroke}" stroke-opacity="{stroke_alpha:.4f}" stroke-width="1.2"/>')
+        out.append(f'<text x="{x+10:.4f}" y="{y+17:.4f}" fill="{caption}" fill-opacity="{text_alpha:.4f}" font-family="Arial,sans-serif" font-size="11">{html.escape(c.label)}</text>')
     edges = {e.id: e for e in project.edges}
     for g in layout["edges"]:
         edge = edges[g["id"]]
@@ -54,7 +61,8 @@ def render_scene(project, layout, background=None):
             continue
         style = edge.style
         dash = {"dashed": ' stroke-dasharray="6 4"', "dotted": ' stroke-dasharray="1.5 3"'}.get(style.line_style, "")
-        out.append(f'<path data-edge="{edge.id}" d="{data(points)}" fill="none" stroke="{style.color}" stroke-width="{style.penwidth}" stroke-linecap="round" stroke-linejoin="round"{dash}/>')
+        edge_color, edge_alpha = color(style.color)
+        out.append(f'<path data-edge="{edge.id}" d="{data(points)}" fill="none" stroke="{edge_color}" stroke-opacity="{edge_alpha:.4f}" stroke-width="{style.penwidth}" stroke-linecap="round" stroke-linejoin="round"{dash}/>')
         for tip, previous, kind in ([(points[-1], points[-2], style.arrowhead)] if edge.direction in {"forward", "both"} else []) + ([(points[0], points[1], style.arrowtail)] if edge.direction == "both" else []):
             if kind == "none":
                 continue
@@ -63,7 +71,7 @@ def render_scene(project, layout, background=None):
                 return tip[0]-along*math.cos(angle)+across*math.sin(angle), tip[1]-along*math.sin(angle)-across*math.cos(angle)
             if kind == "dot":
                 x, y = arrow_point(3, 0)
-                out.append(f'<circle cx="{x:.4f}" cy="{y:.4f}" r="3" fill="{style.color}"/>')
+                out.append(f'<circle cx="{x:.4f}" cy="{y:.4f}" r="3" fill="{edge_color}" fill-opacity="{edge_alpha:.4f}"/>')
             else:
                 polygon = [tip, arrow_point(8, 4), arrow_point(8, -4)]
                 if kind == "diamond":
@@ -75,20 +83,30 @@ def render_scene(project, layout, background=None):
                 elif kind in {"vee", "crow"}:
                     polygon = [arrow_point(8, 4), tip, arrow_point(8, -4)]
                 closed = kind not in {"tee", "vee", "crow"}
-                out.append(f'<path d="{data(polygon, closed)}" fill="{style.color if closed else "none"}" stroke="{style.color}" stroke-width="1.5"/>')
+                out.append(f'<path d="{data(polygon, closed)}" fill="{edge_color if closed else "none"}" fill-opacity="{edge_alpha:.4f}" stroke="{edge_color}" stroke-opacity="{edge_alpha:.4f}" stroke-width="1.5"/>')
         if edge.label:
             x, y = point(g["labelX"] or 0, g["labelY"] or 0)
-            out.append(f'<text x="{x:.4f}" y="{y:.4f}" text-anchor="middle" fill="{text}" font-family="Arial,sans-serif" font-size="10">{html.escape(edge.label)}</text>')
+            label_color, label_alpha = color(text)
+            out.append(f'<text x="{x:.4f}" y="{y:.4f}" text-anchor="middle" fill="{label_color}" fill-opacity="{label_alpha:.4f}" font-family="Arial,sans-serif" font-size="10">{html.escape(edge.label)}</text>')
     for node in project.nodes:
         n = positions[node.id]
         paths = normalized_paths(node)
         closed = icon_library()[node.icon]["closed"] if node.icon else [True]+[False]*(len(paths)-1)
         out.append(f'<g data-node="{node.id}"' + (f' data-icon="{node.icon}"' if node.icon else "") + ">")
-        for path, close in zip(paths, closed):
+        fill, fill_alpha = color(node.style.fill); stroke, stroke_alpha = color(node.style.stroke)
+        closed_indices = [i for i, value in enumerate(closed) if value]
+        base_index = max(closed_indices, key=lambda i: _area(paths[i])) if closed_indices else None
+        for path_index, (path, close) in enumerate(zip(paths, closed)):
             points = [point(n["x"]+(x-.5)*n["width"], n["y"]+(y-.5)*n["height"]) for x, y in path]
-            out.append(f'<path d="{data(points, close)}" fill="{node.style.fill if close else "none"}" stroke="{node.style.stroke}" stroke-width="{node.style.penwidth}" stroke-linecap="round" stroke-linejoin="round"/>')
+            fill_value = fill if close and path_index == base_index else "none"
+            out.append(f'<path d="{data(points, close)}" fill="{fill_value}" fill-opacity="{fill_alpha:.4f}" stroke="{stroke}" stroke-opacity="{stroke_alpha:.4f}" stroke-width="{node.style.penwidth}" stroke-linecap="round" stroke-linejoin="round"/>')
         x, y = point(n["x"], n["y"]-n["height"]/2) if node.icon else point(n["x"], n["y"])
-        label_color = "#FFFFFF" if node.icon and dark and node.style.text in {"#172238", "#0F172A"} else node.style.text
-        out.append(f'<text x="{x:.4f}" y="{y+(16 if node.icon else 4):.4f}" text-anchor="middle" fill="{label_color}" font-family="Arial,sans-serif" font-size="11" font-weight="600">{html.escape(node.label)}</text></g>')
+        label_color = "#FFFFFF" if node.icon and dark and node.style.text[:7].upper() in {"#172238", "#0F172A"} else node.style.text
+        label_color, label_alpha = color(label_color)
+        out.append(f'<text x="{x:.4f}" y="{y+(16 if node.icon else 4):.4f}" text-anchor="middle" fill="{label_color}" fill-opacity="{label_alpha:.4f}" font-family="Arial,sans-serif" font-size="11" font-weight="600">{html.escape(node.label)}</text></g>')
     out.append("</svg>")
     return "\n".join(out)
+
+
+def _area(path):
+    return abs(sum(a[0]*b[1]-b[0]*a[1] for a, b in zip(path, path[1:]+path[:1])))/2

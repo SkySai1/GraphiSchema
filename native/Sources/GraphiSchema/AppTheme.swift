@@ -3,10 +3,12 @@ import AppKit
 @MainActor
 enum AppTheme {
     private static var currentDark: Bool?
+    private static var currentMode = "system"
 
-    static func apply(dark: Bool) {
-        guard currentDark != dark else { return }
-        NSApp.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+    static func apply(dark: Bool, mode: String = "manual") {
+        guard currentDark != dark || currentMode != mode else { return }
+        currentMode = mode
+        NSApp.appearance = mode == "system" ? nil : NSAppearance(named: dark ? .darkAqua : .aqua)
         currentDark = dark
         for window in NSApp.windows {
             configure(window)
@@ -16,7 +18,7 @@ enum AppTheme {
     static func configure(_ window: NSWindow?) {
         guard let window else { return }
         let dark = currentDark ?? false
-        window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        window.appearance = currentMode == "system" ? nil : NSAppearance(named: dark ? .darkAqua : .aqua)
         window.backgroundColor = surface("window")
         if let root = window.contentView { refresh(root, dark: dark) }
     }
@@ -55,8 +57,18 @@ enum AppTheme {
 
 @MainActor
 final class ThemedColorWell: NSColorWell {
+    var onPanelClosed: (() -> Void)?
+    private var closeObserver: NSObjectProtocol?
+
     override func activate(_ exclusive: Bool) {
-        NSColorPanel.shared.appearance = NSApp.appearance
+        let panel = NSColorPanel.shared
+        panel.appearance = NSApp.appearance
+        panel.showsAlpha = true
+        isContinuous = true
+        if let closeObserver { NotificationCenter.default.removeObserver(closeObserver) }
+        closeObserver = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: panel, queue: .main) { [weak self] _ in
+            DispatchQueue.main.async { self?.onPanelClosed?() }
+        }
         super.activate(exclusive)
     }
 }

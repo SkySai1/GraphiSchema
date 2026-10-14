@@ -34,7 +34,7 @@ def test_graphviz_layout_returns_canvas_geometry(project: DiagramProject) -> Non
 
 @pytest.mark.skipif(not shutil.which("dot") or not shutil.which("neato"), reason="Graphviz is not installed")
 @pytest.mark.parametrize("manual", [False, True])
-@pytest.mark.parametrize("routing", ["straight", "angled", "orthogonal"])
+@pytest.mark.parametrize("routing", ["straight", "angled", "orthogonal", "curved"])
 def test_graphviz_routes_in_auto_and_manual_modes(project: DiagramProject, routing: str, manual: bool) -> None:
     project.diagram.edge_routing = routing
     if manual:
@@ -58,6 +58,8 @@ def test_graphviz_routes_in_auto_and_manual_modes(project: DiagramProject, routi
             start, end = points[0], points[-1]
             dx, dy = end["x"] - start["x"], end["y"] - start["y"]
             assert all(abs((point["x"] - start["x"]) * dy - (point["y"] - start["y"]) * dx) < 0.002 for point in points)
+        elif routing == "curved":
+            assert len(points) >= 20
 
 
 @pytest.mark.parametrize("direction", ["LR", "TB"])

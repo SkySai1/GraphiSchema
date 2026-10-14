@@ -2,15 +2,19 @@ import AppKit
 import ObjectiveC
 
 @MainActor
-final class OllamaChatPanelView: NSView {
+final class OllamaChatPanelView: NSView, NSTextViewDelegate {
     var onSend: ((String, Int) -> Void)?
     var onConfigure: (() -> Void)?
     var onApplyProposal: (() -> Void)?
     var onCancelProposal: (() -> Void)?
+    var onPromptExpansionChanged: ((Bool) -> Void)?
 
     private let transcript = NSTextView()
     private let transcriptScroll = NSScrollView()
-    private let promptField = NSTextField(string: "")
+    private let promptTextView = ChatPromptTextView()
+    private let promptScroll = NSScrollView()
+    private let promptPlaceholder = NSTextField(labelWithString: "Опишите задачу для диаграммы…")
+    private let expandPromptButton = NSButton(title: "Развернуть", target: nil, action: nil)
     private let modeControl = NSSegmentedControl(labels: ["Создать", "Изменить", "Проверить"], trackingMode: .selectOne, target: nil, action: nil)
     private let statusLabel = NSTextField(labelWithString: "Локальный ассистент")
     private let sendButton: NSButton
@@ -19,6 +23,9 @@ final class OllamaChatPanelView: NSView {
     private var actions: [ChatButtonAction] = []
     private var modelIsLocked = false
     private var isBusy = false
+    private var promptExpanded = false
+    private var promptHeightConstraint: NSLayoutConstraint?
+    private var promptRowHeightConstraint: NSLayoutConstraint?
 
     init() {
         sendButton = Self.button("Отправить", symbol: "paperplane.fill")
@@ -90,14 +97,37 @@ final class OllamaChatPanelView: NSView {
         statusLabel.font = .systemFont(ofSize: 9)
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.lineBreakMode = .byTruncatingTail
-        promptField.placeholderString = "Опишите задачу для диаграммы…"
-        promptField.target = self
-        promptField.action = #selector(sendPrompt)
-        promptField.font = .systemFont(ofSize: 11)
+        promptTextView.isRichText = false
+        promptTextView.identifier = NSUserInterfaceItemIdentifier("ollama-prompt-editor")
+        promptTextView.isAutomaticQuoteSubstitutionEnabled = false
+        promptTextView.isAutomaticDashSubstitutionEnabled = false
+        promptTextView.font = .systemFont(ofSize: 11)
+        promptTextView.isVerticallyResizable = true
+        promptTextView.isHorizontallyResizable = false
+        promptTextView.textContainer?.widthTracksTextView = true
+        promptTextView.textContainerInset = NSSize(width: 6, height: 5)
+        promptTextView.onSubmit = { [weak self] in self?.sendPrompt() }
+        promptTextView.delegate = self
+        promptScroll.documentView = promptTextView
+        promptScroll.hasVerticalScroller = true
+        promptScroll.borderType = .bezelBorder
+        promptScroll.drawsBackground = true
+        promptScroll.backgroundColor = NSColor.textBackgroundColor
+        promptPlaceholder.font = .systemFont(ofSize: 11)
+        promptPlaceholder.textColor = .placeholderTextColor
+        promptPlaceholder.translatesAutoresizingMaskIntoConstraints = false
 
         bind(sendButton) { [weak self] in self?.sendPrompt() }
         bind(applyButton) { [weak self] in self?.onApplyProposal?() }
         bind(cancelButton) { [weak self] in self?.onCancelProposal?() }
+        expandPromptButton.title = "Развернуть"
+        expandPromptButton.identifier = NSUserInterfaceItemIdentifier("ollama-prompt-expand")
+        expandPromptButton.image = NSImage(systemSymbolName: "arrow.up.left.and.arrow.down.right", accessibilityDescription: "Развернуть поле запроса")
+        expandPromptButton.imagePosition = .imageLeading
+        expandPromptButton.controlSize = .small
+        expandPromptButton.font = .systemFont(ofSize: 9)
+        expandPromptButton.target = self
+        expandPromptButton.action = #selector(togglePromptExpansion)
         let settings = Self.button("Настройки", symbol: "gearshape")
         settings.toolTip = "Endpoint, модель, системный промпт и параметры Ollama"
         bind(settings) { [weak self] in self?.onConfigure?() }
@@ -109,13 +139,18 @@ final class OllamaChatPanelView: NSView {
         headingRow.orientation = .horizontal
         headingRow.alignment = .centerY
         headingRow.spacing = 6
-        let promptRow = NSStackView(views: [modeControl, promptField, sendButton])
+        let promptRow = NSStackView(views: [modeControl, promptScroll, expandPromptButton, sendButton])
         promptRow.orientation = .horizontal
         promptRow.alignment = .centerY
         promptRow.spacing = 7
-        promptField.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        promptField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        promptScroll.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        promptScroll.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         [headingRow, transcriptScroll, promptRow].forEach { $0.translatesAutoresizingMaskIntoConstraints = false; addSubview($0) }
+        promptScroll.addSubview(promptPlaceholder)
+        NSLayoutConstraint.activate([
+            promptPlaceholder.leadingAnchor.constraint(equalTo: promptScroll.leadingAnchor, constant: 8),
+            promptPlaceholder.centerYAnchor.constraint(equalTo: promptScroll.centerYAnchor),
+        ])
         NSLayoutConstraint.activate([
             headingRow.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
             headingRow.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
@@ -128,23 +163,37 @@ final class OllamaChatPanelView: NSView {
             promptRow.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
             promptRow.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             promptRow.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
-            promptRow.heightAnchor.constraint(equalToConstant: 30),
         ])
+        promptHeightConstraint = promptScroll.heightAnchor.constraint(equalToConstant: 30)
+        promptRowHeightConstraint = promptRow.heightAnchor.constraint(equalToConstant: 30)
+        promptHeightConstraint?.isActive = true
+        promptRowHeightConstraint?.isActive = true
         appendMessage(role: "Ассистент", text: "Введите задачу. Изменения появятся в JSON справа; перед записью в историю их можно проверить и применить.")
     }
 
     @objc private func sendPrompt() {
-        let value = promptField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let value = promptTextView.string.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return }
-        promptField.stringValue = ""
+        promptTextView.string = ""
+        promptPlaceholder.isHidden = false
         appendMessage(role: "Вы", text: value)
         onSend?(value, modeControl.selectedSegment)
+    }
+
+    @objc private func togglePromptExpansion() {
+        promptExpanded.toggle()
+        let height: CGFloat = promptExpanded ? 86 : 30
+        promptHeightConstraint?.constant = height
+        promptRowHeightConstraint?.constant = height
+        expandPromptButton.title = promptExpanded ? "Свернуть" : "Развернуть"
+        expandPromptButton.toolTip = promptExpanded ? "Свернуть поле запроса" : "Развернуть поле для длинного запроса"
+        onPromptExpansionChanged?(promptExpanded)
     }
 
     private func updateInputState() {
         let enabled = !isBusy && !modelIsLocked
         sendButton.isEnabled = enabled
-        promptField.isEnabled = enabled
+        promptTextView.isEditable = enabled
         modeControl.isEnabled = enabled
     }
 
@@ -164,6 +213,19 @@ final class OllamaChatPanelView: NSView {
         button.bezelStyle = .rounded
         button.font = .systemFont(ofSize: 10, weight: .medium)
         return button
+    }
+
+    func textDidChange(_ notification: Notification) {
+        promptPlaceholder.isHidden = !promptTextView.string.isEmpty
+    }
+}
+
+@MainActor
+private final class ChatPromptTextView: NSTextView {
+    var onSubmit: (() -> Void)?
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 36 && event.modifierFlags.contains(.command) { onSubmit?(); return }
+        super.keyDown(with: event)
     }
 }
 

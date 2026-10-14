@@ -72,6 +72,28 @@ def test_graphviz_layout_returns_parseable_svg(project: DiagramProject) -> None:
     assert "WAF" in svg
 
 
+def test_rgba_node_style_exports_transparency(project: DiagramProject) -> None:
+    project.nodes[0].style.fill = "#12345680"
+    project.nodes[0].style.stroke = "#ABCDEF40"
+    root = ElementTree.fromstring(render_svg(project)[0])
+    group = next(item for item in root.iter() if item.get("data-node") == project.nodes[0].id)
+    path = next(item for item in group if item.tag.endswith("path") and item.get("fill") != "none")
+    assert path.get("fill") == "#123456"
+    assert float(path.get("fill-opacity", "1")) == pytest.approx(128/255, abs=0.001)
+    assert path.get("stroke") == "#ABCDEF"
+    assert float(path.get("stroke-opacity", "1")) == pytest.approx(64/255, abs=0.001)
+
+
+def test_empty_container_exports_with_stored_geometry() -> None:
+    project = DiagramProject.model_validate({
+        "containers": [{"id": "empty", "label": "Пустая зона", "x": 2.5, "y": 1.5, "width": 3, "height": 2}],
+    })
+    svg, _ = render_svg(project)
+    root = ElementTree.fromstring(svg)
+    assert any(item.tag.endswith("rect") and item.get("fill") == "#F1F5F9" for item in root.iter())
+    assert any(item.tag.endswith("text") and item.text == "Пустая зона" for item in root.iter())
+
+
 @pytest.mark.skipif(not shutil.which("dot"), reason="Graphviz dot is not installed")
 def test_graphviz_png_export_respects_scale_and_background(project: DiagramProject) -> None:
     png_1x, engine = render_png(project, scale=1, background="#FFFFFF")

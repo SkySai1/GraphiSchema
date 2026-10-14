@@ -3,10 +3,11 @@ GraphiSchema: каноническая JSON-модель → DOT → Graphviz �
 
 graph [rankdir="LR", splines="polyline", nodesep=0.55, ranksep=0.8, compound=true, pad=0.25];
 rankdir: LR, RL, TB, BT. Каноническое поле diagram.direction.
-splines: line (straight), polyline (angled), ortho (orthogonal). Поле diagram.edge_routing.
+splines: line (straight), polyline (angled), ortho (orthogonal), curved (кривая линия). Поле diagram.edge_routing.
 layout_engine: dot, neato, fdp, sfdp, twopi, circo. Ручной режим: neato -n2.
 nodesep/ranksep: diagram.node_spacing/rank_spacing, 0.1–5 дюймов.
 bgcolor: presentation.background, #RRGGBB. theme: light или dark.
+Цвета объектов и связей: #RRGGBB или #RRGGBBAA (последний байт — прозрачность).
 
 node [label="API", shape="box", style="filled,rounded", fillcolor="#FFFFFF", color="#2563EB", fontcolor="#0F172A", penwidth=1.5];
 shape: box, ellipse, cylinder, diamond, hexagon, cloud.
@@ -20,6 +21,7 @@ gs_icon: атрибут сохранения icon при редактирова�
 subgraph cluster_dmz { graph [label="DMZ", style="rounded,filled", fillcolor="#F1F5F9", color="#94A3B8", fontcolor="#334155", penwidth=1.2, margin=0.222222222222]; ... }
 JSON containers[].parent_id задаёт вложенность; циклы запрещены. padding: 4–48 пунктов.
 Вложенные кластеры наиболее полно поддерживаются dot; поддержка другими движками ограничена.
+Пустой контейнер получает пользовательские координаты и размер в JSON; gs_x/gs_y/gs_width/gs_height сохраняют их в редактируемом DOT.
 
 "api" -> "db" [label="SQL", dir="forward", style="solid", color="#64748B", penwidth=1.5, arrowhead="normal", arrowtail="none", constraint=true, weight=1, minlen=1, tailport="e", headport="w"];
 dir: forward, both, none. style: solid, dashed, dotted, bold. penwidth: 0.5–10.
@@ -28,8 +30,8 @@ constraint и minlen влияют на ранжирование dot; други�
 weight: 0–100. minlen: 1–20. headport/tailport: n, ne, e, se, s, sw, w, nw.
 Graphviz splines=ortho не поддерживает порты и подписи полностью. Геометрический слой GraphiSchema применяет привязки после расчёта компоновки.
 JSON edges[].source_port/target_port: auto (кратчайшее расстояние до видимого контура), сторона n/e/s/w, направление ne/se/sw/nw, либо vertex:<индекс вершины>.
-JSON edges[].routing: null (настройка диаграммы), straight, angled, orthogonal.
+JSON edges[].routing: null (настройка диаграммы), straight, angled, orthogonal, curved.
 JSON edges[].waypoints: массив {"x":2.0,"y":1.0} в дюймах, максимум 32 точки. Для ручного пути сохраняй координаты всех объектов.
 gs_source_port/gs_target_port (vertex), gs_routing, gs_waypoints: расширения редактора DOT для сохранения геометрии, не обещай их поддержку самим Graphviz.
-Не используй произвольные image/URL, HTML-метки, spline/curved, неподдерживаемые атрибуты и конструкции DOT.
+Не используй произвольные image/URL, HTML-метки и неподдерживаемые атрибуты или конструкции DOT.
 Все изменения проводятся через проверяемые атомарные операции над JSON. Статус/проверка не изменяет проект. Предложение показывается до применения; применение создаёт версию.

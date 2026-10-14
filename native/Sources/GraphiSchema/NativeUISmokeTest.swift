@@ -8,9 +8,13 @@ enum NativeUISmokeTest {
         _ = NSApplication.shared
         let preferencesBackup = UserDefaults.standard.object(forKey: "GraphiSchema.ollama.preferences")
         let navigationBackup = UserDefaults.standard.object(forKey: "GraphiSchema.inverseTrackpad")
+        let themeBackup = UserDefaults.standard.object(forKey: "GraphiSchema.themeMode")
+        let starterBackup = UserDefaults.standard.object(forKey: "GraphiSchema.loadStarterOnLaunch")
         restorePreferences = {
             UserDefaults.standard.set(preferencesBackup, forKey: "GraphiSchema.ollama.preferences")
             UserDefaults.standard.set(navigationBackup, forKey: "GraphiSchema.inverseTrackpad")
+            UserDefaults.standard.set(themeBackup, forKey: "GraphiSchema.themeMode")
+            UserDefaults.standard.set(starterBackup, forKey: "GraphiSchema.loadStarterOnLaunch")
         }
         defer { restorePreferences?(); restorePreferences = nil }
         let model = AppModel()
@@ -79,6 +83,7 @@ enum NativeUISmokeTest {
         }
         let tablerCollection = PaletteLibrary.collection(id: "tabler")
         let lucideCollection = PaletteLibrary.collection(id: "lucide")
+        let standardCollection = PaletteLibrary.collection(id: "standard")
         let hasBundledPaletteIcons = PaletteLibrary.allObjects.allSatisfy { $0.loadIcon() != nil }
         let hasChat = findView(identifier: "ollama-chat-panel", in: root) != nil
         guard editorSplit.arrangedSubviews[0].frame.width >= 220,
@@ -90,7 +95,8 @@ enum NativeUISmokeTest {
               (firstPaletteTile?.frame.width ?? 0) >= 180,
               collectionPicker != nil,
               collectionPicker?.itemArray.count == PaletteLibrary.collections.count,
-              PaletteLibrary.collections.count == 4,
+              PaletteLibrary.collections.count == 5,
+              standardCollection?.objects.count ?? 0 >= 9,
               tablerCollection?.objects.count ?? 0 >= 20,
               lucideCollection?.objects.count ?? 0 >= 15,
               PaletteLibrary.allObjects.count >= 50,
@@ -101,6 +107,28 @@ enum NativeUISmokeTest {
         else {
             fail("Native UI smoke test failed: palette, readable JSON, chat, and panel widths must be visible.")
         }
+        guard NSApp.mainMenu?.items.contains(where: { $0.title == "Файл" }) == true,
+              NSApp.mainMenu?.items.contains(where: { $0.title == "Настройки" }) == true,
+              NSColor(hex: "#33669980").hexRGBA == "#33669980" else {
+            fail("The macOS menu bar, system settings and RGBA color support must be available.")
+        }
+        if let collectionPicker,
+           let standard = collectionPicker.itemArray.first(where: { ($0.representedObject as? String) == "standard" }) {
+            collectionPicker.select(standard)
+            _ = NSApp.sendAction(collectionPicker.action!, to: collectionPicker.target, from: collectionPicker)
+            guard (standardCollection?.objects ?? []).allSatisfy({ $0.loadIcon() != nil }) else { fail("Standard vector shapes must be available in the palette") }
+            if let all = collectionPicker.itemArray.first(where: { ($0.representedObject as? String) == "all" }) {
+                collectionPicker.select(all); _ = NSApp.sendAction(collectionPicker.action!, to: collectionPicker.target, from: collectionPicker)
+            }
+        }
+        guard let promptEditor = findView(identifier: "ollama-prompt-editor", in: root) as? NSTextView,
+              let expandPrompt = findView(identifier: "ollama-prompt-expand", in: root) as? NSButton else { fail("Chat must use an editable text area with an expansion button") }
+        perform(expandPrompt)
+        root.window?.contentView?.layoutSubtreeIfNeeded()
+        root.layoutSubtreeIfNeeded()
+        promptEditor.enclosingScrollView?.layoutSubtreeIfNeeded()
+        guard promptEditor.isEditable, promptEditor.enclosingScrollView?.frame.height ?? 0 >= 70 else { fail("Expanded chat prompt must accept multiline text") }
+        perform(expandPrompt)
         if let collectionPicker,
            let tabler = collectionPicker.itemArray.first(where: { ($0.representedObject as? String) == "tabler" }) {
             collectionPicker.select(tabler)
@@ -171,7 +199,7 @@ enum NativeUISmokeTest {
         mainWindow.refreshAll()
         let projectPropertiesHeight = styleWindow?.contentView?.frame.height ?? 0
         guard let routingPicker = findView(identifier: "inspector-field-Маршрут связей", in: styleContent) as? NSPopUpButton,
-              Set(routingPicker.itemArray.compactMap { $0.representedObject as? String }) == Set(["straight", "angled", "orthogonal"]),
+              Set(routingPicker.itemArray.compactMap { $0.representedObject as? String }) == Set(["straight", "angled", "orthogonal", "curved"]),
               projectPropertiesHeight >= 280,
               projectPropertiesHeight < nodePropertiesHeight
         else {
@@ -208,12 +236,19 @@ enum NativeUISmokeTest {
                   let borderAction = borderControl.action
             else { fail("Native UI smoke test failed: border color control must be available after a property refresh.") }
             let oldStroke = model.nodes.first(where: { $0.id == "waf" })?.style.stroke ?? "#000000"
-            borderControl.color = NSColor(hex: "#AA3377")
-            let editedStroke = borderControl.color.hexRGB
-            let borderActionHandled = NSApp.sendAction(borderAction, to: borderControl.target, from: borderControl)
-            guard model.nodes.first(where: { $0.id == "waf" })?.style.stroke == editedStroke else {
-                fail("Native UI smoke test failed: color action handled=\(borderActionHandled), enabled=\(borderControl.isEnabled), resulting stroke=\(model.nodes.first(where: { $0.id == "waf" })?.style.stroke ?? "missing").")
+            borderControl.activate(true)
+            let colorPanel = NSColorPanel.shared
+            colorPanel.showsAlpha = true
+            colorPanel.orderFront(nil)
+            for color in ["#AA337780", "#3355AA60"] {
+                borderControl.color = NSColor(hex: color)
+                let colorActionHandled = NSApp.sendAction(borderAction, to: borderControl.target, from: borderControl)
+                guard colorActionHandled,
+                      model.nodes.first(where: { $0.id == "waf" })?.style.stroke == color else {
+                    fail("Native UI smoke test failed: repeated RGBA color selection must update the object, expected \(color), well=\(borderControl.color.hexRGBA), handled=\(colorActionHandled), got \(model.nodes.first(where: { $0.id == "waf" })?.style.stroke ?? "missing").")
+                }
             }
+            colorPanel.close()
             model.editNode("waf") { $0.style.stroke = oldStroke }
             mainWindow.refreshAll()
         } else {
@@ -335,10 +370,8 @@ enum NativeUISmokeTest {
         model.inverseTrackpad = false
         guard !canvas.inverseTrackpad else { fail("Navigation preference must apply immediately") }
 
-        guard let toggle = findView(identifier: "theme-toggle", in: root) as? NSButton else { fail("Theme control missing") }
         canvas.fitToContent()
-        if model.diagram?.presentation.theme != "light" { model.updateTheme("light") }
-        perform(toggle)
+        model.updateThemeMode("dark")
         guard model.diagram?.presentation.theme == "dark", model.diagram?.presentation.background == "#21172F",
               root.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua,
               assistant.window?.contentView?.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua,
@@ -346,7 +379,7 @@ enum NativeUISmokeTest {
             fail("Night theme must cover the editor and auxiliary windows: theme=\(model.diagram?.presentation.theme ?? "nil"), background=\(model.diagram?.presentation.background ?? "nil"), root=\(root.effectiveAppearance.name.rawValue), assistant=\(assistant.window?.contentView?.effectiveAppearance.name.rawValue ?? "nil"), editor=\(findTextView(containing: "schema_version", in: root)?.backgroundColor.hexRGB ?? "nil")")
         }
         capture(root, name: "native-night")
-        perform(toggle)
+        model.updateThemeMode("light")
         guard model.diagram?.presentation.theme == "light", text.backgroundColor.hexRGB == "#FFFFFF" else { fail("Day theme must restore light surfaces") }
         capture(root, name: "native-day")
 
@@ -372,11 +405,11 @@ enum NativeUISmokeTest {
         if let index = names.firstIndex(of: "graphviz_attributes") { list.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false) }
         value.string = "Changed declaration"; perform(save); perform(reset)
         guard model.ollamaPreferences.variables["graphviz_attributes"] == ProjectResources.graphvizDeclaration else { fail("Default Graphviz declaration reset failed") }
-        model.updateTheme("dark")
+        model.updateThemeMode("dark")
         guard variableRoot.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua,
               value.backgroundColor.hexRGB == "#21172F" else { fail("Variables window must follow the project theme") }
         capture(variableRoot, name: "prompt-variables-night")
-        model.updateTheme("light")
+        model.updateThemeMode("light")
         variables.close()
     }
 

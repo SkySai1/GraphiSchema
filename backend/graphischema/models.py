@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 
 Color = str
-_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$")
 _ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
 
 
@@ -19,7 +19,7 @@ class StrictModel(BaseModel):
 
 def _validate_color(value: str) -> str:
     if not _COLOR_RE.fullmatch(value):
-        raise ValueError("Color must use the #RRGGBB format")
+        raise ValueError("Color must use #RRGGBB or #RRGGBBAA format")
     return value.upper()
 
 
@@ -39,7 +39,7 @@ class DiagramSettings(StrictModel):
     type: str = "architecture"
     layout_engine: Literal["dot", "neato", "fdp", "sfdp", "twopi", "circo"] = "dot"
     direction: Literal["TB", "LR", "BT", "RL"] = "LR"
-    edge_routing: Literal["straight", "angled", "orthogonal"] = "angled"
+    edge_routing: Literal["straight", "angled", "orthogonal", "curved"] = "angled"
     layout_mode: Literal["auto", "manual"] = "auto"
     node_spacing: float = Field(default=0.55, ge=0.1, le=5)
     rank_spacing: float = Field(default=0.8, ge=0.1, le=5)
@@ -62,6 +62,10 @@ class DiagramContainer(StrictModel):
     parent_id: str | None = None
     style: ContainerStyle = Field(default_factory=ContainerStyle)
     padding: float = Field(default=16, ge=4, le=48)
+    x: float | None = Field(default=None, ge=-1000, le=1000, allow_inf_nan=False)
+    y: float | None = Field(default=None, ge=-1000, le=1000, allow_inf_nan=False)
+    width: float = Field(default=3, ge=1, le=20)
+    height: float = Field(default=2, ge=1, le=20)
 
     @field_validator("id", "parent_id")
     @classmethod
@@ -152,7 +156,7 @@ class DiagramEdge(StrictModel):
     style: EdgeStyle = Field(default_factory=EdgeStyle)
     source_port: str = "auto"
     target_port: str = "auto"
-    routing: Literal["straight", "angled", "orthogonal"] | None = None
+    routing: Literal["straight", "angled", "orthogonal", "curved"] | None = None
     waypoints: list[RoutePoint] = Field(default_factory=list, max_length=32)
 
     @field_validator("source_port", "target_port")

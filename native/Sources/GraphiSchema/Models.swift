@@ -46,17 +46,26 @@ struct DiagramContainer: Codable, Equatable, Identifiable {
     var parentId: String?
     var style: ContainerStyle
     var padding: Double
+    var x: Double?
+    var y: Double?
+    var width: Double
+    var height: Double
 
     enum CodingKeys: String, CodingKey {
-        case id, label, parentId, style, padding
+        case id, label, parentId, style, padding, x, y, width, height
     }
 
-    init(id: String, label: String, parentId: String?, style: ContainerStyle, padding: Double = 16) {
+    init(id: String, label: String, parentId: String?, style: ContainerStyle, padding: Double = 16,
+         x: Double? = nil, y: Double? = nil, width: Double = 3, height: Double = 2) {
         self.id = id
         self.label = label
         self.parentId = parentId
         self.style = style
         self.padding = padding
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
     }
 
     init(from decoder: Decoder) throws {
@@ -66,6 +75,10 @@ struct DiagramContainer: Codable, Equatable, Identifiable {
         parentId = try values.decodeIfPresent(String.self, forKey: .parentId)
         style = try values.decode(ContainerStyle.self, forKey: .style)
         padding = try values.decodeIfPresent(Double.self, forKey: .padding) ?? 16
+        x = try values.decodeIfPresent(Double.self, forKey: .x)
+        y = try values.decodeIfPresent(Double.self, forKey: .y)
+        width = try values.decodeIfPresent(Double.self, forKey: .width) ?? 3
+        height = try values.decodeIfPresent(Double.self, forKey: .height) ?? 2
     }
 }
 
@@ -580,10 +593,12 @@ enum PaletteLibrary {
         }
         let tabler = loadSVGObjects(collectionID: "tabler", folder: "tabler-icons/outline", title: "Tabler Icons · MIT")
         let lucide = loadSVGObjects(collectionID: "lucide", folder: "lucide/icons", title: "Lucide · ISC")
-        let everything = templates + tabler + lucide
+        let standard = loadSVGObjects(collectionID: "standard", folder: "standard/basic", title: "Стандартные фигуры")
+        let everything = templates + standard + tabler + lucide
         return [
             PaletteCollection(id: "all", title: "Все коллекции", license: "", objects: everything),
             PaletteCollection(id: "templates", title: "GraphiSchema · шаблоны", license: "", objects: templates),
+            PaletteCollection(id: "standard", title: "Стандартные фигуры", license: "", objects: standard),
             PaletteCollection(id: "tabler", title: "Tabler Icons (MIT)", license: "MIT", objects: tabler),
             PaletteCollection(id: "lucide", title: "Lucide (ISC)", license: "ISC", objects: lucide),
         ]
@@ -604,7 +619,11 @@ enum PaletteLibrary {
                 let normalized = basename.replacingOccurrences(of: "-", with: " ").lowercased()
                 let classification = classify(normalized)
                 let iconPath = "\(folder)/\(file.lastPathComponent)"
-                let collectionTitle = collectionID == "tabler" ? "Tabler Icons" : "Lucide"
+                let collectionTitle = switch collectionID {
+                case "tabler": "Tabler Icons"
+                case "lucide": "Lucide"
+                default: "Стандартные фигуры"
+                }
                 return PaletteObject(
                     id: "svg:\(collectionID):\(file.lastPathComponent)",
                     title: basename.replacingOccurrences(of: "-", with: " ").capitalized,
@@ -642,16 +661,20 @@ enum PaletteLibrary {
 extension NSColor {
     convenience init(hex: String) {
         let digits = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
-        guard digits.count == 6, let value = UInt64(digits, radix: 16) else {
+        guard [6, 8].contains(digits.count), let value = UInt64(digits, radix: 16) else {
             self.init(deviceWhite: 1, alpha: 1)
             return
         }
-        self.init(
-            srgbRed: CGFloat((value >> 16) & 0xFF) / 255,
-            green: CGFloat((value >> 8) & 0xFF) / 255,
-            blue: CGFloat(value & 0xFF) / 255,
-            alpha: 1
-        )
+        if digits.count == 8 {
+            self.init(srgbRed: CGFloat((value >> 24) & 0xFF) / 255,
+                     green: CGFloat((value >> 16) & 0xFF) / 255,
+                     blue: CGFloat((value >> 8) & 0xFF) / 255,
+                     alpha: CGFloat(value & 0xFF) / 255)
+        } else {
+            self.init(srgbRed: CGFloat((value >> 16) & 0xFF) / 255,
+                     green: CGFloat((value >> 8) & 0xFF) / 255,
+                     blue: CGFloat(value & 0xFF) / 255, alpha: 1)
+        }
     }
 
     var hexRGB: String {
@@ -662,5 +685,14 @@ extension NSColor {
             Int((color.greenComponent * 255).rounded()),
             Int((color.blueComponent * 255).rounded())
         )
+    }
+
+    var hexRGBA: String {
+        let color = usingColorSpace(.sRGB) ?? .white
+        return String(format: "#%02X%02X%02X%02X",
+                      Int((color.redComponent * 255).rounded()),
+                      Int((color.greenComponent * 255).rounded()),
+                      Int((color.blueComponent * 255).rounded()),
+                      Int((color.alphaComponent * 255).rounded()))
     }
 }
