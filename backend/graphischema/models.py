@@ -100,6 +100,8 @@ class DiagramNode(StrictModel):
     y: float | None = None
     width: float | None = Field(default=None, ge=0.5, le=10)
     height: float | None = Field(default=None, ge=0.5, le=10)
+    label_alignment: Literal["left", "center", "right"] = "center"
+    label_vertical_alignment: Literal["top", "middle", "bottom"] = "middle"
 
     @field_validator("icon")
     @classmethod

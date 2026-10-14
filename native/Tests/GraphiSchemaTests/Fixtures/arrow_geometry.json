@@ -1,0 +1,17 @@
+[
+  {"name":"LR","points":[[0,0],[100,0]],"head":"normal","tail":"none","line_width":2,"expected_start":[0,0],"expected_end":[92,0],"expected_tip":[100,0]},
+  {"name":"RL","points":[[100,0],[0,0]],"head":"normal","tail":"none","line_width":2,"expected_start":[100,0],"expected_end":[8,0],"expected_tip":[0,0]},
+  {"name":"up","points":[[0,0],[0,100]],"head":"normal","tail":"none","line_width":2,"expected_start":[0,0],"expected_end":[0,92],"expected_tip":[0,100]},
+  {"name":"down","points":[[0,100],[0,0]],"head":"normal","tail":"none","line_width":2,"expected_start":[0,100],"expected_end":[0,8],"expected_tip":[0,0]},
+  {"name":"diagonal-3-4-5","points":[[0,0],[30,40]],"head":"normal","tail":"none","line_width":2,"expected_start":[0,0],"expected_end":[25.2,33.6],"expected_tip":[30,40]},
+  {"name":"last-segment-shorter-than-head","points":[[0,0],[98,0],[98,2],[100,2]],"head":"normal","tail":"none","line_width":2,"expected_start":[0,0],"expected_end":[92,2],"expected_tip":[100,2]},
+  {"name":"short-elbow","points":[[0,0],[0,3],[2,3]],"head":"normal","tail":"none","line_width":2,"expected_start":[0,0],"expected_end":[0.8,3],"expected_tip":[2,3]},
+  {"name":"both","points":[[0,0],[100,0]],"head":"normal","tail":"normal","line_width":2,"expected_start":[8,0],"expected_end":[92,0],"expected_tip":[100,0]},
+  {"name":"both-short","points":[[0,0],[6,0]],"head":"normal","tail":"normal","line_width":2,"expected_start":[1.62,0],"expected_end":[4.38,0],"expected_tip":[6,0]},
+  {"name":"thick-shaft","points":[[0,0],[100,0]],"head":"normal","tail":"none","line_width":4,"expected_start":[0,0],"expected_end":[84,0],"expected_tip":[100,0]},
+  {"name":"dot","points":[[0,0],[100,0]],"head":"dot","tail":"none","line_width":2,"expected_start":[0,0],"expected_end":[94,0],"expected_tip":[100,0]},
+  {"name":"tee","points":[[0,0],[100,0]],"head":"tee","tail":"none","line_width":2,"expected_start":[0,0],"expected_end":[100,0],"expected_tip":[100,0]},
+  {"name":"none","points":[[0,0],[100,0]],"head":"none","tail":"none","line_width":2,"expected_start":[0,0],"expected_end":[100,0],"expected_tip":null},
+  {"name":"coincident","points":[[7,9],[7,9]],"head":"normal","tail":"normal","line_width":2,"expected_start":[7,9],"expected_end":[7,9],"expected_tip":null},
+  {"name":"duplicate-points","points":[[0,0],[0,0],[100,0],[100,0]],"head":"normal","tail":"none","line_width":2,"expected_start":[0,0],"expected_end":[92,0],"expected_tip":[100,0]}
+]

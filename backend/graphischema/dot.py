@@ -21,6 +21,8 @@ def _node_statement(node: DiagramNode, manual_layout: bool) -> str:
         "fontcolor": quote(node.style.text),
         "penwidth": str(node.style.penwidth),
         "tooltip": quote(node.description or node.kind),
+        "gs_label_alignment": quote(node.label_alignment),
+        "gs_label_vertical_alignment": quote(node.label_vertical_alignment),
     }
     if node.icon:
         attrs["gs_icon"] = quote(node.icon)

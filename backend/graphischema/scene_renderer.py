@@ -1,8 +1,8 @@
 """SVG scene built from the same normalized geometry and icon vectors as AppKit."""
 import html
-import math
 
 from .geometry import icon_library, normalized_paths
+from .arrows import arrow_drawing
 
 
 def render_scene(project, layout, background=None):
@@ -54,36 +54,36 @@ def render_scene(project, layout, background=None):
         out.append(f'<rect x="{x:.4f}" y="{y:.4f}" width="{(right-left)*72:.4f}" height="{(top-bottom)*72:.4f}" rx="11" fill="{fill}" fill-opacity="{.42*fill_alpha:.4f}" stroke="{stroke}" stroke-opacity="{stroke_alpha:.4f}" stroke-width="1.2"/>')
         out.append(f'<text x="{x+10:.4f}" y="{y+17:.4f}" fill="{caption}" fill-opacity="{text_alpha:.4f}" font-family="Arial,sans-serif" font-size="11">{html.escape(c.label)}</text>')
     edges = {e.id: e for e in project.edges}
+    arrow_elements = []
     for g in layout["edges"]:
         edge = edges[g["id"]]
         points = [point(p["x"], p["y"]) for p in g["points"]]
         if len(points) < 2:
             continue
         style = edge.style
+        drawing = arrow_drawing(points, style.arrowhead if edge.direction in {"forward", "both"} else "none",
+                                style.arrowtail if edge.direction == "both" else "none", style.penwidth)
         dash = {"dashed": ' stroke-dasharray="6 4"', "dotted": ' stroke-dasharray="1.5 3"'}.get(style.line_style, "")
         edge_color, edge_alpha = color(style.color)
-        out.append(f'<path data-edge="{edge.id}" d="{data(points)}" fill="none" stroke="{edge_color}" stroke-opacity="{edge_alpha:.4f}" stroke-width="{style.penwidth}" stroke-linecap="round" stroke-linejoin="round"{dash}/>')
-        for tip, previous, kind in ([(points[-1], points[-2], style.arrowhead)] if edge.direction in {"forward", "both"} else []) + ([(points[0], points[1], style.arrowtail)] if edge.direction == "both" else []):
-            if kind == "none":
+        shaft = drawing.shaft
+        if dash:
+            shaft = shaft[(1 if drawing.tail else 0):(-1 if drawing.head else None)]
+        out.append(f'<path data-edge="{edge.id}" d="{data(shaft)}" fill="none" stroke="{edge_color}" stroke-opacity="{edge_alpha:.4f}" stroke-width="{style.penwidth}" stroke-linecap="round" stroke-linejoin="round"{dash}/>')
+        for endpoint, marker in (("target", drawing.head), ("source", drawing.tail)):
+            if marker is None:
                 continue
-            angle = math.atan2(tip[1]-previous[1], tip[0]-previous[0])
-            def arrow_point(along, across):
-                return tip[0]-along*math.cos(angle)+across*math.sin(angle), tip[1]-along*math.sin(angle)-across*math.cos(angle)
+            # A solid lead prevents dash phase from leaving a gap at the rear.
+            if dash:
+                out.append(f'<path data-arrow-join="{edge.id}:{endpoint}" d="{data([marker.guide, marker.base])}" fill="none" stroke="{edge_color}" stroke-opacity="{edge_alpha:.4f}" stroke-width="{style.penwidth}"/>')
+            kind = marker.kind
             if kind == "dot":
-                x, y = arrow_point(3, 0)
-                out.append(f'<circle cx="{x:.4f}" cy="{y:.4f}" r="3" fill="{edge_color}" fill-opacity="{edge_alpha:.4f}"/>')
+                x, y = marker.point(3)
+                arrow_elements.append(f'<circle data-arrow="{edge.id}:{endpoint}" cx="{x:.4f}" cy="{y:.4f}" r="{3*marker.scale:.4f}" fill="{edge_color}" fill-opacity="{edge_alpha:.4f}"/>')
             else:
-                polygon = [tip, arrow_point(8, 4), arrow_point(8, -4)]
-                if kind == "diamond":
-                    polygon = [tip, arrow_point(4, 3), arrow_point(8, 0), arrow_point(4, -3)]
-                elif kind == "box":
-                    polygon = [arrow_point(0, 3), arrow_point(6, 3), arrow_point(6, -3), arrow_point(0, -3)]
-                elif kind == "tee":
-                    polygon = [arrow_point(0, 4), arrow_point(0, -4)]
-                elif kind in {"vee", "crow"}:
-                    polygon = [arrow_point(8, 4), tip, arrow_point(8, -4)]
+                if kind in {"vee", "crow"}:
+                    arrow_elements.append(f'<path data-arrow-stem="{edge.id}:{endpoint}" d="{data([marker.base, marker.tip])}" fill="none" stroke="{edge_color}" stroke-opacity="{edge_alpha:.4f}" stroke-width="{style.penwidth}"/>')
                 closed = kind not in {"tee", "vee", "crow"}
-                out.append(f'<path d="{data(polygon, closed)}" fill="{edge_color if closed else "none"}" fill-opacity="{edge_alpha:.4f}" stroke="{edge_color}" stroke-opacity="{edge_alpha:.4f}" stroke-width="1.5"/>')
+                arrow_elements.append(f'<path data-arrow="{edge.id}:{endpoint}" d="{data(marker.polygon, closed)}" fill="{edge_color if closed else "none"}" fill-opacity="{edge_alpha:.4f}" stroke="{edge_color}" stroke-opacity="{edge_alpha:.4f}" stroke-width="{1.5*marker.scale:.4f}"/>')
         if edge.label:
             x, y = point(g["labelX"] or 0, g["labelY"] or 0)
             label_color, label_alpha = color(text)
@@ -100,10 +100,20 @@ def render_scene(project, layout, background=None):
             points = [point(n["x"]+(x-.5)*n["width"], n["y"]+(y-.5)*n["height"]) for x, y in path]
             fill_value = fill if close and path_index == base_index else "none"
             out.append(f'<path d="{data(points, close)}" fill="{fill_value}" fill-opacity="{fill_alpha:.4f}" stroke="{stroke}" stroke-opacity="{stroke_alpha:.4f}" stroke-width="{node.style.penwidth}" stroke-linecap="round" stroke-linejoin="round"/>')
-        x, y = point(n["x"], n["y"]-n["height"]/2) if node.icon else point(n["x"], n["y"])
+        left_x = point(n["x"]-n["width"]/2, n["y"])[0]
+        center_x, center_y = point(n["x"], n["y"])
+        right_x = point(n["x"]+n["width"]/2, n["y"])[0]
+        top_y = point(n["x"], n["y"]+n["height"]/2)[1]
+        bottom_y = point(n["x"], n["y"]-n["height"]/2)[1]
+        horizontal_alignment = node.label_alignment
+        vertical_alignment = node.label_vertical_alignment
+        x = {"left": left_x+7, "center": center_x, "right": right_x-7}[horizontal_alignment]
+        y = {"top": top_y+13, "middle": center_y+4, "bottom": bottom_y-4}[vertical_alignment]
+        text_anchor = {"left": "start", "center": "middle", "right": "end"}[horizontal_alignment]
         label_color = "#FFFFFF" if node.icon and dark and node.style.text[:7].upper() in {"#172238", "#0F172A"} else node.style.text
         label_color, label_alpha = color(label_color)
-        out.append(f'<text x="{x:.4f}" y="{y+(16 if node.icon else 4):.4f}" text-anchor="middle" fill="{label_color}" fill-opacity="{label_alpha:.4f}" font-family="Arial,sans-serif" font-size="11" font-weight="600">{html.escape(node.label)}</text></g>')
+        out.append(f'<text x="{x:.4f}" y="{y:.4f}" text-anchor="{text_anchor}" fill="{label_color}" fill-opacity="{label_alpha:.4f}" font-family="Arial,sans-serif" font-size="11" font-weight="600">{html.escape(node.label)}</text></g>')
+    out.extend(arrow_elements)
     out.append("</svg>")
     return "\n".join(out)
 

@@ -23,7 +23,7 @@ BUILD_CACHE="${GRAPHI_SCHEMA_BUILD_CACHE:-${TMPDIR:-/tmp}/graphischema-build-cac
 mkdir -p "$BUILD_CACHE/clang" "$BUILD_CACHE/swift" "$BUILD_CACHE/spm" "$BUILD_CACHE/uv"
 export MODULE_CACHE_DIR="$BUILD_CACHE/clang"
 export SWIFTPM_MODULECACHE_OVERRIDE="$BUILD_CACHE/swift"
-export UV_CACHE_DIR="$BUILD_CACHE/uv"
+export UV_CACHE_DIR="${UV_CACHE_DIR:-$BUILD_CACHE/uv}"
 
 APP_PATH="$ROOT/dist/$APP_BUNDLE_NAME.app"
 CONTENTS="$APP_PATH/Contents"
@@ -44,9 +44,11 @@ done
 
 echo "GraphiSchema: сборка нативного macOS release target…"
 swift build --package-path "$ROOT/native" --configuration release \
-  --scratch-path "$BUILD_CACHE/scratch" --cache-path "$BUILD_CACHE/spm" --disable-sandbox
+  --scratch-path "$BUILD_CACHE/scratch" --cache-path "$BUILD_CACHE/spm" --disable-sandbox \
+  -debug-info-format none
 BIN_PATH="$(swift build --package-path "$ROOT/native" --configuration release \
-  --scratch-path "$BUILD_CACHE/scratch" --cache-path "$BUILD_CACHE/spm" --disable-sandbox --show-bin-path)"
+  --scratch-path "$BUILD_CACHE/scratch" --cache-path "$BUILD_CACHE/spm" --disable-sandbox \
+  -debug-info-format none --show-bin-path)"
 
 echo "GraphiSchema: упаковка локального Python backend…"
 rm -rf "$APP_PATH"
@@ -90,7 +92,7 @@ if ! command -v rsvg-convert >/dev/null 2>&1; then
   echo "Предупреждение: для PNG-экспорта установите librsvg: brew install librsvg."
 fi
 
-APP_SUPPORT="$HOME/Library/Application Support/GraphiSchema"
+APP_SUPPORT="${GRAPHI_SCHEMA_APP_SUPPORT:-$HOME/Library/Application Support/GraphiSchema}"
 mkdir -p "$APP_SUPPORT"
 echo "GraphiSchema: установка Python-зависимостей в Application Support…"
 UV_PROJECT_ENVIRONMENT="$APP_SUPPORT/backend-venv" \

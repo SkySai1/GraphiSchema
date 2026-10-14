@@ -21,7 +21,9 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
     private let splitView = NSSplitView()
     private var styleInspector: InspectorView?
     private var styleWindowController: NSWindowController?
+    private var nodeTextEditorController: NodeTextEditorWindowController?
     private var historyWindowController: VersionHistoryWindowController?
+    private(set) var pendingPDFExportAlert: NSAlert?
     private let titleField = NSTextField(string: "")
     private let statusLabel = NSTextField(labelWithString: "Подключение…")
     private var undoButton: NSButton?
@@ -122,7 +124,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
         if dividerIndex == 0 && !sidebarVisible { return 0 }
         if dividerIndex == 1 && !codePanelVisible { return splitView.subviews[0].frame.width + splitView.subviews[1].frame.width }
         if dividerIndex == 0 { return 225 }
-        return splitView.subviews[0].frame.width + splitView.dividerThickness + 600
+        return splitView.subviews[0].frame.width + splitView.dividerThickness + 350
     }
 
     func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposedMaximumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
@@ -219,6 +221,9 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
         workspace.onMoveNode = { [weak self] id, x, y in
             self?.model.moveNode(id, x: x, y: y)
         }
+        workspace.onMoveNodes = { [weak self] ids, dx, dy in self?.model.moveNodes(ids, deltaX: dx, deltaY: dy) }
+        workspace.onScaleNodes = { [weak self] ids, factor in self?.model.scaleNodes(ids, factor: factor) }
+        workspace.onEditNodeText = { [weak self] id in self?.showNodeTextEditor(id) }
         workspace.onResizeNode = { [weak self] id, width, height in
             self?.model.editNode(id) { $0.width = width; $0.height = height }
         }
@@ -325,7 +330,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
         inspector.update(model: model)
         let targetHeight = inspector.preferredWindowContentHeight
         if abs((window.contentView?.frame.height ?? 0) - targetHeight) > 2 {
-            window.setContentSize(NSSize(width: max(440, window.contentView?.frame.width ?? 460), height: targetHeight))
+            window.setContentSize(NSSize(width: inspector.preferredWindowContentWidth, height: targetHeight))
         }
     }
 
@@ -376,6 +381,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
         file.addItem(menuItem("Импортировать JSON…", #selector(importJSONFromMenu(_:))))
         file.addItem(menuItem("Экспортировать JSON…", #selector(exportJSONFromMenu(_:))))
         file.addItem(menuItem("Экспортировать PNG…", #selector(exportPNGFromMenu(_:))))
+        file.addItem(menuItem("Экспортировать PDF…", #selector(exportPDFFromMenu(_:))))
         file.addItem(menuItem("История версий…", #selector(showHistoryFromMenu(_:))))
         fileRoot.submenu = file
 
@@ -396,6 +402,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
         view.addItem(menuItem("Показать/скрыть свойства и код", #selector(toggleCodePanelFromMenu(_:)), key: "2", modifiers: [.command, .option]))
         view.addItem(menuItem("Показать/скрыть чат", #selector(toggleChatFromMenu(_:)), key: "3", modifiers: [.command, .option]))
         view.addItem(.separator())
+        view.addItem(menuItem("Стиль и свойства…", #selector(showStyleFromMenu(_:))))
         view.addItem(menuItem("Оптимизировать все линии", #selector(optimizeRoutesFromMenu(_:))))
         viewRoot.submenu = view
 
@@ -450,6 +457,8 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
     @objc private func importJSONFromMenu(_ sender: Any?) { importJSON() }
     @objc private func exportJSONFromMenu(_ sender: Any?) { exportJSON() }
     @objc private func exportPNGFromMenu(_ sender: Any?) { exportPNG() }
+    @objc private func exportPDFFromMenu(_ sender: Any?) { exportPDF() }
+    @objc private func showStyleFromMenu(_ sender: Any?) { showStyleWindow() }
     @objc private func showHistoryFromMenu(_ sender: Any?) { showHistory() }
     @objc private func undoFromMenu(_ sender: Any?) { performHistoryCommand(redo: false) }
     @objc private func redoFromMenu(_ sender: Any?) { performHistoryCommand(redo: true) }
@@ -499,7 +508,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
             inspector = existing
         } else {
             inspector = InspectorView()
-            inspector.frame = NSRect(x: 0, y: 0, width: 460, height: 420)
+            inspector.frame = NSRect(x: 0, y: 0, width: inspector.preferredWindowContentWidth, height: 420)
             inspector.onDelete = { [weak self] in
                 guard let self else { return }
                 self.model.deleteSelection()
@@ -509,7 +518,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
         }
         inspector.update(model: model)
         if let controller = styleWindowController {
-            controller.window?.setContentSize(NSSize(width: max(440, controller.window?.contentView?.frame.width ?? 460), height: inspector.preferredWindowContentHeight))
+            controller.window?.setContentSize(NSSize(width: inspector.preferredWindowContentWidth, height: inspector.preferredWindowContentHeight))
             controller.showWindow(self)
             controller.window?.makeKeyAndOrderFront(self)
             controller.window?.layoutIfNeeded()
@@ -518,24 +527,38 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
         }
         let contentHeight = inspector.preferredWindowContentHeight
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 460, height: contentHeight),
+            contentRect: NSRect(x: 0, y: 0, width: inspector.preferredWindowContentWidth, height: contentHeight),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "Оформление и свойства"
-        window.minSize = NSSize(width: 440, height: 280)
-        inspector.frame = NSRect(x: 0, y: 0, width: 460, height: contentHeight)
+        window.minSize = NSSize(width: 340, height: 280)
+        inspector.frame = NSRect(x: 0, y: 0, width: inspector.preferredWindowContentWidth, height: contentHeight)
         inspector.autoresizingMask = [.width, .height]
         window.contentView = inspector
         AppTheme.configure(window)
-        window.setContentSize(NSSize(width: 460, height: contentHeight))
+        window.setContentSize(NSSize(width: inspector.preferredWindowContentWidth, height: contentHeight))
         let controller = NSWindowController(window: window)
         styleWindowController = controller
         controller.showWindow(self)
         controller.window?.makeKeyAndOrderFront(self)
         controller.window?.layoutIfNeeded()
         inspector.layoutSubtreeIfNeeded()
+    }
+
+    private func showNodeTextEditor(_ id: String) {
+        guard let node = model.nodes.first(where: { $0.id == id }) else { return }
+        let controller = NodeTextEditorWindowController(node: node) { [weak self] label, horizontal, vertical in
+            self?.model.editNode(id) {
+                $0.label = label
+                $0.labelAlignment = horizontal
+                $0.labelVerticalAlignment = vertical
+            }
+        }
+        nodeTextEditorController = controller
+        controller.showWindow(nil)
+        controller.window?.makeKeyAndOrderFront(nil)
     }
 
     private func applyJSON() {
@@ -712,8 +735,8 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
         backgroundPopup.addItems(withTitles: ["Белый", "Прозрачный", "Светло-серый", "Тёмный"])
         backgroundPopup.selectItem(at: 0)
 
-        let scaleRow = NSStackView(views: [makeLabel("Масштаб", size: 11, weight: .medium, color: .labelColor), scalePopup])
-        let backgroundRow = NSStackView(views: [makeLabel("Фон", size: 11, weight: .medium, color: .labelColor), backgroundPopup])
+        let scaleRow = NSStackView(views: [HelpFieldLabel("Масштаб", explanation: "Множитель разрешения PNG. Большее значение создаёт более чёткое изображение и увеличивает размер файла.", identifier: "png-scale-help"), scalePopup])
+        let backgroundRow = NSStackView(views: [HelpFieldLabel("Фон", explanation: "Задаёт цвет под диаграммой. Прозрачный фон удобен для вставки схемы поверх других материалов.", identifier: "png-background-help"), backgroundPopup])
         [scaleRow, backgroundRow].forEach {
             $0.orientation = .horizontal
             $0.alignment = .centerY
@@ -753,6 +776,95 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
                         self.model.status = "PNG сохранён"
                         self.refreshHeader()
                     } catch { self.showAlert(error.localizedDescription) }
+                }
+            }
+        }
+    }
+
+    private func exportPDF() {
+        guard model.activeProposal == nil else {
+            showAlert("Сначала примените или отмените предложение перед экспортом.")
+            return
+        }
+        let pagePopup = NSPopUpButton(frame: .zero, pullsDown: false)
+        pagePopup.identifier = NSUserInterfaceItemIdentifier("pdf-page-format")
+        for (value, title) in [("a4-landscape", "A4 · альбомная"), ("a4-portrait", "A4 · книжная"), ("a3-landscape", "A3 · альбомная")] {
+            pagePopup.addItem(withTitle: title)
+            pagePopup.lastItem?.representedObject = value
+        }
+        let pageRow = NSStackView(views: [
+            HelpFieldLabel("Размер страницы", explanation: "Формат страницы PDF. Диаграмма автоматически масштабируется и размещается в доступной области.", identifier: "pdf-page-size-help"),
+            pagePopup,
+        ])
+        pageRow.orientation = .vertical
+        pageRow.alignment = .leading
+        pageRow.spacing = 4
+        pagePopup.widthAnchor.constraint(equalToConstant: 235).isActive = true
+        pagePopup.selectItem(at: 0)
+
+        let legend = NSButton(checkboxWithTitle: "Добавить условные обозначения", target: nil, action: nil)
+        legend.identifier = NSUserInterfaceItemIdentifier("pdf-include-legend")
+        legend.state = .on
+        let legendRow = NSStackView(views: [legend, HelpIconButton(
+            "Формирует блок обозначений по типам компонентов и стилям связей, присутствующим в текущей схеме.",
+            identifier: "pdf-legend-help")])
+        legendRow.orientation = .horizontal
+        legendRow.alignment = .centerY
+        legendRow.spacing = 5
+        let options = NSStackView(views: [pageRow, legendRow])
+        options.orientation = .vertical
+        options.alignment = .leading
+        options.spacing = 12
+        options.widthAnchor.constraint(greaterThanOrEqualToConstant: 360).isActive = true
+        options.heightAnchor.constraint(greaterThanOrEqualToConstant: 104).isActive = true
+        options.layoutSubtreeIfNeeded()
+        let accessorySize = options.fittingSize
+        options.frame = NSRect(x: 0, y: 0,
+                               width: max(360, accessorySize.width),
+                               height: max(104, accessorySize.height))
+        options.layoutSubtreeIfNeeded()
+
+        let alert = NSAlert()
+        alert.window.appearance = NSApp.appearance
+        alert.messageText = "Экспорт диаграммы в PDF"
+        alert.informativeText = "Параметры экспорта указаны ниже. Диаграмма будет вписана в выбранный формат страницы."
+        alert.accessoryView = options
+        alert.addButton(withTitle: "Продолжить")
+        alert.addButton(withTitle: "Отмена")
+        pendingPDFExportAlert = alert
+        alert.beginSheetModal(for: window!) { [weak self] response in
+            guard let self else { return }
+            self.pendingPDFExportAlert = nil
+            guard response == .alertFirstButtonReturn else { return }
+            let page = pagePopup.selectedItem?.representedObject as? String ?? "a4-landscape"
+            let pageSize: NSSize = switch page {
+            case "a4-portrait": NSSize(width: 595, height: 842)
+            case "a3-landscape": NSSize(width: 1191, height: 842)
+            default: NSSize(width: 842, height: 595)
+            }
+            let panel = NSSavePanel()
+            panel.appearance = NSApp.appearance
+            panel.allowedContentTypes = [.pdf]
+            let projectTitle = self.model.diagram?.project.title ?? ""
+            let safeTitle = projectTitle.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+            panel.nameFieldStringValue = "\(safeTitle.isEmpty ? "graphischema-diagram" : safeTitle).pdf"
+            panel.beginSheetModal(for: self.window!) { saveResponse in
+                guard saveResponse == .OK, let url = panel.url else { return }
+                Task { @MainActor in
+                    do {
+                        if self.model.jsonDraftIsDirty { try await self.model.applyJSONDraft() }
+                        guard let project = self.model.diagram, let layout = self.model.layout else {
+                            throw NSError(domain: "GraphiSchema.PDF", code: 1,
+                                          userInfo: [NSLocalizedDescriptionKey: "Не удалось получить компоновку диаграммы для PDF."])
+                        }
+                        let pageView = DiagramPDFExportView(project: project, layout: layout, pageSize: pageSize,
+                                                            includeLegend: legend.state == .on)
+                        pageView.layoutSubtreeIfNeeded()
+                        let data = pageView.dataWithPDF(inside: pageView.bounds)
+                        try data.write(to: url, options: .atomic)
+                        self.model.status = "PDF сохранён"
+                        self.refreshAll()
+                    } catch { self.showAlert("Не удалось экспортировать PDF: \(error.localizedDescription)") }
                 }
             }
         }
@@ -1159,6 +1271,11 @@ private final class PaletteItemView: NSView, NSDraggingSource {
 }
 
 @MainActor
+private final class TopAlignedStackView: NSStackView {
+    override var isFlipped: Bool { true }
+}
+
+@MainActor
 private final class SidebarView: NSView {
     var onAddNode: ((PaletteObject) -> Void)?
     var onAddContainer: (() -> Void)?
@@ -1167,11 +1284,15 @@ private final class SidebarView: NSView {
     var onShowProperties: (() -> Void)?
 
     private let scrollView = NSScrollView()
-    private let stack = NSStackView()
-    private let paletteStack = NSStackView()
-    private let contentStack = NSStackView()
+    private let stack = TopAlignedStackView()
+    private let paletteStack = TopAlignedStackView()
+    private let paletteBodyStack = TopAlignedStackView()
+    private let contentStack = TopAlignedStackView()
+    private let bottomSpacer = NSView()
     private let searchField = NSSearchField()
     private let collectionPicker = NSPopUpButton(frame: .zero, pullsDown: false)
+    private var paletteToggleButton = NSButton(title: "", target: nil, action: nil)
+    private var paletteCollapsed = false
     private var selectedCollectionID = "all"
     private var lastPaletteFingerprint: String?
     private var lastContentFingerprint: String?
@@ -1187,18 +1308,34 @@ private final class SidebarView: NSView {
         identifier = NSUserInterfaceItemIdentifier("diagram-palette")
         stack.orientation = .vertical
         stack.alignment = .leading
+        stack.distribution = .fill
         stack.spacing = 5
         stack.edgeInsets = NSEdgeInsets(top: 14, left: 12, bottom: 12, right: 12)
-        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.translatesAutoresizingMaskIntoConstraints = true
+        stack.identifier = NSUserInterfaceItemIdentifier("sidebar-document-stack")
         for column in [paletteStack, contentStack] {
             column.orientation = .vertical
             column.alignment = .leading
+            column.distribution = .fill
             column.spacing = 5
+            column.setContentHuggingPriority(.required, for: .vertical)
+            column.setContentCompressionResistancePriority(.required, for: .vertical)
             column.translatesAutoresizingMaskIntoConstraints = false
             stack.addArrangedSubview(column)
             column.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -24).isActive = true
         }
+        bottomSpacer.identifier = NSUserInterfaceItemIdentifier("sidebar-bottom-spacer")
+        bottomSpacer.setContentHuggingPriority(.defaultLow, for: .vertical)
+        bottomSpacer.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        paletteStack.identifier = NSUserInterfaceItemIdentifier("palette-collection-list")
+        paletteBodyStack.orientation = .vertical
+        paletteBodyStack.alignment = .leading
+        paletteBodyStack.spacing = 5
+        paletteBodyStack.translatesAutoresizingMaskIntoConstraints = false
+        paletteBodyStack.identifier = NSUserInterfaceItemIdentifier("palette-collection-body")
+        contentStack.identifier = NSUserInterfaceItemIdentifier("sidebar-project-elements")
         searchField.placeholderString = "Найти объект…"
+        searchField.identifier = NSUserInterfaceItemIdentifier("palette-search-field")
         searchField.sendsSearchStringImmediately = true
         searchField.target = self
         searchField.action = #selector(searchPalette)
@@ -1210,10 +1347,34 @@ private final class SidebarView: NSView {
         collectionPicker.target = self
         collectionPicker.action = #selector(selectCollection)
         collectionPicker.font = .systemFont(ofSize: 10)
-        addArranged(section("КОЛЛЕКЦИЯ ОБЪЕКТОВ"), to: paletteStack)
-        addArranged(collectionPicker, to: paletteStack)
-        addArranged(searchField, to: paletteStack)
-        addArranged(hint("Нажмите или перетащите объект на холст"), to: paletteStack)
+        paletteToggleButton = makeButton("", symbol: "chevron.up") { [weak self] _ in self?.togglePaletteVisibility() }
+        paletteToggleButton.imagePosition = .imageOnly
+        paletteToggleButton.isBordered = false
+        paletteToggleButton.bezelStyle = .regularSquare
+        paletteToggleButton.imageScaling = .scaleProportionallyDown
+        paletteToggleButton.contentTintColor = .secondaryLabelColor
+        paletteToggleButton.toolTip = "Свернуть поиск и выбор объектов коллекции"
+        paletteToggleButton.controlSize = .small
+        paletteToggleButton.identifier = NSUserInterfaceItemIdentifier("palette-collection-toggle")
+        paletteToggleButton.widthAnchor.constraint(equalToConstant: 36).isActive = true
+        paletteToggleButton.heightAnchor.constraint(equalToConstant: 27).isActive = true
+        paletteToggleButton.setContentHuggingPriority(.required, for: .horizontal)
+        paletteToggleButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        let collectionTitle = section("КОЛЛЕКЦИЯ ОБЪЕКТОВ")
+        collectionTitle.lineBreakMode = .byTruncatingTail
+        collectionTitle.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        collectionTitle.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let paletteHeading = NSStackView(views: [collectionTitle, NSView(), paletteToggleButton])
+        paletteHeading.orientation = .horizontal
+        paletteHeading.alignment = .centerY
+        paletteHeading.distribution = .fill
+        paletteHeading.identifier = NSUserInterfaceItemIdentifier("palette-collection-heading")
+        paletteHeading.heightAnchor.constraint(greaterThanOrEqualToConstant: 30).isActive = true
+        addArranged(paletteHeading, to: paletteStack)
+        addArranged(paletteBodyStack, to: paletteStack)
+        addArranged(collectionPicker, to: paletteBodyStack)
+        addArranged(searchField, to: paletteBodyStack)
+        addArranged(hint("Нажмите или перетащите объект на холст"), to: paletteBodyStack)
         scrollView.documentView = stack
         scrollView.identifier = NSUserInterfaceItemIdentifier("palette-scroll")
         scrollView.hasVerticalScroller = true
@@ -1221,6 +1382,7 @@ private final class SidebarView: NSView {
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(scrollView)
         scrollView.autoresizingMask = [.width, .height]
+        addArranged(bottomSpacer, to: stack)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
@@ -1232,6 +1394,7 @@ private final class SidebarView: NSView {
         switch model.selection {
         case .project: selectionKey = "project"
         case .node(let id): selectionKey = "node:\(id)"
+        case .nodes(let ids): selectionKey = "nodes:\(ids.sorted().joined(separator: ","))"
         case .container(let id): selectionKey = "container:\(id)"
         case .edge(let id): selectionKey = "edge:\(id)"
         }
@@ -1265,10 +1428,9 @@ private final class SidebarView: NSView {
     }
 
     private func rebuildPalette(model: AppModel, query: String) {
-        let scrollOrigin = scrollView.contentView.bounds.origin
-        for view in Array(paletteStack.arrangedSubviews.dropFirst(4)) {
+        for view in Array(paletteBodyStack.arrangedSubviews.dropFirst(3)) {
             widthConstraints.removeValue(forKey: ObjectIdentifier(view))?.isActive = false
-            paletteStack.removeArrangedSubview(view)
+            paletteBodyStack.removeArrangedSubview(view)
             view.removeFromSuperview()
         }
         if let selected = collectionPicker.itemArray.first(where: { ($0.representedObject as? String) == selectedCollectionID }) {
@@ -1277,18 +1439,59 @@ private final class SidebarView: NSView {
         let paletteItems = (PaletteLibrary.collection(id: selectedCollectionID)?.objects ?? []).filter {
             query.isEmpty || $0.title.localizedLowercase.contains(query) || $0.detail.localizedLowercase.contains(query) || $0.kind.localizedLowercase.contains(query)
         }
-        addArranged(section("ОБЪЕКТЫ · \(paletteItems.count)"), to: paletteStack)
+        let resultsHeading = section("ОБЪЕКТЫ · \(paletteItems.count)")
+        resultsHeading.identifier = NSUserInterfaceItemIdentifier("palette-results-heading")
+        addArranged(resultsHeading, to: paletteBodyStack)
         for item in paletteItems {
             let paletteItem = paletteItemViews[item.id] ?? PaletteItemView(item: item)
             paletteItemViews[item.id] = paletteItem
             paletteItem.isEditingLocked = model.isEditingLocked
             if paletteItem.onClick == nil { paletteItem.onClick = { [weak self] in self?.onAddNode?(item) } }
-            addArranged(paletteItem, to: paletteStack)
+            addArranged(paletteItem, to: paletteBodyStack)
         }
-        if paletteItems.isEmpty { addArranged(hint("Объекты не найдены"), to: paletteStack) }
+        if paletteItems.isEmpty {
+            let emptyState = hint("Объекты не найдены")
+            emptyState.identifier = NSUserInterfaceItemIdentifier("palette-empty-state")
+            addArranged(emptyState, to: paletteBodyStack)
+        }
+        paletteBodyStack.isHidden = paletteCollapsed
+        paletteBodyStack.needsLayout = true
+        paletteStack.needsLayout = true
+        stack.needsLayout = true
         needsLayout = true
         layoutSubtreeIfNeeded()
-        scrollView.contentView.scroll(to: scrollOrigin)
+        stack.layoutSubtreeIfNeeded()
+        scrollToTop()
+    }
+
+    private func togglePaletteVisibility() {
+        paletteCollapsed.toggle()
+        paletteBodyStack.isHidden = paletteCollapsed
+        paletteToggleButton.image = NSImage(systemSymbolName: paletteCollapsed ? "chevron.down" : "chevron.up",
+                                            accessibilityDescription: paletteCollapsed ? "Развернуть коллекцию объектов" : "Свернуть коллекцию объектов")
+        paletteToggleButton.toolTip = paletteCollapsed
+            ? "Развернуть поиск и выбор объектов коллекции"
+            : "Свернуть поиск и выбор объектов коллекции"
+        if paletteCollapsed {
+            paletteStack.removeArrangedSubview(paletteBodyStack)
+            paletteBodyStack.isHidden = true
+        } else {
+            paletteBodyStack.isHidden = false
+            paletteStack.insertArrangedSubview(paletteBodyStack, at: 1)
+        }
+        paletteBodyStack.needsLayout = true
+        paletteStack.needsLayout = true
+        stack.needsLayout = true
+        needsLayout = true
+        layoutSubtreeIfNeeded()
+        stack.layoutSubtreeIfNeeded()
+        scrollToTop()
+    }
+
+    private func scrollToTop() {
+        let documentHeight = scrollView.documentView?.bounds.height ?? stack.bounds.height
+        let top = stack.isFlipped ? CGFloat.zero : max(0, documentHeight - scrollView.contentView.bounds.height)
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: top))
         scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 
@@ -1297,7 +1500,9 @@ private final class SidebarView: NSView {
         actions.removeAll()
         rowActions.removeAll()
         addArranged(separator(), to: contentStack)
-        addArranged(section("ДЕЙСТВИЯ"), to: contentStack)
+        let actionsHeading = section("ДЕЙСТВИЯ")
+        actionsHeading.identifier = NSUserInterfaceItemIdentifier("sidebar-actions-heading")
+        addArranged(actionsHeading, to: contentStack)
         let addContainer = actionButton("Добавить контейнер", symbol: "rectangle.3.group") { [weak self] in self?.onAddContainer?() }
         addContainer.isEnabled = !model.isEditingLocked
         addArranged(addContainer, to: contentStack)
@@ -1337,7 +1542,8 @@ private final class SidebarView: NSView {
         scrollView.frame = bounds
         let width = scrollView.contentView.bounds.width
         let height = documentHeight(for: stack)
-        stack.frame = NSRect(x: 0, y: 0, width: width, height: max(height, scrollView.contentView.bounds.height))
+        stack.frame = NSRect(x: 0, y: 0, width: width, height: max(height, 1))
+        stack.needsLayout = true
         stack.layoutSubtreeIfNeeded()
     }
 
@@ -1369,10 +1575,13 @@ private final class SidebarView: NSView {
     }
 
     private func documentHeight(for stack: NSStackView) -> CGFloat {
-        let viewsHeight = stack.arrangedSubviews.reduce(CGFloat.zero) { total, view in
-            total + (view is NSStackView ? documentHeight(for: view as! NSStackView) : max(view.fittingSize.height, view.frame.height))
+        let visibleViews = stack.arrangedSubviews.filter {
+            !$0.isHidden && $0.identifier?.rawValue != "sidebar-bottom-spacer"
         }
-        let spacing = stack.spacing * CGFloat(max(0, stack.arrangedSubviews.count - 1))
+        let viewsHeight = visibleViews.reduce(CGFloat.zero) { total, view in
+            return total + (view is NSStackView ? documentHeight(for: view as! NSStackView) : max(view.fittingSize.height, view.frame.height))
+        }
+        let spacing = stack.spacing * CGFloat(max(0, visibleViews.count - 1))
         return viewsHeight + spacing + stack.edgeInsets.top + stack.edgeInsets.bottom
     }
 
@@ -1434,7 +1643,10 @@ private final class SidebarElementButton: NSButton {
 private final class WorkspaceView: NSView {
     var onSelectElement: ((DiagramSelection) -> Void)?
     var onMoveNode: ((String, Double, Double) -> Void)?
+    var onMoveNodes: ((Set<String>, Double, Double) -> Void)?
     var onResizeNode: ((String, Double, Double) -> Void)?
+    var onScaleNodes: ((Set<String>, Double) -> Void)?
+    var onEditNodeText: ((String) -> Void)?
     var onCreateEdge: ((String, String) -> Void)?
     var onSetEdgeWaypoints: ((String, [RoutePoint], [LayoutNode]) -> Void)?
     var onReattachEdge: ((String, Bool, String) -> Void)?
@@ -1453,6 +1665,7 @@ private final class WorkspaceView: NSView {
     var onApplyProposal: (() -> Void)?
     var onCancelProposal: (() -> Void)?
 
+    private let headerScroll = NSScrollView()
     private let header = NSStackView()
     private let content = NSView()
     private let canvasView = DiagramCanvasView()
@@ -1556,7 +1769,7 @@ private final class WorkspaceView: NSView {
         header.orientation = .horizontal
         header.alignment = .centerY
         header.spacing = 7
-        header.translatesAutoresizingMaskIntoConstraints = false
+        header.setContentCompressionResistancePriority(.required, for: .horizontal)
         let zoomOut = makeButton("−", symbol: "minus.magnifyingglass") { [weak self] _ in self?.canvasView.zoom(by: 0.82) }
         zoomOut.toolTip = "Уменьшить масштаб"
         let zoomIn = makeButton("+", symbol: "plus.magnifyingglass") { [weak self] _ in self?.canvasView.zoom(by: 1.22) }
@@ -1585,7 +1798,10 @@ private final class WorkspaceView: NSView {
         [applyProposalButton, cancelProposalButton].forEach { $0.controlSize = .small; $0.isHidden = true }
         canvasView.onSelect = { [weak self] selection in self?.onSelectElement?(selection) }
         canvasView.onMoveNode = { [weak self] id, x, y in self?.onMoveNode?(id, x, y) }
+        canvasView.onMoveNodes = { [weak self] ids, dx, dy in self?.onMoveNodes?(ids, dx, dy) }
         canvasView.onResizeNode = { [weak self] id, width, height in self?.onResizeNode?(id, width, height) }
+        canvasView.onScaleNodes = { [weak self] ids, factor in self?.onScaleNodes?(ids, factor) }
+        canvasView.onEditNodeText = { [weak self] id in self?.onEditNodeText?(id) }
         canvasView.onSetEdgeWaypoints = { [weak self] id, points, positions in self?.onSetEdgeWaypoints?(id, points, positions) }
         canvasView.onReattachEdge = { [weak self] id, source, nodeID in self?.onReattachEdge?(id, source, nodeID) }
         canvasView.onCreateEdge = { [weak self] source, target in self?.onCreateEdge?(source, target) }
@@ -1624,6 +1840,24 @@ private final class WorkspaceView: NSView {
         header.addArrangedSubview(layoutLabel)
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        for control in header.arrangedSubviews where !(control is NSTextField) && control !== spacer {
+            control.setContentCompressionResistancePriority(.required, for: .horizontal)
+        }
+        countLabel.lineBreakMode = .byTruncatingTail
+        layoutLabel.lineBreakMode = .byTruncatingTail
+        countLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        layoutLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        headerScroll.identifier = NSUserInterfaceItemIdentifier("workspace-toolbar-scroll")
+        headerScroll.hasHorizontalScroller = true
+        headerScroll.hasVerticalScroller = false
+        headerScroll.autohidesScrollers = true
+        headerScroll.scrollerStyle = .overlay
+        headerScroll.borderType = .noBorder
+        headerScroll.drawsBackground = false
+        headerScroll.translatesAutoresizingMaskIntoConstraints = false
+        header.translatesAutoresizingMaskIntoConstraints = true
+        headerScroll.documentView = header
+        header.setFrameSize(NSSize(width: max(header.fittingSize.width, 700), height: 48))
 
         content.translatesAutoresizingMaskIntoConstraints = false
         canvasView.translatesAutoresizingMaskIntoConstraints = false
@@ -1646,17 +1880,28 @@ private final class WorkspaceView: NSView {
         header.layer?.backgroundColor = AppTheme.surface("window").cgColor
         let separator = NSBox()
         separator.boxType = .separator
-        [header, separator, content, footer].forEach {
+        [headerScroll, separator, content, footer].forEach {
             $0.translatesAutoresizingMaskIntoConstraints = false
             addSubview($0)
         }
         NSLayoutConstraint.activate([
-            header.leadingAnchor.constraint(equalTo: leadingAnchor), header.trailingAnchor.constraint(equalTo: trailingAnchor),
-            header.topAnchor.constraint(equalTo: topAnchor), header.heightAnchor.constraint(equalToConstant: 48),
-            separator.leadingAnchor.constraint(equalTo: leadingAnchor), separator.trailingAnchor.constraint(equalTo: trailingAnchor), separator.topAnchor.constraint(equalTo: header.bottomAnchor),
+            headerScroll.leadingAnchor.constraint(equalTo: leadingAnchor), headerScroll.trailingAnchor.constraint(equalTo: trailingAnchor),
+            headerScroll.topAnchor.constraint(equalTo: topAnchor), headerScroll.heightAnchor.constraint(equalToConstant: 48),
+            separator.leadingAnchor.constraint(equalTo: leadingAnchor), separator.trailingAnchor.constraint(equalTo: trailingAnchor), separator.topAnchor.constraint(equalTo: headerScroll.bottomAnchor),
             content.leadingAnchor.constraint(equalTo: leadingAnchor), content.trailingAnchor.constraint(equalTo: trailingAnchor), content.topAnchor.constraint(equalTo: separator.bottomAnchor), content.bottomAnchor.constraint(equalTo: footer.topAnchor),
             footer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14), footer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14), footer.bottomAnchor.constraint(equalTo: bottomAnchor), footer.heightAnchor.constraint(equalToConstant: 30),
         ])
+    }
+
+    override func layout() {
+        super.layout()
+        let viewportWidth = headerScroll.contentView.bounds.width
+        let naturalWidth = header.fittingSize.width
+        let documentWidth = max(max(viewportWidth, naturalWidth), 700)
+        if abs(header.frame.width - documentWidth) > 0.5 || abs(header.frame.height - 48) > 0.5 {
+            header.setFrameSize(NSSize(width: documentWidth, height: 48))
+            header.layoutSubtreeIfNeeded()
+        }
     }
 }
 
@@ -1894,6 +2139,7 @@ private final class InspectorView: NSView {
     var preferredWindowContentHeight: CGFloat {
         min(620, max(280, documentHeight(for: stack) + 63))
     }
+    var preferredWindowContentWidth: CGFloat { 360 }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -1924,7 +2170,7 @@ private final class InspectorView: NSView {
             addText("Название проекта", value: model.diagram?.project.title ?? "") { value in model.updateTitle(value) }
             addPopup("Направление", value: model.diagram?.diagram.direction ?? "LR", choices: [
                 ("LR", "Слева направо"), ("TB", "Сверху вниз"), ("RL", "Справа налево"), ("BT", "Снизу вверх"),
-            ]) { value in model.updateDirection(value) }
+            ], tooltip: "Задаёт направление ранжирования компонентов: слева направо, сверху вниз или в обратную сторону.") { value in model.updateDirection(value) }
             addEdgeRouting(model: model, label: "Маршрут связей")
             addPopup("Тема", value: model.themeMode, choices: [("system", "Системная"), ("light", "Светлая"), ("dark", "Тёмная")]) { model.updateThemeMode($0) }
             addPopup("Тачпад", value: model.inverseTrackpad ? "inverse" : "system", choices: [("inverse", "Инверсная навигация"), ("system", "Системная навигация")]) { model.inverseTrackpad = $0 == "inverse" }
@@ -1938,6 +2184,10 @@ private final class InspectorView: NSView {
             addPopup("Режим", value: model.diagram?.diagram.layoutMode ?? "auto", choices: [
                 ("auto", "Автоматический"), ("manual", "Ручной"),
             ], tooltip: "Автоматический: Graphviz размещает узлы. Ручной: координаты остаются фиксированными, neato -n2 пересчитывает связи.") { value in model.updateLayoutMode(value) }
+        case .nodes(let ids):
+            title.stringValue = "\(ids.count) компонентов"
+            addSection("ГРУППА")
+            addFullWidth(makeLabel("Компоненты можно перемещать, масштабировать за общий маркер или удалить вместе.", size: 10, weight: .regular, color: .secondaryLabelColor))
         case .node(let id):
             title.stringValue = "Компонент"
             if let node = model.nodes.first(where: { $0.id == id }) {
@@ -1976,6 +2226,12 @@ private final class InspectorView: NSView {
                 addColor("Заливка", value: node.style.fill) { color in model.editNode(id) { $0.style.fill = color } }
                 addColor("Граница", value: node.style.stroke) { color in model.editNode(id) { $0.style.stroke = color } }
                 addColor("Текст", value: node.style.text) { color in model.editNode(id) { $0.style.text = color } }
+                addPopup("Выравнивание текста", value: node.effectiveLabelAlignment, choices: [
+                    ("left", "Влево"), ("center", "По центру"), ("right", "Вправо"),
+                ]) { value in model.editNode(id) { $0.labelAlignment = value } }
+                addPopup("Положение текста", value: node.effectiveLabelVerticalAlignment, choices: [
+                    ("top", "Сверху"), ("middle", "Посередине"), ("bottom", "Снизу"),
+                ]) { value in model.editNode(id) { $0.labelVerticalAlignment = value } }
             }
         case .container(let id):
             title.stringValue = "Контейнер"
@@ -2007,7 +2263,7 @@ private final class InspectorView: NSView {
                 addPopup("Цель", value: item.target, choices: nodes) { value in model.editEdge(id) { $0.target = value; $0.targetPort = "auto" } }
                 addPopup("Направление", value: item.direction, choices: [
                     ("forward", "Односторонняя"), ("both", "Двусторонняя"), ("none", "Без стрелок"),
-                ]) { value in model.editEdge(id) { $0.direction = value } }
+                ], tooltip: "Определяет, показывается ли стрелка к целевому компоненту, на обоих концах связи или не показывается.") { value in model.editEdge(id) { $0.direction = value } }
                 addPopup("Стиль линии", value: item.style.lineStyle, choices: [
                     ("solid", "Сплошная"), ("dashed", "Пунктирная"), ("dotted", "Точечная"), ("bold", "Жирная"),
                 ]) { value in model.editEdge(id) { $0.style.lineStyle = value } }
@@ -2056,13 +2312,19 @@ private final class InspectorView: NSView {
         scrollView.drawsBackground = false
         scrollView.autoresizingMask = [.width, .height]
         let delete = makeButton("Удалить", symbol: "trash") { [weak self] _ in self?.onDelete?() }
+        delete.identifier = NSUserInterfaceItemIdentifier("inspector-delete")
         delete.isBordered = false
         delete.contentTintColor = .systemRed
         deleteButton = delete
-        let titleRow = NSStackView(views: [title, NSView(), delete])
+        let titleRow = NSStackView(views: [delete, title])
         titleRow.orientation = .horizontal
         titleRow.alignment = .centerY
-        titleRow.spacing = 4
+        titleRow.spacing = 12
+        delete.widthAnchor.constraint(greaterThanOrEqualToConstant: 76).isActive = true
+        delete.setContentHuggingPriority(.required, for: .horizontal)
+        delete.setContentCompressionResistancePriority(.required, for: .horizontal)
+        title.lineBreakMode = .byTruncatingTail
+        title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         header.addArrangedSubview(heading)
         header.addArrangedSubview(titleRow)
         titleRow.widthAnchor.constraint(equalTo: header.widthAnchor).isActive = true
@@ -2124,7 +2386,7 @@ private final class InspectorView: NSView {
     private func addEdgeRouting(model: AppModel, label: String) {
         addPopup(label, value: model.diagram?.diagram.edgeRouting ?? "angled", choices: [
             ("straight", "Прямые"), ("angled", "Косые ломаные"), ("orthogonal", "Прямоугольные"), ("curved", "Кривые · Graphviz"),
-        ]) { value in model.updateEdgeRouting(value) }
+        ], tooltip: "Выбирает общий способ прокладки связей. Индивидуальная связь может задать собственный маршрут.") { value in model.updateEdgeRouting(value) }
     }
 
     private func addText(_ label: String, value: String, tooltip: String? = nil, changed: @escaping (String) -> Void) {
@@ -2133,7 +2395,7 @@ private final class InspectorView: NSView {
         field.font = .systemFont(ofSize: 11)
         field.toolTip = tooltip
         field.cell?.sendsActionOnEndEditing = true
-        addField(label, control: field) { sender in changed((sender as? NSTextField)?.stringValue ?? "") }
+        addField(label, control: field, tooltip: tooltip) { sender in changed((sender as? NSTextField)?.stringValue ?? "") }
     }
 
     private func addReadOnly(_ label: String, value: String) {
@@ -2159,7 +2421,7 @@ private final class InspectorView: NSView {
         }
         if let selected = popup.itemArray.first(where: { ($0.representedObject as? String) == value }) { popup.select(selected) }
         popup.font = .systemFont(ofSize: 10)
-        addField(label, control: popup) { sender in
+        addField(label, control: popup, tooltip: tooltip) { sender in
             guard let selected = (sender as? NSPopUpButton)?.selectedItem?.representedObject as? String else { return }
             changed(selected)
         }
@@ -2179,8 +2441,8 @@ private final class InspectorView: NSView {
         addField(label, control: well) { sender in changed((sender as? NSColorWell)?.color.hexRGBA ?? value) }
     }
 
-    private func addField(_ label: String, control: NSControl, action: ((NSControl) -> Void)?) {
-        let title = makeLabel(label, size: 9, weight: .medium, color: .secondaryLabelColor)
+    private func addField(_ label: String, control: NSControl, tooltip: String? = nil, action: ((NSControl) -> Void)?) {
+        let title = HelpFieldLabel(label, explanation: tooltip ?? Self.fieldHelp[label] ?? "Настройка определяет значение или поведение этого свойства.", identifier: "inspector-help-\(label)")
         control.translatesAutoresizingMaskIntoConstraints = false
         control.widthAnchor.constraint(equalToConstant: 245).isActive = true
         let row = NSStackView(views: [title, control])
@@ -2196,6 +2458,44 @@ private final class InspectorView: NSView {
         control.action = #selector(ControlAction.invoke(_:))
         actions.append(proxy)
     }
+
+    private static let fieldHelp: [String: String] = [
+        "Название проекта": "Имя диаграммы. Отображается в верхней панели и используется в имени файла проекта и PDF-экспорта.",
+        "Маршрут связей": "Выбирает общий вид линий на диаграмме. Отдельная связь может переопределить это значение.",
+        "Тема": "Системная тема следует macOS; светлая и тёмная темы задаются вручную и применяются к окнам и холсту.",
+        "Тачпад": "Инверсная навигация двигает холст против движения пальцев; системная повторяет направление прокрутки macOS.",
+        "Движок Graphviz": "Выбирает алгоритм автоматической компоновки. В ручном режиме позиции узлов фиксирует neato -n2.",
+        "Режим": "Автоматический режим размещает узлы Graphviz. Ручной сохраняет заданные координаты и пересчитывает маршруты.",
+        "Название": "Подпись объекта на холсте. Изменение подписи не меняет стабильный идентификатор и связи.",
+        "Тип": "Семантическая категория компонента. Используется в анализе и запросах Ollama, но не меняет геометрию.",
+        "ID": "Стабильный идентификатор для связей, версий и обмена JSON. Переименование его не меняет.",
+        "Контейнер": "Помещает компонент в логическую зону. Узлы внутри неё показываются в кластере.",
+        "Коллекция": "Выбирает библиотеку фигур, из которой будет взята иконка компонента.",
+        "Фигура": "Заменяет векторную фигуру компонента. Идентификатор, подпись и связи сохраняются.",
+        "X координата": "Положение центра компонента по горизонтали в дюймах; доступно в ручном режиме.",
+        "Y координата": "Положение центра компонента по вертикали в дюймах; доступно в ручном режиме.",
+        "Описание": "Текстовое описание для контекста Ollama и подсказки компонента.",
+        "Заливка": "Внутренний цвет фигуры. Поддерживает прозрачность через alpha-канал.",
+        "Граница": "Цвет внешнего контура и внутренних линий векторной фигуры; поддерживает прозрачность.",
+        "Текст": "Цвет подписи компонента или контейнера; поддерживает прозрачность.",
+        "Выравнивание текста": "Выбирает размещение подписи по горизонтали внутри фигуры.",
+        "Положение текста": "Размещает подпись у верхнего края, по центру или у нижнего края фигуры.",
+        "Родитель": "Перемещает контейнер внутрь другого контейнера или на корневой уровень.",
+        "Отступ, pt": "Расстояние вокруг содержимого контейнера. Изменяет размер кластера относительно вложенных объектов.",
+        "Подпись": "Текст, отображаемый у линии связи.",
+        "Источник": "Начальный компонент направленной связи.",
+        "Цель": "Конечный компонент направленной связи.",
+        "Направление": "Определяет стрелку в сторону цели, в обе стороны или линию без стрелок.",
+        "Стиль линии": "Задаёт сплошное, пунктирное, точечное или утолщённое отображение связи.",
+        "Маршрут этой связи": "Переопределяет общий маршрут диаграммы только для выбранной связи.",
+        "Привязка источника": "Задаёт точку выхода линии из исходной фигуры: ближайший контур, сторону или вершину.",
+        "Привязка цели": "Задаёт точку входа линии в целевую фигуру: ближайший контур, сторону или вершину.",
+        "Наконечник": "Форма стрелки на целевой стороне однонаправленной связи.",
+        "Хвост": "Форма стрелки на исходной стороне двунаправленной связи.",
+        "Толщина": "Толщина линии связи в пунктах; влияет также на наконечники и PDF/SVG-экспорт.",
+        "Точки пути": "Число пользовательских изгибов связи. Двойной щелчок по линии добавляет точку.",
+        "Цвет": "Цвет линии и её наконечников; поддерживает прозрачность через alpha-канал.",
+    ]
 
     private func separator() -> NSBox {
         let box = NSBox()

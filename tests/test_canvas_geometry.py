@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from graphischema import api
 from graphischema.dot import to_dot
 from graphischema.dot_editor import apply_dot, DOTEditError
-from graphischema.geometry import attachment, icon_library, outline_paths, vertices
+from graphischema.geometry import attachment, icon_library, normalize_edges, outline_paths, vertices
 from graphischema.layout import compute_layout
 from graphischema.models import DiagramProject
 from graphischema.rendering import render_svg, render_png
@@ -88,6 +88,43 @@ def test_graphviz_arrow_base_is_extended_to_visible_shape(shape):
     edge = layout["edges"][0]
     for node, point in zip(project.nodes, [edge["points"][0], edge["points"][-1]]):
         assert contour_distance((point["x"], point["y"]), outline_paths(node, by_id[node.id])) < 1e-6
+
+
+def test_right_to_left_arrowhead_uses_source_to_target_route_order():
+    project = icon_project()
+    project.diagram.direction = "RL"
+    project.diagram.edge_routing = "angled"
+    for node, x in zip(project.nodes, [4.0, 1.0]):
+        node.icon = None
+        node.shape = "box"
+        node.width = 1.4
+        node.height = 1.2
+        node.x = x
+        node.y = 1.0
+
+    # Simulate a Graphviz route returned target-to-source. Its final control
+    # point would make the unnormalized arrow point out of the target shape.
+    layout = {
+        "engine": "dot", "edgeRouting": "angled", "width": 5.0, "height": 3.0,
+        "minX": 0.0, "minY": 0.0,
+        "nodes": [
+            {"id": "shield", "x": 4.0, "y": 1.0, "width": 1.4, "height": 1.2},
+            {"id": "server", "x": 1.0, "y": 1.0, "width": 1.4, "height": 1.2},
+        ],
+        "edges": [{
+            "id": "link", "source": "shield", "target": "server", "label": "",
+            "points": [
+                {"x": 1.7, "y": 1.0}, {"x": 3.5, "y": 1.0},
+                {"x": 1.4, "y": 1.0}, {"x": 3.3, "y": 1.0},
+            ],
+        }],
+    }
+
+    points = [(point["x"], point["y"]) for point in normalize_edges(project, layout)["edges"][0]["points"]]
+    tip, previous = points[-1], points[-2]
+    inward = (1.0-tip[0], 1.0-tip[1])
+    tangent = (tip[0]-previous[0], tip[1]-previous[1])
+    assert tangent[0]*inward[0] + tangent[1]*inward[1] > 0
 
 
 def test_waypoints_and_figure_roundtrip_dot_json_and_versions(tmp_path, monkeypatch):

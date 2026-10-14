@@ -1,0 +1,4283 @@
+[
+  {
+    "name": "manual-LR-angled",
+    "project": {
+      "schema_version": "1.0",
+      "project": {
+        "id": "project_local",
+        "title": "Новая архитектура"
+      },
+      "diagram": {
+        "type": "architecture",
+        "layout_engine": "neato",
+        "direction": "LR",
+        "edge_routing": "angled",
+        "layout_mode": "manual",
+        "node_spacing": 0.55,
+        "rank_spacing": 0.8
+      },
+      "containers": [],
+      "nodes": [
+        {
+          "id": "source",
+          "label": "source",
+          "description": "",
+          "kind": "service",
+          "shape": "box",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 4.0,
+          "y": 4.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        },
+        {
+          "id": "target",
+          "label": "target",
+          "description": "",
+          "kind": "service",
+          "shape": "box",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 7.0,
+          "y": 4.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "label": "",
+          "direction": "both",
+          "style": {
+            "line_style": "solid",
+            "color": "#FF0000",
+            "penwidth": 2.0,
+            "arrowhead": "normal",
+            "arrowtail": "normal",
+            "constraint": true,
+            "weight": 1,
+            "minlen": 1
+          },
+          "source_port": "auto",
+          "target_port": "auto",
+          "routing": null,
+          "waypoints": []
+        }
+      ],
+      "presentation": {
+        "theme": "light",
+        "background": "#FFFFFF"
+      }
+    },
+    "layout": {
+      "engine": "neato",
+      "edgeRouting": "angled",
+      "width": 7.7,
+      "height": 4.6,
+      "minX": 0.0,
+      "minY": 0.0,
+      "nodes": [
+        {
+          "id": "source",
+          "x": 4.0,
+          "y": 4.0,
+          "width": 1.4,
+          "height": 1.2
+        },
+        {
+          "id": "target",
+          "x": 7.0,
+          "y": 4.0,
+          "width": 1.4,
+          "height": 1.2
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "points": [
+            {
+              "x": 4.7,
+              "y": 4.0
+            },
+            {
+              "x": 5.2726,
+              "y": 4.0
+            },
+            {
+              "x": 5.7281,
+              "y": 4.0
+            },
+            {
+              "x": 6.3,
+              "y": 4.0
+            }
+          ],
+          "label": "",
+          "labelX": null,
+          "labelY": null,
+          "normalized": true
+        }
+      ]
+    },
+    "svg_measurements": [
+      {
+        "case": "manual-LR-angled",
+        "endpoint": "target",
+        "shaft_x": 473.6,
+        "shaft_y": 71.2,
+        "tip_x": 481.6,
+        "tip_y": 71.2,
+        "rear_x": 473.6,
+        "rear_y": 71.2,
+        "join_error_pt": 0.0,
+        "join_angle_deg": 0.0,
+        "rear_crossing_error_pt": 0.0
+      },
+      {
+        "case": "manual-LR-angled",
+        "endpoint": "source",
+        "shaft_x": 374.4,
+        "shaft_y": 71.2,
+        "tip_x": 366.4,
+        "tip_y": 71.2,
+        "rear_x": 374.4,
+        "rear_y": 71.2,
+        "join_error_pt": 0.0,
+        "join_angle_deg": 0.0,
+        "rear_crossing_error_pt": 0.0
+      }
+    ]
+  },
+  {
+    "name": "manual-RL-straight",
+    "project": {
+      "schema_version": "1.0",
+      "project": {
+        "id": "project_local",
+        "title": "Новая архитектура"
+      },
+      "diagram": {
+        "type": "architecture",
+        "layout_engine": "neato",
+        "direction": "RL",
+        "edge_routing": "straight",
+        "layout_mode": "manual",
+        "node_spacing": 0.55,
+        "rank_spacing": 0.8
+      },
+      "containers": [],
+      "nodes": [
+        {
+          "id": "source",
+          "label": "source",
+          "description": "",
+          "kind": "service",
+          "shape": "ellipse",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 4.0,
+          "y": 4.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        },
+        {
+          "id": "target",
+          "label": "target",
+          "description": "",
+          "kind": "service",
+          "shape": "ellipse",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 1.0,
+          "y": 4.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "label": "",
+          "direction": "both",
+          "style": {
+            "line_style": "solid",
+            "color": "#FF0000",
+            "penwidth": 2.0,
+            "arrowhead": "normal",
+            "arrowtail": "normal",
+            "constraint": true,
+            "weight": 1,
+            "minlen": 1
+          },
+          "source_port": "auto",
+          "target_port": "auto",
+          "routing": null,
+          "waypoints": []
+        }
+      ],
+      "presentation": {
+        "theme": "light",
+        "background": "#FFFFFF"
+      }
+    },
+    "layout": {
+      "engine": "neato",
+      "edgeRouting": "straight",
+      "width": 4.7,
+      "height": 4.6,
+      "minX": 0.0,
+      "minY": 0.0,
+      "nodes": [
+        {
+          "id": "source",
+          "x": 4.0,
+          "y": 4.0,
+          "width": 1.4,
+          "height": 1.2
+        },
+        {
+          "id": "target",
+          "x": 1.0,
+          "y": 4.0,
+          "width": 1.4,
+          "height": 1.2
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "points": [
+            {
+              "x": 3.3,
+              "y": 4.0
+            },
+            {
+              "x": 1.7,
+              "y": 4.0
+            }
+          ],
+          "label": "",
+          "labelX": null,
+          "labelY": null,
+          "normalized": true
+        }
+      ]
+    },
+    "svg_measurements": [
+      {
+        "case": "manual-RL-straight",
+        "endpoint": "target",
+        "shaft_x": 158.4,
+        "shaft_y": 71.2,
+        "tip_x": 150.4,
+        "tip_y": 71.2,
+        "rear_x": 158.4,
+        "rear_y": 71.2,
+        "join_error_pt": 0.0,
+        "join_angle_deg": 0.0,
+        "rear_crossing_error_pt": 0.0
+      },
+      {
+        "case": "manual-RL-straight",
+        "endpoint": "source",
+        "shaft_x": 257.6,
+        "shaft_y": 71.2,
+        "tip_x": 265.6,
+        "tip_y": 71.2,
+        "rear_x": 257.6,
+        "rear_y": 71.2,
+        "join_error_pt": 0.0,
+        "join_angle_deg": 0.0,
+        "rear_crossing_error_pt": 0.0
+      }
+    ]
+  },
+  {
+    "name": "manual-RL-curved",
+    "project": {
+      "schema_version": "1.0",
+      "project": {
+        "id": "project_local",
+        "title": "Новая архитектура"
+      },
+      "diagram": {
+        "type": "architecture",
+        "layout_engine": "neato",
+        "direction": "RL",
+        "edge_routing": "curved",
+        "layout_mode": "manual",
+        "node_spacing": 0.55,
+        "rank_spacing": 0.8
+      },
+      "containers": [],
+      "nodes": [
+        {
+          "id": "source",
+          "label": "source",
+          "description": "",
+          "kind": "service",
+          "shape": "ellipse",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 4.0,
+          "y": 4.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        },
+        {
+          "id": "target",
+          "label": "target",
+          "description": "",
+          "kind": "service",
+          "shape": "ellipse",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 1.0,
+          "y": 4.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "label": "",
+          "direction": "both",
+          "style": {
+            "line_style": "solid",
+            "color": "#FF0000",
+            "penwidth": 2.0,
+            "arrowhead": "normal",
+            "arrowtail": "normal",
+            "constraint": true,
+            "weight": 1,
+            "minlen": 1
+          },
+          "source_port": "auto",
+          "target_port": "auto",
+          "routing": null,
+          "waypoints": []
+        }
+      ],
+      "presentation": {
+        "theme": "light",
+        "background": "#FFFFFF"
+      }
+    },
+    "layout": {
+      "engine": "neato",
+      "edgeRouting": "curved",
+      "width": 4.7,
+      "height": 4.6,
+      "minX": 0.0,
+      "minY": 0.0,
+      "nodes": [
+        {
+          "id": "source",
+          "x": 4.0,
+          "y": 4.0,
+          "width": 1.4,
+          "height": 1.2
+        },
+        {
+          "id": "target",
+          "x": 1.0,
+          "y": 4.0,
+          "width": 1.4,
+          "height": 1.2
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "points": [
+            {
+              "x": 3.3,
+              "y": 4.0
+            },
+            {
+              "x": 3.229018004918981,
+              "y": 4.0
+            },
+            {
+              "x": 3.159154456018518,
+              "y": 3.9999999999999996
+            },
+            {
+              "x": 3.0903080078125,
+              "y": 4.0
+            },
+            {
+              "x": 3.0223773148148148,
+              "y": 4.0
+            },
+            {
+              "x": 2.9552610315393517,
+              "y": 3.9999999999999996
+            },
+            {
+              "x": 2.8888578125,
+              "y": 4.0
+            },
+            {
+              "x": 2.8230663122106474,
+              "y": 3.999999999999999
+            },
+            {
+              "x": 2.757785185185185,
+              "y": 4.000000000000001
+            },
+            {
+              "x": 2.6929130859375,
+              "y": 4.0
+            },
+            {
+              "x": 2.628348668981481,
+              "y": 3.999999999999999
+            },
+            {
+              "x": 2.5639905888310186,
+              "y": 4.000000000000001
+            },
+            {
+              "x": 2.4997374999999997,
+              "y": 4.0
+            },
+            {
+              "x": 2.4354880570023147,
+              "y": 4.0
+            },
+            {
+              "x": 2.3711409143518516,
+              "y": 4.0
+            },
+            {
+              "x": 2.3065947265625,
+              "y": 4.0
+            },
+            {
+              "x": 2.2417481481481483,
+              "y": 4.0
+            },
+            {
+              "x": 2.1764998336226853,
+              "y": 4.0
+            },
+            {
+              "x": 2.1107484375,
+              "y": 4.0
+            },
+            {
+              "x": 2.0443926142939817,
+              "y": 4.0
+            },
+            {
+              "x": 1.9773310185185184,
+              "y": 4.0
+            },
+            {
+              "x": 1.9094623046875001,
+              "y": 4.0
+            },
+            {
+              "x": 1.8406851273148148,
+              "y": 4.0
+            },
+            {
+              "x": 1.7708981409143518,
+              "y": 4.0
+            },
+            {
+              "x": 1.7,
+              "y": 4.0
+            }
+          ],
+          "label": "",
+          "labelX": null,
+          "labelY": null,
+          "normalized": true
+        }
+      ]
+    },
+    "svg_measurements": [
+      {
+        "case": "manual-RL-curved",
+        "endpoint": "target",
+        "shaft_x": 158.4,
+        "shaft_y": 71.2,
+        "tip_x": 150.4,
+        "tip_y": 71.2,
+        "rear_x": 158.4,
+        "rear_y": 71.2,
+        "join_error_pt": 0.0,
+        "join_angle_deg": 0.0,
+        "rear_crossing_error_pt": 0.0
+      },
+      {
+        "case": "manual-RL-curved",
+        "endpoint": "source",
+        "shaft_x": 257.6,
+        "shaft_y": 71.2,
+        "tip_x": 265.6,
+        "tip_y": 71.2,
+        "rear_x": 257.6,
+        "rear_y": 71.2,
+        "join_error_pt": 0.0,
+        "join_angle_deg": 0.0,
+        "rear_crossing_error_pt": 0.0
+      }
+    ]
+  },
+  {
+    "name": "manual-up-orthogonal",
+    "project": {
+      "schema_version": "1.0",
+      "project": {
+        "id": "project_local",
+        "title": "Новая архитектура"
+      },
+      "diagram": {
+        "type": "architecture",
+        "layout_engine": "neato",
+        "direction": "LR",
+        "edge_routing": "orthogonal",
+        "layout_mode": "manual",
+        "node_spacing": 0.55,
+        "rank_spacing": 0.8
+      },
+      "containers": [],
+      "nodes": [
+        {
+          "id": "source",
+          "label": "source",
+          "description": "",
+          "kind": "service",
+          "shape": "diamond",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 4.0,
+          "y": 4.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        },
+        {
+          "id": "target",
+          "label": "target",
+          "description": "",
+          "kind": "service",
+          "shape": "diamond",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 4.0,
+          "y": 7.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "label": "",
+          "direction": "both",
+          "style": {
+            "line_style": "solid",
+            "color": "#FF0000",
+            "penwidth": 2.0,
+            "arrowhead": "normal",
+            "arrowtail": "normal",
+            "constraint": true,
+            "weight": 1,
+            "minlen": 1
+          },
+          "source_port": "auto",
+          "target_port": "auto",
+          "routing": null,
+          "waypoints": []
+        }
+      ],
+      "presentation": {
+        "theme": "light",
+        "background": "#FFFFFF"
+      }
+    },
+    "layout": {
+      "engine": "neato",
+      "edgeRouting": "orthogonal",
+      "width": 4.7,
+      "height": 7.6,
+      "minX": 0.0,
+      "minY": 0.0,
+      "nodes": [
+        {
+          "id": "source",
+          "x": 4.0,
+          "y": 4.0,
+          "width": 1.4,
+          "height": 1.2
+        },
+        {
+          "id": "target",
+          "x": 4.0,
+          "y": 7.0,
+          "width": 1.4,
+          "height": 1.2
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "points": [
+            {
+              "x": 4.0,
+              "y": 4.6
+            },
+            {
+              "x": 4.0,
+              "y": 6.4
+            }
+          ],
+          "label": "",
+          "labelX": null,
+          "labelY": null,
+          "normalized": true
+        }
+      ]
+    },
+    "svg_measurements": [
+      {
+        "case": "manual-up-orthogonal",
+        "endpoint": "target",
+        "shaft_x": 316.0,
+        "shaft_y": 122.4,
+        "tip_x": 316.0,
+        "tip_y": 114.4,
+        "rear_x": 316.0,
+        "rear_y": 122.4,
+        "join_error_pt": 0.0,
+        "join_angle_deg": 0.0,
+        "rear_crossing_error_pt": 0.0
+      },
+      {
+        "case": "manual-up-orthogonal",
+        "endpoint": "source",
+        "shaft_x": 316.0,
+        "shaft_y": 236.0,
+        "tip_x": 316.0,
+        "tip_y": 244.0,
+        "rear_x": 316.0,
+        "rear_y": 236.0,
+        "join_error_pt": 0.0,
+        "join_angle_deg": 0.0,
+        "rear_crossing_error_pt": 0.0
+      }
+    ]
+  },
+  {
+    "name": "manual-down-curved",
+    "project": {
+      "schema_version": "1.0",
+      "project": {
+        "id": "project_local",
+        "title": "Новая архитектура"
+      },
+      "diagram": {
+        "type": "architecture",
+        "layout_engine": "neato",
+        "direction": "LR",
+        "edge_routing": "curved",
+        "layout_mode": "manual",
+        "node_spacing": 0.55,
+        "rank_spacing": 0.8
+      },
+      "containers": [],
+      "nodes": [
+        {
+          "id": "source",
+          "label": "source",
+          "description": "",
+          "kind": "service",
+          "shape": "hexagon",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 4.0,
+          "y": 4.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        },
+        {
+          "id": "target",
+          "label": "target",
+          "description": "",
+          "kind": "service",
+          "shape": "hexagon",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 4.0,
+          "y": 1.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "label": "",
+          "direction": "both",
+          "style": {
+            "line_style": "solid",
+            "color": "#FF0000",
+            "penwidth": 2.0,
+            "arrowhead": "normal",
+            "arrowtail": "normal",
+            "constraint": true,
+            "weight": 1,
+            "minlen": 1
+          },
+          "source_port": "auto",
+          "target_port": "auto",
+          "routing": null,
+          "waypoints": []
+        }
+      ],
+      "presentation": {
+        "theme": "light",
+        "background": "#FFFFFF"
+      }
+    },
+    "layout": {
+      "engine": "neato",
+      "edgeRouting": "curved",
+      "width": 4.7,
+      "height": 4.6,
+      "minX": 0.0,
+      "minY": 0.0,
+      "nodes": [
+        {
+          "id": "source",
+          "x": 4.0,
+          "y": 4.0,
+          "width": 1.4,
+          "height": 1.2
+        },
+        {
+          "id": "target",
+          "x": 4.0,
+          "y": 1.0,
+          "width": 1.4,
+          "height": 1.2
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "points": [
+            {
+              "x": 4.0,
+              "y": 3.4
+            },
+            {
+              "x": 4.0,
+              "y": 3.322156944444445
+            },
+            {
+              "x": 3.9999999999999996,
+              "y": 3.245011805555555
+            },
+            {
+              "x": 4.0,
+              "y": 3.168503125
+            },
+            {
+              "x": 4.0,
+              "y": 3.092569444444445
+            },
+            {
+              "x": 3.9999999999999996,
+              "y": 3.0171493055555554
+            },
+            {
+              "x": 4.0,
+              "y": 2.9421812499999995
+            },
+            {
+              "x": 3.999999999999999,
+              "y": 2.867603819444444
+            },
+            {
+              "x": 4.000000000000001,
+              "y": 2.793355555555556
+            },
+            {
+              "x": 4.0,
+              "y": 2.7193750000000003
+            },
+            {
+              "x": 3.999999999999999,
+              "y": 2.6456006944444437
+            },
+            {
+              "x": 4.000000000000001,
+              "y": 2.571971180555556
+            },
+            {
+              "x": 4.0,
+              "y": 2.498425
+            },
+            {
+              "x": 4.0,
+              "y": 2.4249006944444442
+            },
+            {
+              "x": 4.0,
+              "y": 2.3513368055555555
+            },
+            {
+              "x": 4.0,
+              "y": 2.2776718750000002
+            },
+            {
+              "x": 4.0,
+              "y": 2.2038444444444445
+            },
+            {
+              "x": 4.0,
+              "y": 2.1297930555555555
+            },
+            {
+              "x": 4.0,
+              "y": 2.0554562499999998
+            },
+            {
+              "x": 4.0,
+              "y": 1.9807725694444445
+            },
+            {
+              "x": 4.0,
+              "y": 1.9056805555555556
+            },
+            {
+              "x": 4.0,
+              "y": 1.83011875
+            },
+            {
+              "x": 4.0,
+              "y": 1.7540256944444446
+            },
+            {
+              "x": 4.0,
+              "y": 1.6773399305555556
+            },
+            {
+              "x": 4.0,
+              "y": 1.6
+            }
+          ],
+          "label": "",
+          "labelX": null,
+          "labelY": null,
+          "normalized": true
+        }
+      ]
+    },
+    "svg_measurements": [
+      {
+        "case": "manual-down-curved",
+        "endpoint": "target",
+        "shaft_x": 316.0,
+        "shaft_y": 236.0,
+        "tip_x": 316.0,
+        "tip_y": 244.0,
+        "rear_x": 316.0,
+        "rear_y": 236.0,
+        "join_error_pt": 0.0,
+        "join_angle_deg": 0.0,
+        "rear_crossing_error_pt": 0.0
+      },
+      {
+        "case": "manual-down-curved",
+        "endpoint": "source",
+        "shaft_x": 316.0,
+        "shaft_y": 122.4,
+        "tip_x": 316.0,
+        "tip_y": 114.4,
+        "rear_x": 316.0,
+        "rear_y": 122.4,
+        "join_error_pt": 0.0,
+        "join_angle_deg": 0.0,
+        "rear_crossing_error_pt": 0.0
+      }
+    ]
+  },
+  {
+    "name": "manual-NE-curved",
+    "project": {
+      "schema_version": "1.0",
+      "project": {
+        "id": "project_local",
+        "title": "Новая архитектура"
+      },
+      "diagram": {
+        "type": "architecture",
+        "layout_engine": "neato",
+        "direction": "LR",
+        "edge_routing": "curved",
+        "layout_mode": "manual",
+        "node_spacing": 0.55,
+        "rank_spacing": 0.8
+      },
+      "containers": [],
+      "nodes": [
+        {
+          "id": "source",
+          "label": "source",
+          "description": "",
+          "kind": "service",
+          "shape": "box",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 4.0,
+          "y": 4.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        },
+        {
+          "id": "target",
+          "label": "target",
+          "description": "",
+          "kind": "service",
+          "shape": "box",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 7.0,
+          "y": 6.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "label": "",
+          "direction": "both",
+          "style": {
+            "line_style": "solid",
+            "color": "#FF0000",
+            "penwidth": 2.0,
+            "arrowhead": "normal",
+            "arrowtail": "normal",
+            "constraint": true,
+            "weight": 1,
+            "minlen": 1
+          },
+          "source_port": "auto",
+          "target_port": "auto",
+          "routing": null,
+          "waypoints": []
+        }
+      ],
+      "presentation": {
+        "theme": "light",
+        "background": "#FFFFFF"
+      }
+    },
+    "layout": {
+      "engine": "neato",
+      "edgeRouting": "curved",
+      "width": 7.7,
+      "height": 6.6,
+      "minX": 0.0,
+      "minY": 0.0,
+      "nodes": [
+        {
+          "id": "source",
+          "x": 4.0,
+          "y": 4.0,
+          "width": 1.4,
+          "height": 1.2
+        },
+        {
+          "id": "target",
+          "x": 7.0,
+          "y": 6.0,
+          "width": 1.4,
+          "height": 1.2
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "points": [
+            {
+              "x": 4.7,
+              "y": 4.6
+            },
+            {
+              "x": 4.769054347511574,
+              "y": 4.630044719328704
+            },
+            {
+              "x": 4.83745769675926,
+              "y": 4.660928587962962
+            },
+            {
+              "x": 4.905270507812501,
+              "y": 4.692576171875
+            },
+            {
+              "x": 4.972553240740742,
+              "y": 4.724912037037038
+            },
+            {
+              "x": 5.039366355613425,
+              "y": 4.757860749421296
+            },
+            {
+              "x": 5.1057703125,
+              "y": 4.7913468749999995
+            },
+            {
+              "x": 5.171825571469907,
+              "y": 4.82529497974537
+            },
+            {
+              "x": 5.237592592592593,
+              "y": 4.85962962962963
+            },
+            {
+              "x": 5.3031318359375,
+              "y": 4.894275390625
+            },
+            {
+              "x": 5.368503761574074,
+              "y": 4.929156828703703
+            },
+            {
+              "x": 5.43376882957176,
+              "y": 4.9641985098379635
+            },
+            {
+              "x": 5.4989875,
+              "y": 4.999325
+            },
+            {
+              "x": 5.564220232928241,
+              "y": 5.034460865162038
+            },
+            {
+              "x": 5.629527488425926,
+              "y": 5.069530671296297
+            },
+            {
+              "x": 5.6949697265624994,
+              "y": 5.104458984375
+            },
+            {
+              "x": 5.760607407407407,
+              "y": 5.139170370370371
+            },
+            {
+              "x": 5.826500991030093,
+              "y": 5.173589395254631
+            },
+            {
+              "x": 5.8927109375,
+              "y": 5.207640625
+            },
+            {
+              "x": 5.959297706886574,
+              "y": 5.241248625578704
+            },
+            {
+              "x": 6.026321759259259,
+              "y": 5.274337962962964
+            },
+            {
+              "x": 6.0938435546875,
+              "y": 5.3068332031250005
+            },
+            {
+              "x": 6.16192355324074,
+              "y": 5.338658912037038
+            },
+            {
+              "x": 6.230622214988426,
+              "y": 5.369739655671297
+            },
+            {
+              "x": 6.3,
+              "y": 5.4
+            }
+          ],
+          "label": "",
+          "labelX": null,
+          "labelY": null,
+          "normalized": true
+        }
+      ]
+    },
+    "svg_measurements": [
+      {
+        "case": "manual-NE-curved",
+        "endpoint": "target",
+        "shaft_x": 474.2672,
+        "shaft_y": 117.5983,
+        "tip_x": 481.6,
+        "tip_y": 114.4,
+        "rear_x": 474.26715,
+        "rear_y": 117.59835,
+        "join_error_pt": 7.071067811095352e-05,
+        "join_angle_deg": 0.00010125769842066963,
+        "rear_crossing_error_pt": 2.584071471097441e-05
+      },
+      {
+        "case": "manual-NE-curved",
+        "endpoint": "source",
+        "shaft_x": 373.7357,
+        "shaft_y": 168.8083,
+        "tip_x": 366.4,
+        "tip_y": 172.0,
+        "rear_x": 373.73575,
+        "rear_y": 168.8083,
+        "join_error_pt": 4.999999998744897e-05,
+        "join_angle_deg": 0.0007995958273212655,
+        "rear_crossing_error_pt": 1.9947457598746083e-05
+      }
+    ]
+  },
+  {
+    "name": "manual-NW-curved",
+    "project": {
+      "schema_version": "1.0",
+      "project": {
+        "id": "project_local",
+        "title": "Новая архитектура"
+      },
+      "diagram": {
+        "type": "architecture",
+        "layout_engine": "neato",
+        "direction": "RL",
+        "edge_routing": "curved",
+        "layout_mode": "manual",
+        "node_spacing": 0.55,
+        "rank_spacing": 0.8
+      },
+      "containers": [],
+      "nodes": [
+        {
+          "id": "source",
+          "label": "source",
+          "description": "",
+          "kind": "service",
+          "shape": "ellipse",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 4.0,
+          "y": 4.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        },
+        {
+          "id": "target",
+          "label": "target",
+          "description": "",
+          "kind": "service",
+          "shape": "ellipse",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 1.0,
+          "y": 6.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "label": "",
+          "direction": "both",
+          "style": {
+            "line_style": "solid",
+            "color": "#FF0000",
+            "penwidth": 2.0,
+            "arrowhead": "normal",
+            "arrowtail": "normal",
+            "constraint": true,
+            "weight": 1,
+            "minlen": 1
+          },
+          "source_port": "auto",
+          "target_port": "auto",
+          "routing": null,
+          "waypoints": []
+        }
+      ],
+      "presentation": {
+        "theme": "light",
+        "background": "#FFFFFF"
+      }
+    },
+    "layout": {
+      "engine": "neato",
+      "edgeRouting": "curved",
+      "width": 4.7,
+      "height": 6.6,
+      "minX": 0.0,
+      "minY": 0.0,
+      "nodes": [
+        {
+          "id": "source",
+          "x": 4.0,
+          "y": 4.0,
+          "width": 1.4,
+          "height": 1.2
+        },
+        {
+          "id": "target",
+          "x": 1.0,
+          "y": 6.0,
+          "width": 1.4,
+          "height": 1.2
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "points": [
+            {
+              "x": 3.417971271388218,
+              "y": 4.333342139811761
+            },
+            {
+              "x": 3.342840841124788,
+              "y": 4.389986687858065
+            },
+            {
+              "x": 3.267386048001348,
+              "y": 4.446325084461598
+            },
+            {
+              "x": 3.1916349117475984,
+              "y": 4.502386155889887
+            },
+            {
+              "x": 3.1156154520932366,
+              "y": 4.5581987284104555
+            },
+            {
+              "x": 3.0393556887679587,
+              "y": 4.613791628290827
+            },
+            {
+              "x": 2.9628836415014637,
+              "y": 4.669193681798528
+            },
+            {
+              "x": 2.886227330023448,
+              "y": 4.724433715201081
+            },
+            {
+              "x": 2.8094147740636126,
+              "y": 4.779540554766013
+            },
+            {
+              "x": 2.732473993351651,
+              "y": 4.834543026760845
+            },
+            {
+              "x": 2.6554330076172628,
+              "y": 4.8894699574531035
+            },
+            {
+              "x": 2.578319836590148,
+              "y": 4.9443501731103146
+            },
+            {
+              "x": 2.5011625,
+              "y": 4.9992125
+            },
+            {
+              "x": 2.4239890175765195,
+              "y": 5.054085764389685
+            },
+            {
+              "x": 2.346827409049403,
+              "y": 5.108998792546896
+            },
+            {
+              "x": 2.2697056941483487,
+              "y": 5.163980410739155
+            },
+            {
+              "x": 2.1926518926030547,
+              "y": 5.219059445233987
+            },
+            {
+              "x": 2.1156940241432176,
+              "y": 5.274264722298918
+            },
+            {
+              "x": 2.0388601084985365,
+              "y": 5.329625068201471
+            },
+            {
+              "x": 1.9621781653987083,
+              "y": 5.385169309209173
+            },
+            {
+              "x": 1.8856762145734303,
+              "y": 5.440926271589545
+            },
+            {
+              "x": 1.8093822757524012,
+              "y": 5.4969247816101126
+            },
+            {
+              "x": 1.7333243686653184,
+              "y": 5.553193665538401
+            },
+            {
+              "x": 1.6575305130418791,
+              "y": 5.609761749641935
+            },
+            {
+              "x": 1.5820287286117818,
+              "y": 5.666657860188239
+            }
+          ],
+          "label": "",
+          "labelX": null,
+          "labelY": null,
+          "normalized": true
+        }
+      ]
+    },
+    "svg_measurements": [
+      {
+        "case": "manual-NW-curved",
+        "endpoint": "target",
+        "shaft_x": 148.2951,
+        "shaft_y": 100.0152,
+        "tip_x": 141.9061,
+        "tip_y": 95.2006,
+        "rear_x": 148.2951,
+        "rear_y": 100.0152,
+        "join_error_pt": 0.0,
+        "join_angle_deg": 0.0,
+        "rear_crossing_error_pt": 0.0
+      },
+      {
+        "case": "manual-NW-curved",
+        "endpoint": "source",
+        "shaft_x": 267.7061,
+        "shaft_y": 186.3832,
+        "tip_x": 274.0939,
+        "tip_y": 191.1994,
+        "rear_x": 267.70605,
+        "rear_y": 186.38325,
+        "join_error_pt": 7.07106781210021e-05,
+        "join_angle_deg": 0.0015045478163187621,
+        "rear_crossing_error_pt": 7.002478121941286e-05
+      }
+    ]
+  },
+  {
+    "name": "manual-SE-straight",
+    "project": {
+      "schema_version": "1.0",
+      "project": {
+        "id": "project_local",
+        "title": "Новая архитектура"
+      },
+      "diagram": {
+        "type": "architecture",
+        "layout_engine": "neato",
+        "direction": "LR",
+        "edge_routing": "straight",
+        "layout_mode": "manual",
+        "node_spacing": 0.55,
+        "rank_spacing": 0.8
+      },
+      "containers": [],
+      "nodes": [
+        {
+          "id": "source",
+          "label": "source",
+          "description": "",
+          "kind": "service",
+          "shape": "diamond",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 4.0,
+          "y": 4.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        },
+        {
+          "id": "target",
+          "label": "target",
+          "description": "",
+          "kind": "service",
+          "shape": "diamond",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 7.0,
+          "y": 2.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "label": "",
+          "direction": "both",
+          "style": {
+            "line_style": "solid",
+            "color": "#FF0000",
+            "penwidth": 2.0,
+            "arrowhead": "normal",
+            "arrowtail": "normal",
+            "constraint": true,
+            "weight": 1,
+            "minlen": 1
+          },
+          "source_port": "auto",
+          "target_port": "auto",
+          "routing": null,
+          "waypoints": []
+        }
+      ],
+      "presentation": {
+        "theme": "light",
+        "background": "#FFFFFF"
+      }
+    },
+    "layout": {
+      "engine": "neato",
+      "edgeRouting": "straight",
+      "width": 7.7,
+      "height": 4.6,
+      "minX": 0.0,
+      "minY": 0.0,
+      "nodes": [
+        {
+          "id": "source",
+          "x": 4.0,
+          "y": 4.0,
+          "width": 1.4,
+          "height": 1.2
+        },
+        {
+          "id": "target",
+          "x": 7.0,
+          "y": 2.0,
+          "width": 1.4,
+          "height": 1.2
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "points": [
+            {
+              "x": 4.7,
+              "y": 4.0
+            },
+            {
+              "x": 6.3,
+              "y": 2.0
+            }
+          ],
+          "label": "",
+          "labelX": null,
+          "labelY": null,
+          "normalized": true
+        }
+      ]
+    },
+    "svg_measurements": [
+      {
+        "case": "manual-SE-straight",
+        "endpoint": "target",
+        "shaft_x": 476.6024,
+        "shaft_y": 208.953,
+        "tip_x": 481.6,
+        "tip_y": 215.2,
+        "rear_x": 476.60245,
+        "rear_y": 208.95305,
+        "join_error_pt": 7.071067810090491e-05,
+        "join_angle_deg": 0.0001677833571469567,
+        "rear_crossing_error_pt": 7.071067810090491e-05
+      },
+      {
+        "case": "manual-SE-straight",
+        "endpoint": "source",
+        "shaft_x": 371.3976,
+        "shaft_y": 77.447,
+        "tip_x": 366.4,
+        "tip_y": 71.2,
+        "rear_x": 371.39755,
+        "rear_y": 77.44695,
+        "join_error_pt": 7.071067811095352e-05,
+        "join_angle_deg": 0.0001677833571469567,
+        "rear_crossing_error_pt": 7.071067811095352e-05
+      }
+    ]
+  },
+  {
+    "name": "manual-SW-curved",
+    "project": {
+      "schema_version": "1.0",
+      "project": {
+        "id": "project_local",
+        "title": "Новая архитектура"
+      },
+      "diagram": {
+        "type": "architecture",
+        "layout_engine": "neato",
+        "direction": "RL",
+        "edge_routing": "curved",
+        "layout_mode": "manual",
+        "node_spacing": 0.55,
+        "rank_spacing": 0.8
+      },
+      "containers": [],
+      "nodes": [
+        {
+          "id": "source",
+          "label": "source",
+          "description": "",
+          "kind": "service",
+          "shape": "hexagon",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 4.0,
+          "y": 4.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        },
+        {
+          "id": "target",
+          "label": "target",
+          "description": "",
+          "kind": "service",
+          "shape": "hexagon",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 1.0,
+          "y": 2.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "label": "",
+          "direction": "both",
+          "style": {
+            "line_style": "solid",
+            "color": "#FF0000",
+            "penwidth": 2.0,
+            "arrowhead": "normal",
+            "arrowtail": "normal",
+            "constraint": true,
+            "weight": 1,
+            "minlen": 1
+          },
+          "source_port": "auto",
+          "target_port": "auto",
+          "routing": null,
+          "waypoints": []
+        }
+      ],
+      "presentation": {
+        "theme": "light",
+        "background": "#FFFFFF"
+      }
+    },
+    "layout": {
+      "engine": "neato",
+      "edgeRouting": "curved",
+      "width": 4.7,
+      "height": 4.6,
+      "minX": 0.0,
+      "minY": 0.0,
+      "nodes": [
+        {
+          "id": "source",
+          "x": 4.0,
+          "y": 4.0,
+          "width": 1.4,
+          "height": 1.2
+        },
+        {
+          "id": "target",
+          "x": 1.0,
+          "y": 2.0,
+          "width": 1.4,
+          "height": 1.2
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "points": [
+            {
+              "x": 3.497025370572632,
+              "y": 3.4722534716804496
+            },
+            {
+              "x": 3.414859752676629,
+              "y": 3.440559661832609
+            },
+            {
+              "x": 3.3324126767804816,
+              "y": 3.40683989933138
+            },
+            {
+              "x": 3.2497117956072517,
+              "y": 3.3712791328600407
+            },
+            {
+              "x": 3.166784761879996,
+              "y": 3.3340623111018655
+            },
+            {
+              "x": 3.083659228321771,
+              "y": 3.295374382740128
+            },
+            {
+              "x": 3.0003628476556408,
+              "y": 3.255400296458106
+            },
+            {
+              "x": 2.9169232726046586,
+              "y": 3.2143250009390725
+            },
+            {
+              "x": 2.8333681558918884,
+              "y": 3.172333444866305
+            },
+            {
+              "x": 2.7497251502403843,
+              "y": 3.129610576923077
+            },
+            {
+              "x": 2.6660219083732075,
+              "y": 3.0863413457926634
+            },
+            {
+              "x": 2.582286083013417,
+              "y": 3.042710700158343
+            },
+            {
+              "x": 2.498545326884069,
+              "y": 2.998903588703386
+            },
+            {
+              "x": 2.414827292708225,
+              "y": 2.9551049601110706
+            },
+            {
+              "x": 2.331159633208942,
+              "y": 2.9114997630646715
+            },
+            {
+              "x": 2.24757000110928,
+              "y": 2.8682729462474645
+            },
+            {
+              "x": 2.1640860491322966,
+              "y": 2.825609458342724
+            },
+            {
+              "x": 2.080735430001051,
+              "y": 2.7836942480337257
+            },
+            {
+              "x": 1.997545796438602,
+              "y": 2.7427122640037442
+            },
+            {
+              "x": 1.9145448011680082,
+              "y": 2.7028484549360563
+            },
+            {
+              "x": 1.831760096912328,
+              "y": 2.6642877695139355
+            },
+            {
+              "x": 1.749219336394621,
+              "y": 2.6272151564206583
+            },
+            {
+              "x": 1.6669501723379452,
+              "y": 2.591815564339499
+            },
+            {
+              "x": 1.584980257465359,
+              "y": 2.558273941953734
+            },
+            {
+              "x": 1.503337244499922,
+              "y": 2.5267752379466373
+            }
+          ],
+          "label": "",
+          "labelX": null,
+          "labelY": null,
+          "normalized": true
+        }
+      ]
+    },
+    "svg_measurements": [
+      {
+        "case": "manual-SW-curved",
+        "endpoint": "target",
+        "shaft_x": 143.7041,
+        "shaft_y": 174.3926,
+        "tip_x": 136.2403,
+        "tip_y": 177.2722,
+        "rear_x": 143.70409999999998,
+        "rear_y": 174.39260000000002,
+        "join_error_pt": 4.0194366942304644e-14,
+        "join_angle_deg": 0.0005155994115645564,
+        "rear_crossing_error_pt": 4.0194366942304644e-14
+      },
+      {
+        "case": "manual-SW-curved",
+        "endpoint": "source",
+        "shaft_x": 272.3219,
+        "shaft_y": 112.0768,
+        "tip_x": 279.7858,
+        "tip_y": 109.1978,
+        "rear_x": 272.32185,
+        "rear_y": 112.0768,
+        "join_error_pt": 5.000000004429239e-05,
+        "join_angle_deg": 0.001207542627425773,
+        "rear_crossing_error_pt": 1.799484697450251e-05
+      }
+    ]
+  },
+  {
+    "name": "auto-dot-RL-curved",
+    "project": {
+      "schema_version": "1.0",
+      "project": {
+        "id": "project_local",
+        "title": "Новая архитектура"
+      },
+      "diagram": {
+        "type": "architecture",
+        "layout_engine": "dot",
+        "direction": "RL",
+        "edge_routing": "curved",
+        "layout_mode": "auto",
+        "node_spacing": 0.55,
+        "rank_spacing": 0.8
+      },
+      "containers": [],
+      "nodes": [
+        {
+          "id": "source",
+          "label": "source",
+          "description": "",
+          "kind": "service",
+          "shape": "box",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 1.0,
+          "y": 2.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        },
+        {
+          "id": "target",
+          "label": "target",
+          "description": "",
+          "kind": "service",
+          "shape": "box",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 4.0,
+          "y": 3.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "label": "",
+          "direction": "both",
+          "style": {
+            "line_style": "solid",
+            "color": "#FF0000",
+            "penwidth": 2.0,
+            "arrowhead": "normal",
+            "arrowtail": "normal",
+            "constraint": true,
+            "weight": 1,
+            "minlen": 1
+          },
+          "source_port": "auto",
+          "target_port": "auto",
+          "routing": null,
+          "waypoints": []
+        }
+      ],
+      "presentation": {
+        "theme": "light",
+        "background": "#FFFFFF"
+      }
+    },
+    "layout": {
+      "engine": "dot",
+      "edgeRouting": "curved",
+      "width": 3.6056,
+      "height": 1.2,
+      "minX": 0.0,
+      "minY": 0.0,
+      "nodes": [
+        {
+          "id": "source",
+          "x": 2.9056,
+          "y": 0.6,
+          "width": 1.4,
+          "height": 1.2
+        },
+        {
+          "id": "target",
+          "x": 0.7,
+          "y": 0.6,
+          "width": 1.4,
+          "height": 1.2
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "points": [
+            {
+              "x": 2.2056000000000004,
+              "y": 0.6
+            },
+            {
+              "x": 2.1657289641203707,
+              "y": 0.6000000000000001
+            },
+            {
+              "x": 2.1275379629629634,
+              "y": 0.6
+            },
+            {
+              "x": 2.0908726562500006,
+              "y": 0.6000000000000001
+            },
+            {
+              "x": 2.055578703703704,
+              "y": 0.6
+            },
+            {
+              "x": 2.0215017650462963,
+              "y": 0.5999999999999999
+            },
+            {
+              "x": 1.9884875000000002,
+              "y": 0.6
+            },
+            {
+              "x": 1.956381568287037,
+              "y": 0.5999999999999999
+            },
+            {
+              "x": 1.92502962962963,
+              "y": 0.6000000000000001
+            },
+            {
+              "x": 1.8942773437500002,
+              "y": 0.6
+            },
+            {
+              "x": 1.86397037037037,
+              "y": 0.5999999999999999
+            },
+            {
+              "x": 1.8339543692129634,
+              "y": 0.6000000000000001
+            },
+            {
+              "x": 1.804075,
+              "y": 0.5999999999999999
+            },
+            {
+              "x": 1.7741779224537038,
+              "y": 0.6
+            },
+            {
+              "x": 1.7441087962962962,
+              "y": 0.6000000000000001
+            },
+            {
+              "x": 1.71371328125,
+              "y": 0.6
+            },
+            {
+              "x": 1.682837037037037,
+              "y": 0.6
+            },
+            {
+              "x": 1.6513257233796297,
+              "y": 0.6
+            },
+            {
+              "x": 1.619025,
+              "y": 0.6
+            },
+            {
+              "x": 1.5857805266203704,
+              "y": 0.6
+            },
+            {
+              "x": 1.551437962962963,
+              "y": 0.6
+            },
+            {
+              "x": 1.51584296875,
+              "y": 0.6
+            },
+            {
+              "x": 1.4788412037037038,
+              "y": 0.6
+            },
+            {
+              "x": 1.440278327546296,
+              "y": 0.6
+            },
+            {
+              "x": 1.4,
+              "y": 0.6
+            }
+          ],
+          "label": "",
+          "labelX": null,
+          "labelY": null,
+          "normalized": true
+        }
+      ]
+    },
+    "svg_measurements": [
+      {
+        "case": "auto-dot-RL-curved",
+        "endpoint": "target",
+        "shaft_x": 136.8,
+        "shaft_y": 71.2,
+        "tip_x": 128.8,
+        "tip_y": 71.2,
+        "rear_x": 136.8,
+        "rear_y": 71.2,
+        "join_error_pt": 0.0,
+        "join_angle_deg": 0.0,
+        "rear_crossing_error_pt": 0.0
+      },
+      {
+        "case": "auto-dot-RL-curved",
+        "endpoint": "source",
+        "shaft_x": 178.8032,
+        "shaft_y": 71.2,
+        "tip_x": 186.8032,
+        "tip_y": 71.2,
+        "rear_x": 178.8032,
+        "rear_y": 71.2,
+        "join_error_pt": 0.0,
+        "join_angle_deg": 0.0,
+        "rear_crossing_error_pt": 0.0
+      }
+    ]
+  },
+  {
+    "name": "auto-dot-BT-angled",
+    "project": {
+      "schema_version": "1.0",
+      "project": {
+        "id": "project_local",
+        "title": "Новая архитектура"
+      },
+      "diagram": {
+        "type": "architecture",
+        "layout_engine": "dot",
+        "direction": "BT",
+        "edge_routing": "angled",
+        "layout_mode": "auto",
+        "node_spacing": 0.55,
+        "rank_spacing": 0.8
+      },
+      "containers": [],
+      "nodes": [
+        {
+          "id": "source",
+          "label": "source",
+          "description": "",
+          "kind": "service",
+          "shape": "box",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 1.0,
+          "y": 2.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        },
+        {
+          "id": "target",
+          "label": "target",
+          "description": "",
+          "kind": "service",
+          "shape": "box",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 4.0,
+          "y": 3.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "label": "",
+          "direction": "both",
+          "style": {
+            "line_style": "solid",
+            "color": "#FF0000",
+            "penwidth": 2.0,
+            "arrowhead": "normal",
+            "arrowtail": "normal",
+            "constraint": true,
+            "weight": 1,
+            "minlen": 1
+          },
+          "source_port": "auto",
+          "target_port": "auto",
+          "routing": null,
+          "waypoints": []
+        }
+      ],
+      "presentation": {
+        "theme": "light",
+        "background": "#FFFFFF"
+      }
+    },
+    "layout": {
+      "engine": "dot",
+      "edgeRouting": "angled",
+      "width": 1.4,
+      "height": 3.2056,
+      "minX": 0.0,
+      "minY": 0.0,
+      "nodes": [
+        {
+          "id": "source",
+          "x": 0.7,
+          "y": 0.6,
+          "width": 1.4,
+          "height": 1.2
+        },
+        {
+          "id": "target",
+          "x": 0.7,
+          "y": 2.6056,
+          "width": 1.4,
+          "height": 1.2
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "points": [
+            {
+              "x": 0.7,
+              "y": 1.2
+            },
+            {
+              "x": 0.7,
+              "y": 1.5247
+            },
+            {
+              "x": 0.7,
+              "y": 1.677
+            },
+            {
+              "x": 0.7,
+              "y": 2.0056
+            }
+          ],
+          "label": "",
+          "labelX": null,
+          "labelY": null,
+          "normalized": true
+        }
+      ]
+    },
+    "svg_measurements": [
+      {
+        "case": "auto-dot-BT-angled",
+        "endpoint": "target",
+        "shaft_x": 78.4,
+        "shaft_y": 122.4,
+        "tip_x": 78.4,
+        "tip_y": 114.4,
+        "rear_x": 78.4,
+        "rear_y": 122.4,
+        "join_error_pt": 0.0,
+        "join_angle_deg": 0.0,
+        "rear_crossing_error_pt": 0.0
+      },
+      {
+        "case": "auto-dot-BT-angled",
+        "endpoint": "source",
+        "shaft_x": 78.4,
+        "shaft_y": 164.4032,
+        "tip_x": 78.4,
+        "tip_y": 172.4032,
+        "rear_x": 78.4,
+        "rear_y": 164.4032,
+        "join_error_pt": 0.0,
+        "join_angle_deg": 0.0,
+        "rear_crossing_error_pt": 0.0
+      }
+    ]
+  },
+  {
+    "name": "auto-neato-TB-curved",
+    "project": {
+      "schema_version": "1.0",
+      "project": {
+        "id": "project_local",
+        "title": "Новая архитектура"
+      },
+      "diagram": {
+        "type": "architecture",
+        "layout_engine": "neato",
+        "direction": "TB",
+        "edge_routing": "curved",
+        "layout_mode": "auto",
+        "node_spacing": 0.55,
+        "rank_spacing": 0.8
+      },
+      "containers": [],
+      "nodes": [
+        {
+          "id": "source",
+          "label": "source",
+          "description": "",
+          "kind": "service",
+          "shape": "box",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 1.0,
+          "y": 2.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        },
+        {
+          "id": "target",
+          "label": "target",
+          "description": "",
+          "kind": "service",
+          "shape": "box",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 4.0,
+          "y": 3.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "label": "",
+          "direction": "both",
+          "style": {
+            "line_style": "solid",
+            "color": "#FF0000",
+            "penwidth": 2.0,
+            "arrowhead": "normal",
+            "arrowtail": "normal",
+            "constraint": true,
+            "weight": 1,
+            "minlen": 1
+          },
+          "source_port": "auto",
+          "target_port": "auto",
+          "routing": null,
+          "waypoints": []
+        }
+      ],
+      "presentation": {
+        "theme": "light",
+        "background": "#FFFFFF"
+      }
+    },
+    "layout": {
+      "engine": "neato",
+      "edgeRouting": "curved",
+      "width": 2.389,
+      "height": 1.3478,
+      "minX": 0.0,
+      "minY": 0.0,
+      "nodes": [
+        {
+          "id": "source",
+          "x": 0.7,
+          "y": 0.74777,
+          "width": 1.4,
+          "height": 1.2
+        },
+        {
+          "id": "target",
+          "x": 1.689,
+          "y": 0.6,
+          "width": 1.4,
+          "height": 1.2
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "points": [
+            {
+              "x": 1.4,
+              "y": 0.6424100000000001
+            },
+            {
+              "x": 1.400594683159722,
+              "y": 0.6424097468171299
+            },
+            {
+              "x": 1.4009595486111108,
+              "y": 0.6424090162037037
+            },
+            {
+              "x": 1.4009158203125,
+              "y": 0.6424078515625001
+            },
+            {
+              "x": 1.4002847222222226,
+              "y": 0.6424062962962965
+            },
+            {
+              "x": 1.398887478298611,
+              "y": 0.6424043938078704
+            },
+            {
+              "x": 1.3965453125,
+              "y": 0.6424021874999999
+            },
+            {
+              "x": 1.393079448784722,
+              "y": 0.642399720775463
+            },
+            {
+              "x": 1.3883111111111113,
+              "y": 0.6423970370370372
+            },
+            {
+              "x": 1.3820615234375,
+              "y": 0.6423941796875
+            },
+            {
+              "x": 1.374151909722222,
+              "y": 0.6423911921296295
+            },
+            {
+              "x": 1.3644034939236114,
+              "y": 0.6423881177662039
+            },
+            {
+              "x": 1.3526375000000002,
+              "y": 0.6423850000000001
+            },
+            {
+              "x": 1.3386751519097222,
+              "y": 0.6423818822337963
+            },
+            {
+              "x": 1.322337673611111,
+              "y": 0.6423788078703704
+            },
+            {
+              "x": 1.3034462890625,
+              "y": 0.6423758203125001
+            },
+            {
+              "x": 1.2818222222222222,
+              "y": 0.642372962962963
+            },
+            {
+              "x": 1.2572866970486112,
+              "y": 0.6423702792245372
+            },
+            {
+              "x": 1.2296609375,
+              "y": 0.6423678125000001
+            },
+            {
+              "x": 1.198766167534722,
+              "y": 0.6423656061921297
+            },
+            {
+              "x": 1.1644236111111113,
+              "y": 0.6423637037037038
+            },
+            {
+              "x": 1.1264544921875,
+              "y": 0.6423621484375001
+            },
+            {
+              "x": 1.0846800347222223,
+              "y": 0.6423609837962964
+            },
+            {
+              "x": 1.0389214626736112,
+              "y": 0.6423602531828704
+            },
+            {
+              "x": 0.9890000000000001,
+              "y": 0.64236
+            }
+          ],
+          "label": "",
+          "labelX": null,
+          "labelY": null,
+          "normalized": true
+        }
+      ]
+    },
+    "svg_measurements": [
+      {
+        "case": "auto-neato-TB-curved",
+        "endpoint": "target",
+        "shaft_x": 107.208,
+        "shaft_y": 78.7916,
+        "tip_x": 99.208,
+        "tip_y": 78.7917,
+        "rear_x": 107.208,
+        "rear_y": 78.7916,
+        "join_error_pt": 0.0,
+        "join_angle_deg": 0.0007161975279917227,
+        "rear_crossing_error_pt": 0.0
+      },
+      {
+        "case": "auto-neato-TB-curved",
+        "endpoint": "source",
+        "shaft_x": 128.8415,
+        "shaft_y": 78.7881,
+        "tip_x": 128.8,
+        "tip_y": 78.7881,
+        "rear_x": 128.84145,
+        "rear_y": 78.7881,
+        "join_error_pt": 4.999999998744897e-05,
+        "join_angle_deg": 0.0,
+        "rear_crossing_error_pt": 4.999999998744897e-05
+      }
+    ]
+  },
+  {
+    "name": "auto-fdp-RL-angled",
+    "project": {
+      "schema_version": "1.0",
+      "project": {
+        "id": "project_local",
+        "title": "Новая архитектура"
+      },
+      "diagram": {
+        "type": "architecture",
+        "layout_engine": "fdp",
+        "direction": "RL",
+        "edge_routing": "angled",
+        "layout_mode": "auto",
+        "node_spacing": 0.55,
+        "rank_spacing": 0.8
+      },
+      "containers": [],
+      "nodes": [
+        {
+          "id": "source",
+          "label": "source",
+          "description": "",
+          "kind": "service",
+          "shape": "box",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 1.0,
+          "y": 2.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        },
+        {
+          "id": "target",
+          "label": "target",
+          "description": "",
+          "kind": "service",
+          "shape": "box",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 4.0,
+          "y": 3.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "label": "",
+          "direction": "both",
+          "style": {
+            "line_style": "solid",
+            "color": "#FF0000",
+            "penwidth": 2.0,
+            "arrowhead": "normal",
+            "arrowtail": "normal",
+            "constraint": true,
+            "weight": 1,
+            "minlen": 1
+          },
+          "source_port": "auto",
+          "target_port": "auto",
+          "routing": null,
+          "waypoints": []
+        }
+      ],
+      "presentation": {
+        "theme": "light",
+        "background": "#FFFFFF"
+      }
+    },
+    "layout": {
+      "engine": "fdp",
+      "edgeRouting": "angled",
+      "width": 2.9682,
+      "height": 1.4343,
+      "minX": 0.0,
+      "minY": 0.0,
+      "nodes": [
+        {
+          "id": "source",
+          "x": 0.7,
+          "y": 0.8343,
+          "width": 1.4,
+          "height": 1.2
+        },
+        {
+          "id": "target",
+          "x": 2.2682,
+          "y": 0.6,
+          "width": 1.4,
+          "height": 1.2
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "points": [
+            {
+              "x": 1.4,
+              "y": 0.7060200000000001
+            },
+            {
+              "x": 1.5586,
+              "y": 0.70602
+            },
+            {
+              "x": 1.5594,
+              "y": 0.7059
+            },
+            {
+              "x": 1.5682000000000003,
+              "y": 0.7059
+            }
+          ],
+          "label": "",
+          "labelX": null,
+          "labelY": null,
+          "normalized": true
+        }
+      ]
+    },
+    "svg_measurements": [
+      {
+        "case": "auto-fdp-RL-angled",
+        "endpoint": "target",
+        "shaft_x": 137.6408,
+        "shaft_y": 80.4448,
+        "tip_x": 140.9104,
+        "tip_y": 80.4448,
+        "rear_x": 137.6408,
+        "rear_y": 80.4448,
+        "join_error_pt": 0.0,
+        "join_angle_deg": 0.0,
+        "rear_crossing_error_pt": 0.0
+      },
+      {
+        "case": "auto-fdp-RL-angled",
+        "endpoint": "source",
+        "shaft_x": 132.07,
+        "shaft_y": 80.4362,
+        "tip_x": 128.8,
+        "tip_y": 80.4362,
+        "rear_x": 132.07,
+        "rear_y": 80.4362,
+        "join_error_pt": 0.0,
+        "join_angle_deg": 0.0,
+        "rear_crossing_error_pt": 0.0
+      }
+    ]
+  },
+  {
+    "name": "auto-circo-LR-orthogonal",
+    "project": {
+      "schema_version": "1.0",
+      "project": {
+        "id": "project_local",
+        "title": "Новая архитектура"
+      },
+      "diagram": {
+        "type": "architecture",
+        "layout_engine": "circo",
+        "direction": "LR",
+        "edge_routing": "orthogonal",
+        "layout_mode": "auto",
+        "node_spacing": 0.55,
+        "rank_spacing": 0.8
+      },
+      "containers": [],
+      "nodes": [
+        {
+          "id": "source",
+          "label": "source",
+          "description": "",
+          "kind": "service",
+          "shape": "box",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 1.0,
+          "y": 2.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        },
+        {
+          "id": "target",
+          "label": "target",
+          "description": "",
+          "kind": "service",
+          "shape": "box",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 4.0,
+          "y": 3.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "label": "",
+          "direction": "both",
+          "style": {
+            "line_style": "solid",
+            "color": "#FF0000",
+            "penwidth": 2.0,
+            "arrowhead": "normal",
+            "arrowtail": "normal",
+            "constraint": true,
+            "weight": 1,
+            "minlen": 1
+          },
+          "source_port": "auto",
+          "target_port": "auto",
+          "routing": null,
+          "waypoints": []
+        }
+      ],
+      "presentation": {
+        "theme": "light",
+        "background": "#FFFFFF"
+      }
+    },
+    "layout": {
+      "engine": "circo",
+      "edgeRouting": "orthogonal",
+      "width": 3.8,
+      "height": 1.2,
+      "minX": 0.0,
+      "minY": 0.0,
+      "nodes": [
+        {
+          "id": "source",
+          "x": 0.7,
+          "y": 0.6,
+          "width": 1.4,
+          "height": 1.2
+        },
+        {
+          "id": "target",
+          "x": 3.1,
+          "y": 0.6,
+          "width": 1.4,
+          "height": 1.2
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "points": [
+            {
+              "x": 1.4,
+              "y": 0.6
+            },
+            {
+              "x": 1.9000000000000001,
+              "y": 0.6
+            },
+            {
+              "x": 2.4000000000000004,
+              "y": 0.6
+            }
+          ],
+          "label": "",
+          "labelX": null,
+          "labelY": null,
+          "normalized": true
+        }
+      ]
+    },
+    "svg_measurements": [
+      {
+        "case": "auto-circo-LR-orthogonal",
+        "endpoint": "target",
+        "shaft_x": 192.8,
+        "shaft_y": 71.2,
+        "tip_x": 200.8,
+        "tip_y": 71.2,
+        "rear_x": 192.8,
+        "rear_y": 71.2,
+        "join_error_pt": 0.0,
+        "join_angle_deg": 0.0,
+        "rear_crossing_error_pt": 0.0
+      },
+      {
+        "case": "auto-circo-LR-orthogonal",
+        "endpoint": "source",
+        "shaft_x": 136.8,
+        "shaft_y": 71.2,
+        "tip_x": 128.8,
+        "tip_y": 71.2,
+        "rear_x": 136.8,
+        "rear_y": 71.2,
+        "join_error_pt": 0.0,
+        "join_angle_deg": 0.0,
+        "rear_crossing_error_pt": 0.0
+      }
+    ]
+  },
+  {
+    "name": "short-elbow-straight",
+    "project": {
+      "schema_version": "1.0",
+      "project": {
+        "id": "project_local",
+        "title": "Новая архитектура"
+      },
+      "diagram": {
+        "type": "architecture",
+        "layout_engine": "neato",
+        "direction": "LR",
+        "edge_routing": "straight",
+        "layout_mode": "manual",
+        "node_spacing": 0.55,
+        "rank_spacing": 0.8
+      },
+      "containers": [],
+      "nodes": [
+        {
+          "id": "source",
+          "label": "source",
+          "description": "",
+          "kind": "service",
+          "shape": "box",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 1.0,
+          "y": 2.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        },
+        {
+          "id": "target",
+          "label": "target",
+          "description": "",
+          "kind": "service",
+          "shape": "box",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 4.0,
+          "y": 2.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "label": "",
+          "direction": "both",
+          "style": {
+            "line_style": "solid",
+            "color": "#FF0000",
+            "penwidth": 2.0,
+            "arrowhead": "normal",
+            "arrowtail": "normal",
+            "constraint": true,
+            "weight": 1,
+            "minlen": 1
+          },
+          "source_port": "auto",
+          "target_port": "auto",
+          "routing": null,
+          "waypoints": [
+            {
+              "x": 3.28,
+              "y": 2.5
+            },
+            {
+              "x": 3.28,
+              "y": 2.04
+            }
+          ]
+        }
+      ],
+      "presentation": {
+        "theme": "light",
+        "background": "#FFFFFF"
+      }
+    },
+    "layout": {
+      "engine": "neato",
+      "edgeRouting": "straight",
+      "width": 4.7,
+      "height": 2.6,
+      "minX": 0.0,
+      "minY": 0.0,
+      "nodes": [
+        {
+          "id": "source",
+          "x": 1.0,
+          "y": 2.0,
+          "width": 1.4,
+          "height": 1.2
+        },
+        {
+          "id": "target",
+          "x": 4.0,
+          "y": 2.0,
+          "width": 1.4,
+          "height": 1.2
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "points": [
+            {
+              "x": 1.7,
+              "y": 2.5
+            },
+            {
+              "x": 3.28,
+              "y": 2.5
+            },
+            {
+              "x": 3.28,
+              "y": 2.04
+            },
+            {
+              "x": 3.3,
+              "y": 2.04
+            }
+          ],
+          "label": "",
+          "labelX": 2.7299999999999995,
+          "labelY": 2.65,
+          "normalized": true
+        }
+      ]
+    },
+    "svg_measurements": [
+      {
+        "case": "short-elbow-straight",
+        "endpoint": "target",
+        "shaft_x": 257.6,
+        "shaft_y": 68.32,
+        "tip_x": 265.6,
+        "tip_y": 68.32,
+        "rear_x": 257.6,
+        "rear_y": 68.32,
+        "join_error_pt": 0.0,
+        "join_angle_deg": 0.0,
+        "rear_crossing_error_pt": 0.0
+      },
+      {
+        "case": "short-elbow-straight",
+        "endpoint": "source",
+        "shaft_x": 158.4,
+        "shaft_y": 35.2,
+        "tip_x": 150.4,
+        "tip_y": 35.2,
+        "rear_x": 158.4,
+        "rear_y": 35.2,
+        "join_error_pt": 0.0,
+        "join_angle_deg": 0.0,
+        "rear_crossing_error_pt": 0.0
+      }
+    ]
+  },
+  {
+    "name": "self-loop-angled",
+    "project": {
+      "schema_version": "1.0",
+      "project": {
+        "id": "project_local",
+        "title": "Новая архитектура"
+      },
+      "diagram": {
+        "type": "architecture",
+        "layout_engine": "neato",
+        "direction": "LR",
+        "edge_routing": "angled",
+        "layout_mode": "manual",
+        "node_spacing": 0.55,
+        "rank_spacing": 0.8
+      },
+      "containers": [],
+      "nodes": [
+        {
+          "id": "source",
+          "label": "source",
+          "description": "",
+          "kind": "service",
+          "shape": "box",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 1.0,
+          "y": 2.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        },
+        {
+          "id": "target",
+          "label": "target",
+          "description": "",
+          "kind": "service",
+          "shape": "box",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 4.0,
+          "y": 3.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "source",
+          "label": "",
+          "direction": "both",
+          "style": {
+            "line_style": "solid",
+            "color": "#FF0000",
+            "penwidth": 2.0,
+            "arrowhead": "normal",
+            "arrowtail": "normal",
+            "constraint": true,
+            "weight": 1,
+            "minlen": 1
+          },
+          "source_port": "auto",
+          "target_port": "auto",
+          "routing": null,
+          "waypoints": []
+        }
+      ],
+      "presentation": {
+        "theme": "light",
+        "background": "#FFFFFF"
+      }
+    },
+    "layout": {
+      "engine": "neato",
+      "edgeRouting": "angled",
+      "width": 4.7,
+      "height": 3.6,
+      "minX": 0.0,
+      "minY": 0.0,
+      "nodes": [
+        {
+          "id": "source",
+          "x": 1.0,
+          "y": 2.0,
+          "width": 1.4,
+          "height": 1.2
+        },
+        {
+          "id": "target",
+          "x": 4.0,
+          "y": 3.0,
+          "width": 1.4,
+          "height": 1.2
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "source",
+          "points": [
+            {
+              "x": 1.7,
+              "y": 2.0
+            },
+            {
+              "x": 2.4,
+              "y": 2.0
+            },
+            {
+              "x": 2.4,
+              "y": 3.2
+            },
+            {
+              "x": 1.0,
+              "y": 3.2
+            },
+            {
+              "x": 1.0,
+              "y": 2.6
+            }
+          ],
+          "label": "",
+          "labelX": null,
+          "labelY": null,
+          "normalized": true
+        }
+      ]
+    },
+    "svg_measurements": [
+      {
+        "case": "self-loop-angled",
+        "endpoint": "target",
+        "shaft_x": 100.0,
+        "shaft_y": 92.0,
+        "tip_x": 100.0,
+        "tip_y": 100.0,
+        "rear_x": 100.0,
+        "rear_y": 92.0,
+        "join_error_pt": 0.0,
+        "join_angle_deg": 0.0,
+        "rear_crossing_error_pt": 0.0
+      },
+      {
+        "case": "self-loop-angled",
+        "endpoint": "source",
+        "shaft_x": 158.4,
+        "shaft_y": 143.2,
+        "tip_x": 150.4,
+        "tip_y": 143.2,
+        "rear_x": 158.4,
+        "rear_y": 143.2,
+        "join_error_pt": 0.0,
+        "join_angle_deg": 0.0,
+        "rear_crossing_error_pt": 0.0
+      }
+    ]
+  },
+  {
+    "name": "fixed-ports-orthogonal",
+    "project": {
+      "schema_version": "1.0",
+      "project": {
+        "id": "project_local",
+        "title": "Новая архитектура"
+      },
+      "diagram": {
+        "type": "architecture",
+        "layout_engine": "neato",
+        "direction": "LR",
+        "edge_routing": "orthogonal",
+        "layout_mode": "manual",
+        "node_spacing": 0.55,
+        "rank_spacing": 0.8
+      },
+      "containers": [],
+      "nodes": [
+        {
+          "id": "source",
+          "label": "source",
+          "description": "",
+          "kind": "service",
+          "shape": "box",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 1.0,
+          "y": 2.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        },
+        {
+          "id": "target",
+          "label": "target",
+          "description": "",
+          "kind": "service",
+          "shape": "box",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 4.0,
+          "y": 3.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "label": "",
+          "direction": "both",
+          "style": {
+            "line_style": "solid",
+            "color": "#FF0000",
+            "penwidth": 2.0,
+            "arrowhead": "normal",
+            "arrowtail": "normal",
+            "constraint": true,
+            "weight": 1,
+            "minlen": 1
+          },
+          "source_port": "n",
+          "target_port": "w",
+          "routing": null,
+          "waypoints": []
+        }
+      ],
+      "presentation": {
+        "theme": "light",
+        "background": "#FFFFFF"
+      }
+    },
+    "layout": {
+      "engine": "neato",
+      "edgeRouting": "orthogonal",
+      "width": 4.7,
+      "height": 3.6,
+      "minX": 0.0,
+      "minY": 0.0,
+      "nodes": [
+        {
+          "id": "source",
+          "x": 1.0,
+          "y": 2.0,
+          "width": 1.4,
+          "height": 1.2
+        },
+        {
+          "id": "target",
+          "x": 4.0,
+          "y": 3.0,
+          "width": 1.4,
+          "height": 1.2
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "points": [
+            {
+              "x": 1.0,
+              "y": 2.6
+            },
+            {
+              "x": 1.0,
+              "y": 2.85
+            },
+            {
+              "x": 2.025,
+              "y": 2.85
+            },
+            {
+              "x": 2.025,
+              "y": 3.0
+            },
+            {
+              "x": 3.05,
+              "y": 3.0
+            },
+            {
+              "x": 3.3,
+              "y": 3.0
+            }
+          ],
+          "label": "",
+          "labelX": 2.025,
+          "labelY": 3.0749999999999997,
+          "normalized": true
+        }
+      ]
+    },
+    "svg_measurements": [
+      {
+        "case": "fixed-ports-orthogonal",
+        "endpoint": "target",
+        "shaft_x": 257.6,
+        "shaft_y": 71.2,
+        "tip_x": 265.6,
+        "tip_y": 71.2,
+        "rear_x": 257.6,
+        "rear_y": 71.2,
+        "join_error_pt": 0.0,
+        "join_angle_deg": 0.0,
+        "rear_crossing_error_pt": 0.0
+      },
+      {
+        "case": "fixed-ports-orthogonal",
+        "endpoint": "source",
+        "shaft_x": 100.0,
+        "shaft_y": 92.0,
+        "tip_x": 100.0,
+        "tip_y": 100.0,
+        "rear_x": 100.0,
+        "rear_y": 92.0,
+        "join_error_pt": 0.0,
+        "join_angle_deg": 0.0,
+        "rear_crossing_error_pt": 0.0
+      }
+    ]
+  },
+  {
+    "name": "short-gap-curved",
+    "project": {
+      "schema_version": "1.0",
+      "project": {
+        "id": "project_local",
+        "title": "Новая архитектура"
+      },
+      "diagram": {
+        "type": "architecture",
+        "layout_engine": "neato",
+        "direction": "LR",
+        "edge_routing": "curved",
+        "layout_mode": "manual",
+        "node_spacing": 0.55,
+        "rank_spacing": 0.8
+      },
+      "containers": [],
+      "nodes": [
+        {
+          "id": "source",
+          "label": "source",
+          "description": "",
+          "kind": "service",
+          "shape": "box",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 1.0,
+          "y": 2.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        },
+        {
+          "id": "target",
+          "label": "target",
+          "description": "",
+          "kind": "service",
+          "shape": "box",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 2.45,
+          "y": 2.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "label": "",
+          "direction": "both",
+          "style": {
+            "line_style": "solid",
+            "color": "#FF0000",
+            "penwidth": 2.0,
+            "arrowhead": "normal",
+            "arrowtail": "normal",
+            "constraint": true,
+            "weight": 1,
+            "minlen": 1
+          },
+          "source_port": "auto",
+          "target_port": "auto",
+          "routing": null,
+          "waypoints": []
+        }
+      ],
+      "presentation": {
+        "theme": "light",
+        "background": "#FFFFFF"
+      }
+    },
+    "layout": {
+      "engine": "neato",
+      "edgeRouting": "curved",
+      "width": 3.1500000000000004,
+      "height": 2.6,
+      "minX": 0.0,
+      "minY": 0.0,
+      "nodes": [
+        {
+          "id": "source",
+          "x": 1.0,
+          "y": 2.0,
+          "width": 1.4,
+          "height": 1.2
+        },
+        {
+          "id": "target",
+          "x": 2.45,
+          "y": 2.0,
+          "width": 1.4,
+          "height": 1.2
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "points": [
+            {
+              "x": 1.7,
+              "y": 2.0
+            },
+            {
+              "x": 1.7051112340856485,
+              "y": 2.0
+            },
+            {
+              "x": 1.7098086226851847,
+              "y": 1.9999999999999998
+            },
+            {
+              "x": 1.7141126953125,
+              "y": 2.0
+            },
+            {
+              "x": 1.7180439814814816,
+              "y": 2.0
+            },
+            {
+              "x": 1.7216230107060182,
+              "y": 1.9999999999999998
+            },
+            {
+              "x": 1.7248703125,
+              "y": 2.0
+            },
+            {
+              "x": 1.7278064163773146,
+              "y": 1.9999999999999996
+            },
+            {
+              "x": 1.7304518518518521,
+              "y": 2.0000000000000004
+            },
+            {
+              "x": 1.7328271484375,
+              "y": 2.0
+            },
+            {
+              "x": 1.7349528356481478,
+              "y": 1.9999999999999996
+            },
+            {
+              "x": 1.7368494429976853,
+              "y": 2.0000000000000004
+            },
+            {
+              "x": 1.7385375,
+              "y": 2.0
+            },
+            {
+              "x": 1.7400375361689815,
+              "y": 2.0
+            },
+            {
+              "x": 1.7413700810185184,
+              "y": 2.0
+            },
+            {
+              "x": 1.7425556640625,
+              "y": 2.0
+            },
+            {
+              "x": 1.7436148148148147,
+              "y": 2.0
+            },
+            {
+              "x": 1.744568062789352,
+              "y": 2.0
+            },
+            {
+              "x": 1.7454359375,
+              "y": 2.0
+            },
+            {
+              "x": 1.7462389684606483,
+              "y": 2.0
+            },
+            {
+              "x": 1.7469976851851854,
+              "y": 2.0
+            },
+            {
+              "x": 1.7477326171875003,
+              "y": 2.0
+            },
+            {
+              "x": 1.7484642939814816,
+              "y": 2.0
+            },
+            {
+              "x": 1.7492132450810187,
+              "y": 2.0
+            },
+            {
+              "x": 1.7500000000000002,
+              "y": 2.0
+            }
+          ],
+          "label": "",
+          "labelX": null,
+          "labelY": null,
+          "normalized": true
+        }
+      ]
+    },
+    "svg_measurements": [
+      {
+        "case": "short-gap-curved",
+        "endpoint": "target",
+        "shaft_x": 153.028,
+        "shaft_y": 71.2,
+        "tip_x": 154.0,
+        "tip_y": 71.2,
+        "rear_x": 153.028,
+        "rear_y": 71.2,
+        "join_error_pt": 0.0,
+        "join_angle_deg": 0.0,
+        "rear_crossing_error_pt": 0.0
+      },
+      {
+        "case": "short-gap-curved",
+        "endpoint": "source",
+        "shaft_x": 151.372,
+        "shaft_y": 71.2,
+        "tip_x": 150.4,
+        "tip_y": 71.2,
+        "rear_x": 151.372,
+        "rear_y": 71.2,
+        "join_error_pt": 0.0,
+        "join_angle_deg": 0.0,
+        "rear_crossing_error_pt": 0.0
+      }
+    ]
+  },
+  {
+    "name": "vertices-curved",
+    "project": {
+      "schema_version": "1.0",
+      "project": {
+        "id": "project_local",
+        "title": "Новая архитектура"
+      },
+      "diagram": {
+        "type": "architecture",
+        "layout_engine": "neato",
+        "direction": "LR",
+        "edge_routing": "curved",
+        "layout_mode": "manual",
+        "node_spacing": 0.55,
+        "rank_spacing": 0.8
+      },
+      "containers": [],
+      "nodes": [
+        {
+          "id": "source",
+          "label": "source",
+          "description": "",
+          "kind": "service",
+          "shape": "diamond",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 1.0,
+          "y": 2.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        },
+        {
+          "id": "target",
+          "label": "target",
+          "description": "",
+          "kind": "service",
+          "shape": "diamond",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 4.0,
+          "y": 3.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "label": "",
+          "direction": "both",
+          "style": {
+            "line_style": "solid",
+            "color": "#FF0000",
+            "penwidth": 2.0,
+            "arrowhead": "normal",
+            "arrowtail": "normal",
+            "constraint": true,
+            "weight": 1,
+            "minlen": 1
+          },
+          "source_port": "vertex:0",
+          "target_port": "vertex:2",
+          "routing": null,
+          "waypoints": []
+        }
+      ],
+      "presentation": {
+        "theme": "light",
+        "background": "#FFFFFF"
+      }
+    },
+    "layout": {
+      "engine": "neato",
+      "edgeRouting": "curved",
+      "width": 4.95,
+      "height": 3.6,
+      "minX": 0.0,
+      "minY": 0.0,
+      "nodes": [
+        {
+          "id": "source",
+          "x": 1.0,
+          "y": 2.0,
+          "width": 1.4,
+          "height": 1.2
+        },
+        {
+          "id": "target",
+          "x": 4.0,
+          "y": 3.0,
+          "width": 1.4,
+          "height": 1.2
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "points": [
+            {
+              "x": 0.30000000000000004,
+              "y": 2.0
+            },
+            {
+              "x": 0.050000000000000044,
+              "y": 2.0
+            },
+            {
+              "x": 0.25416666666666676,
+              "y": 2.0709490740740746
+            },
+            {
+              "x": 0.45833333333333337,
+              "y": 2.1457175925925926
+            },
+            {
+              "x": 0.6625000000000002,
+              "y": 2.2234374999999997
+            },
+            {
+              "x": 0.8666666666666668,
+              "y": 2.303240740740741
+            },
+            {
+              "x": 1.0708333333333335,
+              "y": 2.384259259259259
+            },
+            {
+              "x": 1.2750000000000001,
+              "y": 2.4656249999999997
+            },
+            {
+              "x": 1.4791666666666667,
+              "y": 2.546469907407407
+            },
+            {
+              "x": 1.6833333333333338,
+              "y": 2.625925925925926
+            },
+            {
+              "x": 1.8875000000000004,
+              "y": 2.703125
+            },
+            {
+              "x": 2.091666666666667,
+              "y": 2.7771990740740735
+            },
+            {
+              "x": 2.295833333333334,
+              "y": 2.847280092592593
+            },
+            {
+              "x": 2.5000000000000004,
+              "y": 2.9124999999999996
+            },
+            {
+              "x": 2.704166666666667,
+              "y": 2.9719907407407407
+            },
+            {
+              "x": 2.908333333333334,
+              "y": 3.024884259259259
+            },
+            {
+              "x": 3.1125000000000003,
+              "y": 3.0703125
+            },
+            {
+              "x": 3.3166666666666664,
+              "y": 3.1074074074074067
+            },
+            {
+              "x": 3.520833333333334,
+              "y": 3.1353009259259257
+            },
+            {
+              "x": 3.7250000000000005,
+              "y": 3.153125
+            },
+            {
+              "x": 3.929166666666667,
+              "y": 3.1600115740740744
+            },
+            {
+              "x": 4.133333333333334,
+              "y": 3.1550925925925926
+            },
+            {
+              "x": 4.3375,
+              "y": 3.1375
+            },
+            {
+              "x": 4.541666666666667,
+              "y": 3.1063657407407406
+            },
+            {
+              "x": 4.745833333333334,
+              "y": 3.0608217592592593
+            },
+            {
+              "x": 4.95,
+              "y": 3.0
+            },
+            {
+              "x": 4.7,
+              "y": 3.0
+            }
+          ],
+          "label": "",
+          "labelX": 2.442090559251947,
+          "labelY": 3.044001150872149,
+          "normalized": true
+        }
+      ]
+    },
+    "svg_measurements": [
+      {
+        "case": "vertices-curved",
+        "endpoint": "target",
+        "shaft_x": 374.4,
+        "shaft_y": 71.2,
+        "tip_x": 366.4,
+        "tip_y": 71.2,
+        "rear_x": 374.4,
+        "rear_y": 71.2,
+        "join_error_pt": 0.0,
+        "join_angle_deg": 0.0,
+        "rear_crossing_error_pt": 0.0
+      },
+      {
+        "case": "vertices-curved",
+        "endpoint": "source",
+        "shaft_x": 41.6,
+        "shaft_y": 143.2,
+        "tip_x": 49.6,
+        "tip_y": 143.2,
+        "rear_x": 41.6,
+        "rear_y": 143.2,
+        "join_error_pt": 0.0,
+        "join_angle_deg": 0.0,
+        "rear_crossing_error_pt": 0.0
+      }
+    ]
+  },
+  {
+    "name": "icon-curved",
+    "project": {
+      "schema_version": "1.0",
+      "project": {
+        "id": "project_local",
+        "title": "Новая архитектура"
+      },
+      "diagram": {
+        "type": "architecture",
+        "layout_engine": "neato",
+        "direction": "LR",
+        "edge_routing": "curved",
+        "layout_mode": "manual",
+        "node_spacing": 0.55,
+        "rank_spacing": 0.8
+      },
+      "containers": [],
+      "nodes": [
+        {
+          "id": "source",
+          "label": "source",
+          "description": "",
+          "kind": "service",
+          "shape": "box",
+          "icon": null,
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 1.0,
+          "y": 2.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        },
+        {
+          "id": "target",
+          "label": "target",
+          "description": "",
+          "kind": "service",
+          "shape": "box",
+          "icon": "tabler-icons/outline/shield.svg",
+          "container_id": null,
+          "style": {
+            "fill": "#FFFFFF",
+            "stroke": "#00AA00",
+            "text": "#0F172A",
+            "penwidth": 1.0
+          },
+          "x": 4.0,
+          "y": 3.0,
+          "width": 1.4,
+          "height": 1.2,
+          "label_alignment": "center",
+          "label_vertical_alignment": "middle"
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "label": "",
+          "direction": "both",
+          "style": {
+            "line_style": "solid",
+            "color": "#FF0000",
+            "penwidth": 2.0,
+            "arrowhead": "normal",
+            "arrowtail": "normal",
+            "constraint": true,
+            "weight": 1,
+            "minlen": 1
+          },
+          "source_port": "auto",
+          "target_port": "auto",
+          "routing": null,
+          "waypoints": []
+        }
+      ],
+      "presentation": {
+        "theme": "light",
+        "background": "#FFFFFF"
+      }
+    },
+    "layout": {
+      "engine": "neato",
+      "edgeRouting": "curved",
+      "width": 4.7,
+      "height": 3.6,
+      "minX": 0.0,
+      "minY": 0.0,
+      "nodes": [
+        {
+          "id": "source",
+          "x": 1.0,
+          "y": 2.0,
+          "width": 1.4,
+          "height": 1.2
+        },
+        {
+          "id": "target",
+          "x": 4.0,
+          "y": 3.0,
+          "width": 1.4,
+          "height": 1.2
+        }
+      ],
+      "edges": [
+        {
+          "id": "link",
+          "source": "source",
+          "target": "target",
+          "points": [
+            {
+              "x": 1.7,
+              "y": 2.4221000000000004
+            },
+            {
+              "x": 1.7702675669560186,
+              "y": 2.4229066116608804
+            },
+            {
+              "x": 1.8395988689814813,
+              "y": 2.42532372662037
+            },
+            {
+              "x": 1.9081118078125,
+              "y": 2.42934726484375
+            },
+            {
+              "x": 1.9759242851851853,
+              "y": 2.434973146296297
+            },
+            {
+              "x": 2.0431542028356477,
+              "y": 2.4421972909432865
+            },
+            {
+              "x": 2.1099194625,
+              "y": 2.4510156187500005
+            },
+            {
+              "x": 2.1763379659143514,
+              "y": 2.4614240496817126
+            },
+            {
+              "x": 2.242527614814815,
+              "y": 2.4734185037037038
+            },
+            {
+              "x": 2.3086063109375,
+              "y": 2.48699490078125
+            },
+            {
+              "x": 2.374691956018518,
+              "y": 2.5021491608796294
+            },
+            {
+              "x": 2.4409024517939817,
+              "y": 2.518877203964121
+            },
+            {
+              "x": 2.5073556999999997,
+              "y": 2.53717495
+            },
+            {
+              "x": 2.574169602372685,
+              "y": 2.5570383189525465
+            },
+            {
+              "x": 2.641462060648148,
+              "y": 2.578463230787037
+            },
+            {
+              "x": 2.7093509765625,
+              "y": 2.6014456054687503
+            },
+            {
+              "x": 2.7779542518518516,
+              "y": 2.625981362962963
+            },
+            {
+              "x": 2.8473897882523147,
+              "y": 2.6520664232349542
+            },
+            {
+              "x": 2.9177754874999997,
+              "y": 2.67969670625
+            },
+            {
+              "x": 2.9892292513310186,
+              "y": 2.7088681319733796
+            },
+            {
+              "x": 3.0618689814814815,
+              "y": 2.7395766203703706
+            },
+            {
+              "x": 3.1358125796875003,
+              "y": 2.7718180914062502
+            },
+            {
+              "x": 3.211177947685185,
+              "y": 2.8055884650462968
+            },
+            {
+              "x": 3.288082987210648,
+              "y": 2.8408836612557873
+            },
+            {
+              "x": 3.3666456,
+              "y": 2.8776996
+            }
+          ],
+          "label": "",
+          "labelX": 2.55866713956703,
+          "labelY": 2.7024295305500337,
+          "normalized": true
+        }
+      ]
+    },
+    "svg_measurements": [
+      {
+        "case": "icon-curved",
+        "endpoint": "target",
+        "shaft_x": 263.1544,
+        "shaft_y": 83.4003,
+        "tip_x": 270.3985,
+        "tip_y": 80.0056,
+        "rear_x": 263.15445,
+        "rear_y": 83.4003,
+        "join_error_pt": 4.999999998744897e-05,
+        "join_angle_deg": 0.000800473238259221,
+        "rear_crossing_error_pt": 4.999999998744897e-05
+      },
+      {
+        "case": "icon-curved",
+        "endpoint": "source",
+        "shaft_x": 158.3995,
+        "shaft_y": 112.717,
+        "tip_x": 150.4,
+        "tip_y": 112.8088,
+        "rear_x": 158.3995,
+        "rear_y": 112.71695,
+        "join_error_pt": 5.000000000165983e-05,
+        "join_angle_deg": 0.00034985660578958506,
+        "rear_crossing_error_pt": 4.999670794931875e-05
+      }
+    ]
+  }
+]

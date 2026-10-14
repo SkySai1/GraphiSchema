@@ -240,7 +240,7 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
                 all_node_statements[node_id] = NodeStatement(None, {})
     for node_id, statement in all_node_statements.items():
         attrs = statement.attrs
-        allowed = {"label", "shape", "style", "fillcolor", "color", "fontcolor", "penwidth", "tooltip", "pos", "fontname", "fontsize", "margin", "fixedsize", "width", "height", "gs_icon"}
+        allowed = {"label", "shape", "style", "fillcolor", "color", "fontcolor", "penwidth", "tooltip", "pos", "fontname", "fontsize", "margin", "fixedsize", "width", "height", "gs_icon", "gs_label_alignment", "gs_label_vertical_alignment"}
         _check_attrs(attrs, allowed, f"узла {node_id}")
         old = existing_nodes.get(node_id)
         _require_value(attrs, "style", "filled,rounded", f"узла {node_id}")
@@ -263,6 +263,8 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
             "kind": old.kind if old else "service",
             "shape": attrs.get("shape", old.shape if old else "box"),
             "icon": attrs.get("gs_icon", old.icon if old else None),
+            "label_alignment": attrs.get("gs_label_alignment", old.label_alignment if old else "center"),
+            "label_vertical_alignment": attrs.get("gs_label_vertical_alignment", old.label_vertical_alignment if old else "middle"),
             "container_id": statement.parent_id,
             "style": {
                 "fill": attrs.get("fillcolor", old.style.fill if old else "#FFFFFF"),

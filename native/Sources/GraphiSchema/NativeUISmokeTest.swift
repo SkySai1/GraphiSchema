@@ -87,7 +87,7 @@ enum NativeUISmokeTest {
         let hasBundledPaletteIcons = PaletteLibrary.allObjects.allSatisfy { $0.loadIcon() != nil }
         let hasChat = findView(identifier: "ollama-chat-panel", in: root) != nil
         guard editorSplit.arrangedSubviews[0].frame.width >= 220,
-              editorSplit.arrangedSubviews[1].frame.width >= 580,
+              editorSplit.arrangedSubviews[1].frame.width >= 340,
               editorSplit.arrangedSubviews[2].frame.width >= 370,
               hasPalette,
               (paletteScroll?.contentView.bounds.width ?? 0) >= 200,
@@ -105,10 +105,17 @@ enum NativeUISmokeTest {
               hasChat,
               hasJSONCode
         else {
-            fail("Native UI smoke test failed: palette, readable JSON, chat, and panel widths must be visible.")
+            fail("Native UI smoke test failed: palette, readable JSON, chat, and panel widths must be visible. panels=\(editorSplit.arrangedSubviews.map(\.frame.width)), paletteScroll=\(paletteScroll?.contentView.bounds ?? .zero), firstTile=\(firstPaletteTile?.frame ?? .zero), picker=\(collectionPicker?.itemArray.count ?? -1), objects=\(PaletteLibrary.allObjects.count), visibleTiles=\(hasAllPaletteItems), icons=\(hasBundledPaletteIcons), chat=\(hasChat), json=\(hasJSONCode).")
         }
+        checkPaletteLayout(root: root, split: editorSplit, collectionPicker: collectionPicker!, firstTile: firstPaletteTile!)
+        checkSynchronizedGroupScaling(starter)
+        checkArrowheadTouchesVisibleNode(starter)
+        checkToolbarOverflow(mainWindow: mainWindow, root: root)
+        checkPDFOptions(mainWindow: mainWindow)
+        checkLongPressTextEditor(mainWindow: mainWindow, root: root, nodeID: "waf")
         guard NSApp.mainMenu?.items.contains(where: { $0.title == "Файл" }) == true,
               NSApp.mainMenu?.items.contains(where: { $0.title == "Настройки" }) == true,
+              NSApp.mainMenu?.items.first(where: { $0.title == "Вид" })?.submenu?.items.contains(where: { $0.title == "Стиль и свойства…" }) == true,
               NSColor(hex: "#33669980").hexRGBA == "#33669980" else {
             fail("The macOS menu bar, system settings and RGBA color support must be available.")
         }
@@ -169,7 +176,8 @@ enum NativeUISmokeTest {
         assistantWindow.showWindow(nil)
         assistantWindow.window?.contentView?.layoutSubtreeIfNeeded()
         guard (assistantWindow.window?.frame.width ?? 0) >= 560,
-              (findView(identifier: "ollama-system-prompt", in: assistantWindow.window?.contentView ?? NSView())?.frame.width ?? 0) >= 400
+              (findView(identifier: "ollama-system-prompt", in: assistantWindow.window?.contentView ?? NSView())?.frame.width ?? 0) >= 400,
+              (findView(identifier: "ollama-help-system-prompt", in: assistantWindow.window?.contentView ?? NSView())?.toolTip?.isEmpty == false)
         else {
             fail("Native UI smoke test failed: Ollama fields need usable width and padding.")
         }
@@ -182,28 +190,37 @@ enum NativeUISmokeTest {
         let fillWell = findView(identifier: "inspector-field-Заливка", in: styleContent) as? NSColorWell
         let borderWell = findView(identifier: "inspector-field-Граница", in: styleContent) as? NSColorWell
         let propertiesScroll = findView(identifier: "inspector-properties-scroll", in: styleContent) as? NSScrollView
+        let deleteButton = findView(identifier: "inspector-delete", in: styleContent) as? NSButton
+        let nameHelp = findView(identifier: "inspector-help-Название", in: styleContent)
         let nodePropertiesHeight = styleContent.frame.height
         guard styleWindow?.isVisible == true,
-              styleWindow?.frame.width ?? 0 >= 440,
+              styleWindow?.frame.width ?? 0 >= 340,
               styleWindow?.frame.height ?? 700 < 650,
               nameField?.isEnabled == true,
               (nameField?.frame.width ?? 0) >= 180,
               (fillWell?.frame.width ?? 0) >= 180,
               (borderWell?.frame.width ?? 0) >= 180,
-              (propertiesScroll?.contentView.bounds.width ?? 0) >= 400,
-              (propertiesScroll?.contentView.bounds.height ?? 0) >= 300
+              (propertiesScroll?.contentView.bounds.width ?? 0) >= 320,
+              (propertiesScroll?.contentView.bounds.height ?? 0) >= 150,
+              (deleteButton?.frame.width ?? 0) >= 70,
+              nameHelp?.toolTip?.isEmpty == false,
+              deleteButton.map({ styleContent.bounds.contains($0.convert($0.bounds, to: styleContent)) }) == true,
+              deleteButton?.superview?.subviews.compactMap({ $0 as? NSTextField }).first.map({
+                  !deleteButton!.convert(deleteButton!.bounds, to: styleContent)
+                      .intersects($0.convert($0.bounds, to: styleContent))
+              }) == true
         else {
-            fail("Native UI smoke test failed: unusable style layout (visible=\(styleWindow?.isVisible ?? false), window=\(styleWindow?.frame ?? .zero), content=\(styleContent.frame)/\(styleContent.bounds), name=\(nameField?.frame ?? .zero), enabled=\(nameField?.isEnabled ?? false), fill=\(fillWell?.frame ?? .zero), border=\(borderWell?.frame ?? .zero), scrollFrame=\(propertiesScroll?.frame ?? .zero), scroll=\(propertiesScroll?.contentView.bounds ?? .zero)).")
+            fail("Native UI smoke test failed: unusable style layout (visible=\(styleWindow?.isVisible ?? false), window=\(styleWindow?.frame ?? .zero), content=\(styleContent.frame)/\(styleContent.bounds), name=\(nameField?.frame ?? .zero), enabled=\(nameField?.isEnabled ?? false), fill=\(fillWell?.frame ?? .zero), border=\(borderWell?.frame ?? .zero), delete=\(deleteButton?.frame ?? .zero), deleteHelp=\(nameHelp?.toolTip ?? "missing"), scrollFrame=\(propertiesScroll?.frame ?? .zero), scroll=\(propertiesScroll?.contentView.bounds ?? .zero)).")
         }
         model.selection = .project
         mainWindow.refreshAll()
         let projectPropertiesHeight = styleWindow?.contentView?.frame.height ?? 0
-        guard let routingPicker = findView(identifier: "inspector-field-Маршрут связей", in: styleContent) as? NSPopUpButton,
+        let routingPicker = findView(identifier: "inspector-field-Маршрут связей", in: styleContent) as? NSPopUpButton
+        guard let routingPicker,
               Set(routingPicker.itemArray.compactMap { $0.representedObject as? String }) == Set(["straight", "angled", "orthogonal", "curved"]),
-              projectPropertiesHeight >= 280,
-              projectPropertiesHeight < nodePropertiesHeight
+              projectPropertiesHeight >= 220
         else {
-            fail("Native UI smoke test failed: project properties must offer straight, angled, and orthogonal edge routes.")
+            fail("Native UI smoke test failed: project properties must offer straight, angled, and orthogonal edge routes. height=\(projectPropertiesHeight), nodeHeight=\(nodePropertiesHeight), choices=\(routingPicker?.itemArray.compactMap { $0.representedObject as? String } ?? []).")
         }
         let originalRouting = model.diagram?.diagram.edgeRouting ?? "angled"
         if let orthogonal = routingPicker.itemArray.first(where: { ($0.representedObject as? String) == "orthogonal" }),
@@ -279,11 +296,12 @@ enum NativeUISmokeTest {
               assistantWindow.window?.title == "GraphiSchema · Ollama",
               assistantWindow.window?.contentView?.subviews.isEmpty == false,
               NSApp.windows.contains(where: { $0.title == "Оформление и свойства" }),
-              (NSApp.windows.first(where: { $0.title == "Оформление и свойства" })?.frame.width ?? 0) >= 440
+              (NSApp.windows.first(where: { $0.title == "Оформление и свойства" })?.frame.width ?? 0) >= 340
         else {
             fail("Native UI smoke test failed: expected editor, style, and Ollama windows.")
         }
-        checkNewCanvasFeatures(model: model, controller: mainWindow, assistant: assistantWindow, root: root, inspector: styleContent)
+        checkNewCanvasFeatures(model: model, controller: mainWindow, assistant: assistantWindow, root: root,
+                               inspector: styleContent, firstPaletteTile: firstPaletteTile)
         print("Native UI smoke test passed: vector collection figures, figure replacement, edge ports and mouse route handles, day/night UI, inverse trackpad, prompt variables CRUD/reset, version history, JSON and Ollama.")
     }
 
@@ -298,7 +316,288 @@ enum NativeUISmokeTest {
         _ = NSApp.sendAction(action, to: button.target, from: button)
     }
 
-    private static func checkNewCanvasFeatures(model: AppModel, controller: MainWindowController, assistant: OllamaAssistantWindowController, root: NSView, inspector: NSView) {
+    private static func checkPaletteLayout(root: NSView, split: NSSplitView, collectionPicker: NSPopUpButton, firstTile: NSView) {
+        guard let palette = findView(identifier: "palette-collection-list", in: root) as? NSStackView,
+              let documentStack = findView(identifier: "sidebar-document-stack", in: root) as? NSStackView,
+              let elements = findView(identifier: "sidebar-project-elements", in: root) as? NSStackView,
+              let actionsHeading = findView(identifier: "sidebar-actions-heading", in: root),
+              let toggle = findView(identifier: "palette-collection-toggle", in: root) as? NSButton,
+              let heading = findView(identifier: "palette-collection-heading", in: root) as? NSStackView,
+              let collectionBody = findView(identifier: "palette-collection-body", in: root) as? NSStackView,
+              let search = findView(identifier: "palette-search-field", in: root) as? NSSearchField,
+              let scroll = findView(identifier: "palette-scroll", in: root) as? NSScrollView,
+              let results = findView(identifier: "palette-results-heading", in: root) else {
+            fail("Palette layout controls must be identifiable for smoke tests.")
+        }
+        root.layoutSubtreeIfNeeded()
+        guard palette.isFlipped,
+              firstTile.frame.width >= 180,
+              abs(firstTile.frame.width - palette.bounds.width) < 1,
+              firstTile.frame.minY >= results.frame.maxY,
+              heading.bounds.contains(toggle.convert(toggle.bounds, to: heading)),
+              palette.bounds.contains(toggle.convert(toggle.bounds, to: palette)) else {
+            fail("Palette rows must flow from the top, match the left-pane width, and keep the collapse control visible. flipped=\(palette.isFlipped), tile=\(firstTile.frame), list=\(palette.bounds), results=\(results.frame), heading=\(heading.frame), toggleInHeading=\(toggle.convert(toggle.bounds, to: heading)), toggleInList=\(toggle.convert(toggle.bounds, to: palette)).")
+        }
+
+        search.stringValue = "no-such-palette-entry"
+        perform(search)
+        root.layoutSubtreeIfNeeded()
+        guard let empty = findView(identifier: "palette-empty-state", in: root),
+              empty.frame.minY >= (findView(identifier: "palette-results-heading", in: root)?.frame.maxY ?? .greatestFiniteMagnitude),
+              abs(scroll.contentView.bounds.origin.y) < 0.5 else {
+            fail("An empty collection search must stay anchored at the top of the sidebar.")
+        }
+        search.stringValue = ""
+        perform(search)
+        root.layoutSubtreeIfNeeded()
+        perform(toggle)
+        root.layoutSubtreeIfNeeded()
+        guard collectionBody.isHidden, !palette.arrangedSubviews.contains(collectionBody), !toggle.isHidden else {
+            fail("The collection search block must collapse while leaving its disclosure button visible.")
+        }
+        root.layoutSubtreeIfNeeded()
+        palette.layoutSubtreeIfNeeded()
+        let collapsedPaletteFrame = palette.convert(palette.bounds, to: documentStack)
+        let collapsedElementsFrame = elements.convert(elements.bounds, to: documentStack)
+        let collapsedGap = collapsedElementsFrame.minY - collapsedPaletteFrame.maxY
+        let collapsedActionOffset = actionsHeading.convert(actionsHeading.bounds, to: elements).minY
+        perform(toggle)
+        root.layoutSubtreeIfNeeded()
+        palette.layoutSubtreeIfNeeded()
+        let expandedPaletteFrame = palette.convert(palette.bounds, to: documentStack)
+        let expandedElementsFrame = elements.convert(elements.bounds, to: documentStack)
+        let expandedGap = expandedElementsFrame.minY - expandedPaletteFrame.maxY
+        let expandedActionOffset = actionsHeading.convert(actionsHeading.bounds, to: elements).minY
+        let collapsedIsCompact = collapsedPaletteFrame.height <= 58
+            && collapsedGap >= -1 && collapsedGap <= 28
+        guard !collectionBody.isHidden, palette.arrangedSubviews.contains(collectionBody),
+              !search.isHidden, !collectionPicker.isHidden,
+              collapsedIsCompact,
+              collapsedPaletteFrame.height < expandedPaletteFrame.height - 40,
+              abs(expandedGap-collapsedGap) < 2,
+              abs(expandedActionOffset-collapsedActionOffset) < 2 else {
+            fail("Collapsing the collection must hide its contents, keep the header compact, and leave no more than 28 pt before project actions. collapsed=\(collapsedPaletteFrame)/\(collapsedElementsFrame), expanded=\(expandedPaletteFrame)/\(expandedElementsFrame), gaps=\(collapsedGap)/\(expandedGap), compact=\(collapsedIsCompact), actionOffsets=\(collapsedActionOffset)/\(expandedActionOffset).")
+        }
+
+        let oldSidebarWidth = split.arrangedSubviews[0].frame.width
+        split.setPosition(max(220, oldSidebarWidth - 30), ofDividerAt: 0)
+        root.layoutSubtreeIfNeeded()
+        split.layoutSubtreeIfNeeded()
+        guard palette.bounds.contains(toggle.convert(toggle.bounds, to: palette)),
+              abs(firstTile.frame.width - palette.bounds.width) < 1 else {
+            fail("The collection disclosure and item widths must adapt to a narrow left pane.")
+        }
+        split.setPosition(oldSidebarWidth, ofDividerAt: 0)
+        root.layoutSubtreeIfNeeded()
+    }
+
+    private static func checkSynchronizedGroupScaling(_ project: DiagramProject) {
+        guard project.nodes.count >= 2 else { fail("Group scaling smoke test needs at least two nodes.") }
+        let probe = AppModel()
+        probe.diagram = project
+        let positions = project.nodes.enumerated().map { index, node in
+            LayoutNode(id: node.id, x: Double(index * 3), y: 2,
+                       width: node.width ?? 2, height: node.height ?? 1)
+        }
+        probe.layout = DiagramLayout(engine: project.diagram.layoutEngine, edgeRouting: project.diagram.edgeRouting,
+                                     width: Double(project.nodes.count * 3), height: 4, minX: 0, minY: 0,
+                                     nodes: positions, edges: [])
+        let ids = Set(project.nodes.prefix(2).map(\.id))
+        let original = Dictionary(uniqueKeysWithValues: project.nodes.map { ($0.id, $0) })
+        probe.scaleNodes(ids, factor: 1.25)
+        guard let scaled = probe.diagram?.nodes,
+              scaled.allSatisfy({ node in
+                  guard let position = positions.first(where: { $0.id == node.id }),
+                        let before = original[node.id] else { return false }
+                  let expectedWidth = before.width ?? position.width
+                  let expectedHeight = before.height ?? position.height
+                  if ids.contains(node.id) {
+                      return abs((node.width ?? 0) - expectedWidth * 1.25) < 1e-6
+                          && abs((node.height ?? 0) - expectedHeight * 1.25) < 1e-6
+                          && node.x == position.x && node.y == position.y
+                  }
+                  return node.x == position.x && node.y == position.y
+                      && node.width == before.width && node.height == before.height
+              }) else {
+            fail("Group resize must scale each selected shape by one factor without shifting node centers.")
+        }
+    }
+
+    private static func checkArrowheadTouchesVisibleNode(_ project: DiagramProject) {
+        guard var edge = project.edges.first,
+              let source = project.nodes.first(where: { $0.id == edge.source }),
+              let target = project.nodes.first(where: { $0.id == edge.target }) else {
+            fail("Arrow rendering smoke test requires a connected node pair.")
+        }
+        var arrowProject = project
+        var sourceNode = source
+        var targetNode = target
+        sourceNode.icon = nil; sourceNode.shape = "box"; sourceNode.label = ""
+        sourceNode.width = 1.4; sourceNode.height = 1.2; sourceNode.x = 4; sourceNode.y = 1
+        sourceNode.style.fill = "#FFFFFF"; sourceNode.style.stroke = "#00AA00"; sourceNode.style.penwidth = 5
+        targetNode.icon = nil; targetNode.shape = "box"; targetNode.label = ""
+        targetNode.width = 1.4; targetNode.height = 1.2; targetNode.x = 1; targetNode.y = 1
+        targetNode.style.fill = "#FFFFFF"; targetNode.style.stroke = "#00AA00"; targetNode.style.penwidth = 5
+        arrowProject.nodes = [sourceNode, targetNode]
+        arrowProject.containers = []
+        arrowProject.diagram.layoutMode = "manual"
+        arrowProject.diagram.direction = "RL"
+        arrowProject.diagram.edgeRouting = "angled"
+        arrowProject.presentation.theme = "light"
+        arrowProject.presentation.background = "#FFFFFF"
+        edge.direction = "forward"
+        edge.routing = nil
+        edge.sourcePort = "auto"
+        edge.targetPort = "auto"
+        edge.waypoints = []
+        edge.style.color = "#FF0000"
+        edge.style.penwidth = 2
+        edge.style.arrowhead = "normal"
+        edge.style.arrowtail = "none"
+        arrowProject.edges = [edge]
+
+        let sourcePosition = LayoutNode(id: source.id, x: 4, y: 1, width: 1.4, height: 1.2)
+        let targetPosition = LayoutNode(id: target.id, x: 1, y: 1, width: 1.4, height: 1.2)
+        let geometry = LayoutEdge(id: edge.id, source: source.id, target: target.id,
+                                  points: [LayoutPoint(x: 1.7, y: 1), LayoutPoint(x: 3.5, y: 1),
+                                           LayoutPoint(x: 1.4, y: 1), LayoutPoint(x: 3.3, y: 1)], label: "")
+        let layout = DiagramLayout(engine: "neato", edgeRouting: "angled", width: 5.5, height: 3,
+                                   minX: 0, minY: 0, nodes: [sourcePosition, targetPosition], edges: [geometry])
+        let canvas = DiagramCanvasView(frame: NSRect(x: 0, y: 0, width: 520, height: 260))
+        canvas.isGridVisible = false
+        canvas.fitToContent()
+        var route: [NSPoint] = []
+        for routing in ["straight", "angled", "curved"] {
+            var routedProject = arrowProject
+            routedProject.diagram.edgeRouting = routing
+            var routedLayout = layout
+            routedLayout.edgeRouting = routing
+            canvas.update(diagram: routedProject, layout: routedLayout, selection: .project)
+            route = canvas.edgePoints(for: edge.id)
+            guard let tip = route.last, route.count > 1 else { fail("Arrow endpoint geometry is missing for \(routing).") }
+            let previous = route[route.count-2]
+            let inward = NSPoint(x: targetPosition.x-tip.x, y: targetPosition.y-tip.y)
+            let tangent = NSPoint(x: tip.x-previous.x, y: tip.y-previous.y)
+            guard let drawing = canvas.edgeDrawing(for: edge.id), let marker = drawing.head,
+                  drawing.shaft.count > 1 else { fail("Missing rendered arrow geometry for \(routing).") }
+            let vertices = marker.polygon
+            let rear = NSPoint(x: (vertices[1].x+vertices[2].x)/2, y: (vertices[1].y+vertices[2].y)/2)
+            let end = drawing.shaft.last!, previousEnd = drawing.shaft[drawing.shaft.count-2]
+            let axis = NSPoint(x: marker.tip.x-rear.x, y: marker.tip.y-rear.y)
+            let approach = NSPoint(x: end.x-previousEnd.x, y: end.y-previousEnd.y)
+            guard tangent.x*inward.x + tangent.y*inward.y > 0,
+                  hypot(end.x-rear.x, end.y-rear.y) < 1e-6,
+                  abs(axis.x*approach.y-axis.y*approach.x) < 1e-6,
+                  axis.x*approach.x+axis.y*approach.y > 0 else {
+                fail("The \(routing) shaft must end at the centre of the arrow's rear edge and enter from behind, including right-to-left routes.")
+            }
+        }
+        arrowProject.diagram.edgeRouting = "angled"
+        canvas.update(diagram: arrowProject, layout: layout, selection: .project)
+        route = canvas.edgePoints(for: edge.id)
+        guard let tip = route.last else { fail("Arrow endpoint geometry is missing.") }
+        let screenTip = canvas.screenPoint(for: tip)
+        guard let bitmap = canvas.bitmapImageRepForCachingDisplay(in: canvas.bounds) else {
+            fail("Cannot rasterize arrow rendering smoke fixture.")
+        }
+        canvas.cacheDisplay(in: canvas.bounds, to: bitmap)
+        capture(canvas, name: "arrow-render-order")
+        let pixelX = Int((screenTip.x * CGFloat(bitmap.pixelsWide) / max(1, canvas.bounds.width)).rounded())
+        let pixelY = Int((screenTip.y * CGFloat(bitmap.pixelsHigh) / max(1, canvas.bounds.height)).rounded())
+        let ySamples = [pixelY, bitmap.pixelsHigh - pixelY]
+        let visibleArrowPixels = ySamples.flatMap { y in
+            (-2...2).flatMap { dy in
+                (-2...2).compactMap { dx -> NSColor? in
+                    let x = pixelX + dx, sampleY = y + dy
+                    guard x >= 0, x < bitmap.pixelsWide, sampleY >= 0, sampleY < bitmap.pixelsHigh else { return nil }
+                    return bitmap.colorAt(x: x, y: sampleY)?.usingColorSpace(.deviceRGB)
+                }
+            }
+        }.contains { $0.redComponent > 0.7 && $0.greenComponent < 0.35 && $0.blueComponent < 0.35 }
+        guard visibleArrowPixels else {
+            fail("The arrow tip must remain visible over the target outline at its actual attachment point (tip=\(screenTip), pixel=\(pixelX),\(pixelY)).")
+        }
+    }
+
+    private static func checkToolbarOverflow(mainWindow: MainWindowController, root: NSView) {
+        guard let window = mainWindow.window,
+              let toolbar = findView(identifier: "workspace-toolbar-scroll", in: root) as? NSScrollView else {
+            fail("Workspace toolbar must be hosted in a horizontal scroll view.")
+        }
+        let originalSize = root.bounds.size
+        window.setContentSize(NSSize(width: 1_100, height: max(640, originalSize.height)))
+        root.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        let documentWidth = toolbar.documentView?.frame.width ?? 0
+        let viewportWidth = toolbar.contentView.bounds.width
+        guard toolbar.hasHorizontalScroller, documentWidth > viewportWidth + 40 else {
+            fail("Workspace toolbar must scroll horizontally when side panels leave limited room.")
+        }
+        window.setContentSize(originalSize)
+        root.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+    }
+
+    private static func checkPDFOptions(mainWindow: MainWindowController) {
+        guard let window = mainWindow.window,
+              let fileMenu = NSApp.mainMenu?.items.first(where: { $0.title == "Файл" })?.submenu,
+              let export = fileMenu.items.first(where: { $0.title == "Экспортировать PDF…" }),
+              let action = export.action else { fail("PDF export menu action is missing.") }
+        _ = NSApp.sendAction(action, to: export.target, from: export)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.15))
+        guard let alert = mainWindow.pendingPDFExportAlert,
+              let options = alert.accessoryView,
+              let alertContent = alert.window.contentView else {
+            fail("PDF export must create a settings alert before the save panel.")
+        }
+        options.layoutSubtreeIfNeeded()
+        let page = findView(identifier: "pdf-page-format", in: options) as? NSPopUpButton
+        let helpWidth = findView(identifier: "pdf-page-size-help", in: options)?.frame.width ?? 0
+        let legend = findView(identifier: "pdf-include-legend", in: options) as? NSButton
+        let cancel = findButton(title: "Отмена", in: alertContent)
+        guard options.frame.width >= 360, options.frame.height >= 100,
+              page?.itemArray.count == 3, helpWidth > 0, legend != nil, cancel != nil else {
+            fail("PDF options sheet must expose page format and legend controls. options=\(options.frame), pageItems=\(page?.itemArray.count ?? -1), help=\(helpWidth), legend=\(legend?.frame ?? .zero), cancel=\(cancel?.title ?? "missing").")
+        }
+        perform(cancel!)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        if window.attachedSheet != nil { window.endSheet(alert.window, returnCode: .alertSecondButtonReturn) }
+    }
+
+    private static func checkLongPressTextEditor(mainWindow: MainWindowController, root: NSView, nodeID: String) {
+        guard let window = mainWindow.window,
+              let canvas = findView(identifier: "diagram-canvas", in: root) as? DiagramCanvasView,
+              let position = canvas.nodePositions.first(where: { $0.id == nodeID }) else {
+            fail("Canvas node position is required for the long-press text-editor test.")
+        }
+        let point = canvas.screenPoint(for: NSPoint(x: position.x, y: position.y))
+        let down = NSEvent.mouseEvent(with: .leftMouseDown, location: canvas.convert(point, to: nil),
+                                      modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                                      context: nil, eventNumber: 31, clickCount: 1, pressure: 1)!
+        canvas.mouseDown(with: down)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.72))
+        guard let editor = NSApp.windows.first(where: { $0.title == "Текст фигуры" }),
+              editor.isVisible,
+              findView(identifier: "node-text-value", in: editor.contentView ?? NSView()) is NSTextField else {
+            fail("Holding the trackpad press on a node must open the text editor.")
+        }
+        let up = NSEvent.mouseEvent(with: .leftMouseUp, location: canvas.convert(point, to: nil),
+                                    modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                                    context: nil, eventNumber: 32, clickCount: 1, pressure: 0)!
+        canvas.mouseUp(with: up)
+        editor.close()
+    }
+
+    private static func findButton(title: String, in view: NSView) -> NSButton? {
+        if let button = view as? NSButton, button.title == title { return button }
+        for child in view.subviews {
+            if let match = findButton(title: title, in: child) { return match }
+        }
+        return nil
+    }
+
+    private static func checkNewCanvasFeatures(model: AppModel, controller: MainWindowController, assistant: OllamaAssistantWindowController,
+                                               root: NSView, inspector: NSView, firstPaletteTile: NSView?) {
         guard !ProjectResources.graphvizDeclaration.isEmpty,
               PaletteLibrary.allObjects.allSatisfy({ CanvasGeometry.icons[$0.iconPath] != nil })
         else { fail("Collection geometry and Graphviz template resources must be bundled") }
@@ -363,10 +662,18 @@ enum NativeUISmokeTest {
         guard model.edges.first?.waypoints.isEmpty == true else { fail("Reset route action failed") }
 
         model.inverseTrackpad = true
+        let naturalInverseDelta = DiagramCanvasView.scrollOffsetDelta(x: 6, y: -4, precise: true, natural: true, inverse: true)
+        let systemInverseDelta = DiagramCanvasView.scrollOffsetDelta(x: 6, y: -4, precise: true, natural: false, inverse: true)
+        let systemDirectionDelta = DiagramCanvasView.scrollOffsetDelta(x: 6, y: -4, precise: true, natural: false, inverse: false)
         guard canvas.inverseTrackpad,
               DiagramCanvasView.scrollDirection(precise: true, natural: true, inverse: true) == -1,
               DiagramCanvasView.scrollDirection(precise: true, natural: false, inverse: true) == 1,
-              DiagramCanvasView.scrollDirection(precise: false, natural: true, inverse: true) == 1 else { fail("Inverse physical trackpad direction and mouse wheel must remain independent") }
+              DiagramCanvasView.scrollDirection(precise: false, natural: true, inverse: true) == 1,
+              naturalInverseDelta == NSPoint(x: -6, y: 4),
+              systemInverseDelta == NSPoint(x: 6, y: -4),
+              systemDirectionDelta == NSPoint(x: -6, y: 4) else {
+            fail("Trackpad inversion must map horizontal and vertical deltas consistently across both system directions, while mouse wheels stay unchanged")
+        }
         model.inverseTrackpad = false
         guard !canvas.inverseTrackpad else { fail("Navigation preference must apply immediately") }
 

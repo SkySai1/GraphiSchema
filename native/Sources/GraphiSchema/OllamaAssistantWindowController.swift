@@ -52,22 +52,22 @@ final class OllamaAssistantWindowController: NSWindowController {
         endpointField.setContentHuggingPriority(.defaultLow, for: .horizontal)
         endpointField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let checkButton = button("Проверить", symbol: "arrow.clockwise") { [weak self] in self?.checkConnection() }
-        let endpointRow = row(label("Endpoint", width: 86), endpointField, checkButton)
+        let endpointRow = row(helpLabel("Endpoint", width: 74, explanation: "Адрес локального Ollama API, например http://127.0.0.1:11434. Кнопка проверки запрашивает доступные модели."), endpointField, checkButton)
 
         modelField.isEditable = true
         modelField.placeholderString = "Выберите установленную модель"
         modelField.setContentHuggingPriority(.defaultLow, for: .horizontal)
         modelField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        let modelRow = row(label("Модель", width: 86), modelField)
+        let modelRow = row(helpLabel("Модель", width: 66, explanation: "Локальная модель Ollama, которая будет обрабатывать запросы и проверять диаграмму."), modelField)
 
         temperatureField.placeholderString = "0.2"
         contextField.placeholderString = "8192"
         timeoutField.placeholderString = "120"
         [temperatureField, contextField, timeoutField].forEach { $0.alignment = .left }
         let settingsRow = NSStackView(views: [
-            label("Температура", width: 80), temperatureField,
-            label("Контекст", width: 57), contextField,
-            label("Тайм-аут, с", width: 75), timeoutField,
+            helpLabel("Температура", width: 76, explanation: "Управляет вариативностью ответа: низкие значения дают более стабильные изменения, высокие — больше разнообразия."), temperatureField,
+            helpLabel("Контекст", width: 54, explanation: "Максимальное число токенов контекста, передаваемого модели. Большой контекст расходует больше памяти."), contextField,
+            helpLabel("Тайм-аут, с", width: 70, explanation: "Максимальное время ожидания ответа Ollama для одного запроса."), timeoutField,
         ])
         settingsRow.orientation = .horizontal
         settingsRow.alignment = .centerY
@@ -76,9 +76,7 @@ final class OllamaAssistantWindowController: NSWindowController {
             field.widthAnchor.constraint(equalToConstant: field === contextField ? 72 : 58).isActive = true
         }
 
-        let promptHeading = NSTextField(labelWithString: "СИСТЕМНЫЙ ПРОМПТ · JINJA: {{ graphviz_attributes }}")
-        promptHeading.font = .systemFont(ofSize: 9, weight: .bold)
-        promptHeading.textColor = .secondaryLabelColor
+        let promptHeading = HelpFieldLabel("СИСТЕМНЫЙ ПРОМПТ · JINJA: {{ graphviz_attributes }}", explanation: "Инструкции Ollama для создания, изменения и проверки диаграмм. Переменные шаблона подставляются перед каждым запросом.", identifier: "ollama-help-system-prompt", fontSize: 9)
         systemPromptView.isRichText = false
         systemPromptView.identifier = NSUserInterfaceItemIdentifier("ollama-system-prompt")
         systemPromptView.isAutomaticQuoteSubstitutionEnabled = false
@@ -106,6 +104,7 @@ final class OllamaAssistantWindowController: NSWindowController {
 
         let variables = button("Переменные…", symbol: "curlybraces") { [weak self] in self?.showVariables() }
         variables.identifier = NSUserInterfaceItemIdentifier("ollama-prompt-variables")
+        variables.toolTip = "Открыть переменные и справочник Graphviz, доступные системному промпту."
         let promptRow = NSStackView(views: [promptHeading, NSView(), variables])
         promptRow.orientation = .horizontal; promptRow.spacing = 8
         [heading, endpointRow, modelRow, settingsRow, promptRow, promptScroll, actionsRow].forEach { form.addArrangedSubview($0) }
@@ -197,10 +196,9 @@ final class OllamaAssistantWindowController: NSWindowController {
         return result
     }
 
-    private func label(_ value: String, width: CGFloat) -> NSTextField {
-        let result = NSTextField(labelWithString: value)
-        result.font = .systemFont(ofSize: 11, weight: .medium)
-        result.widthAnchor.constraint(equalToConstant: width).isActive = true
+    private func helpLabel(_ value: String, width: CGFloat, explanation: String) -> NSView {
+        let result = HelpFieldLabel(value, explanation: explanation, identifier: "ollama-help-\(value)", fontSize: 11)
+        result.widthAnchor.constraint(equalToConstant: width + 21).isActive = true
         return result
     }
 

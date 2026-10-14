@@ -150,7 +150,10 @@ enum CanvasGeometry {
     }
 
     static func edgePoints(_ edge: DiagramEdge, source: LayoutNode, target: LayoutNode, sourceNode: DiagramNode, targetNode: DiagramNode,
-                           settings: DiagramSettings, proposed: [NSPoint]? = nil, waypoints: [RoutePoint]? = nil) -> [NSPoint] {
+                           settings: DiagramSettings, proposed: [NSPoint]? = nil, waypoints: [RoutePoint]? = nil,
+                           proposedNormalized: Bool = false) -> [NSPoint] {
+        if proposedNormalized, let proposed { return deduplicate(proposed) }
+        let proposed = proposed.map { sourceToTarget($0, source: source, target: target) }
         var bends = (waypoints ?? edge.waypoints).map { NSPoint(x: $0.x, y: $0.y) }
         var start = attachment(sourceNode, at: source, toward: bends.first ?? .init(x: target.x, y: target.y), port: edge.sourcePort)
         var end = attachment(targetNode, at: target, toward: bends.last ?? .init(x: source.x, y: source.y), port: edge.targetPort)
@@ -162,7 +165,14 @@ enum CanvasGeometry {
             bends = [.init(x: source.x+source.width, y: source.y), .init(x: source.x+source.width, y: source.y+source.height), .init(x: source.x, y: source.y+source.height)]
         }
         let result: [NSPoint]
-        if !bends.isEmpty {
+        if edge.sourcePort != "auto" || edge.targetPort != "auto" {
+            let leadLength = min(0.25, hypot(end.x-start.x, end.y-start.y)/3)
+            let anchors = [portLead(start, at: source, port: edge.sourcePort, routing: routing, length: leadLength)] + bends
+                + [portLead(end, at: target, port: edge.targetPort, routing: routing, length: leadLength)]
+            result = [start, anchors[0]] + zip(anchors, anchors.dropFirst()).flatMap { a, b in
+                bends.isEmpty || routing == "orthogonal" ? Array(route(a, b, routing: routing, horizontal: horizontal).dropFirst()) : [b]
+            } + [end]
+        } else if !bends.isEmpty {
             let anchors = [start] + bends + [end]
             result = [start] + zip(anchors, anchors.dropFirst()).flatMap { a, b in
                 routing == "orthogonal" ? Array(route(a, b, routing: routing, horizontal: horizontal).dropFirst()) : [b]
@@ -173,15 +183,39 @@ enum CanvasGeometry {
             end = attachment(targetNode, at: target, toward: proposed[proposed.count-2], port: "auto")
             result = [start] + proposed.dropFirst().dropLast() + [end]
         } else if routing == "curved", edge.sourcePort == "auto", edge.targetPort == "auto",
-                  let proposed, proposed.count == 4 {
-            let p1 = proposed[1], p2 = proposed[2]
+                  let proposed, proposed.count >= 4, (proposed.count-1) % 3 == 0 {
+            let p1 = proposed[1], p2 = proposed[proposed.count-2]
             start = attachment(sourceNode, at: source, toward: p1, port: "auto")
             end = attachment(targetNode, at: target, toward: p2, port: "auto")
-            result = sampleCubic(start, p1, p2, end)
+            let controls = [start] + proposed.dropFirst().dropLast() + [end]
+            result = [start] + stride(from: 0, to: controls.count-1, by: 3).flatMap { index in
+                Array(sampleCubic(controls[index], controls[index+1], controls[index+2], controls[index+3]).dropFirst())
+            }
         } else { result = route(start, end, routing: routing, horizontal: horizontal) }
-        return result.reduce(into: []) { points, next in
+        return deduplicate(result)
+    }
+
+    private static func deduplicate(_ input: [NSPoint]) -> [NSPoint] {
+        input.reduce(into: []) { points, next in
             if let last = points.last, hypot(last.x-next.x, last.y-next.y) < 1e-7 { return }
             points.append(next)
         }
+    }
+
+    private static func portLead(_ point: NSPoint, at position: LayoutNode, port: String, routing: String, length: CGFloat) -> NSPoint {
+        guard port != "auto" else { return point }
+        var dx = point.x-position.x, dy = point.y-position.y
+        if routing == "orthogonal" {
+            if abs(dx) >= abs(dy) { dy = 0 } else { dx = 0 }
+        }
+        let norm = hypot(dx, dy)
+        return norm > 1e-9 ? NSPoint(x: point.x+length*dx/norm, y: point.y+length*dy/norm) : point
+    }
+
+    private static func sourceToTarget(_ points: [NSPoint], source: LayoutNode, target: LayoutNode) -> [NSPoint] {
+        guard let first = points.first, let last = points.last, points.count > 1 else { return points }
+        let direct = hypot(first.x-source.x, first.y-source.y) + hypot(last.x-target.x, last.y-target.y)
+        let reversed = hypot(last.x-source.x, last.y-source.y) + hypot(first.x-target.x, first.y-target.y)
+        return reversed + 1e-7 < direct ? Array(points.reversed()) : points
     }
 }

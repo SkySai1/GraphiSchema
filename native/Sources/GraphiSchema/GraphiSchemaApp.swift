@@ -39,6 +39,10 @@ final class AppLifecycle: NSObject, NSApplicationDelegate {
 enum GraphiSchemaApp {
     @MainActor
     static func main() {
+        if ProcessInfo.processInfo.arguments.contains("--arrow-regression-test") {
+            NativeArrowRegressionTests.run()
+            return
+        }
         if ProcessInfo.processInfo.arguments.contains("--ui-smoke-test") {
             NativeUISmokeTest.run()
             return

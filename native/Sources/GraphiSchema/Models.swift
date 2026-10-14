@@ -101,6 +101,11 @@ struct DiagramNode: Codable, Equatable, Identifiable {
     var width: Double?
     var height: Double?
     var icon: String? = nil
+    var labelAlignment: String? = nil
+    var labelVerticalAlignment: String? = nil
+
+    var effectiveLabelAlignment: String { labelAlignment ?? "center" }
+    var effectiveLabelVerticalAlignment: String { labelVerticalAlignment ?? "middle" }
 }
 
 struct NodeStyle: Codable, Equatable {
@@ -275,6 +280,7 @@ struct LayoutEdge: Decodable, Equatable, Identifiable {
     var label: String
     var labelX: Double?
     var labelY: Double?
+    var normalized: Bool? = nil
 }
 
 struct LayoutPoint: Decodable, Equatable {
@@ -341,6 +347,7 @@ struct ValidationIssue: Decodable, Identifiable {
 enum DiagramSelection: Hashable {
     case project
     case node(String)
+    case nodes(Set<String>)
     case container(String)
     case edge(String)
 }

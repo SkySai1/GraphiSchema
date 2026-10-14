@@ -122,6 +122,20 @@ def route_midpoint(points):
     return points[0]
 
 
+def port_lead(point, position, port, routing, length=.25):
+    """Reserve an outside approach to a fixed side or vertex."""
+    if port == "auto":
+        return point
+    dx, dy = point[0]-position["x"], point[1]-position["y"]
+    if routing == "orthogonal":
+        if abs(dx) >= abs(dy):
+            dy = 0
+        else:
+            dx = 0
+    norm = math.hypot(dx, dy)
+    return (point[0]+length*dx/norm, point[1]+length*dy/norm) if norm > 1e-9 else point
+
+
 def normalize_edges(project, layout):
     """Place arrow tips on visible contours, including icon strokes and explicit ports.
 
@@ -133,6 +147,8 @@ def normalize_edges(project, layout):
     model_edges = {e.id: e for e in project.edges}
     horizontal = project.diagram.direction in {"LR", "RL"}
     for geometry in layout["edges"]:
+        if geometry.get("normalized"):
+            continue
         edge = model_edges[geometry["id"]]
         source, target = positions[edge.source], positions[edge.target]
         waypoints = [(p.x, p.y) for p in edge.waypoints]
@@ -144,18 +160,32 @@ def normalize_edges(project, layout):
             start = attachment(nodes[edge.source], source, (x+w, y), edge.source_port if edge.source_port != "auto" else "e")
             end = attachment(nodes[edge.target], target, (x, y+h), edge.target_port if edge.target_port != "auto" else "n")
             waypoints = [(x+w, y), (x+w, y+h), (x, y+h)]
-        if waypoints:
+        if edge.source_port != "auto" or edge.target_port != "auto":
+            lead_length = min(.25, math.dist(start, end)/3)
+            anchors = [port_lead(start, source, edge.source_port, routing, lead_length), *waypoints,
+                       port_lead(end, target, edge.target_port, routing, lead_length)]
+            core = [anchors[0]]
+            for a, b in zip(anchors, anchors[1:]):
+                core.extend(route(a, b, routing, horizontal)[1:] if not waypoints or routing == "orthogonal" else [b])
+            points = [start, *core, end]
+        elif waypoints:
             anchors = [start, *waypoints, end]
             points = [anchors[0]]
             for a, b in zip(anchors, anchors[1:]):
                 points.extend(route(a, b, "orthogonal", horizontal)[1:] if routing == "orthogonal" else [b])
         elif routing == "curved" and edge.source_port == edge.target_port == "auto" and len(geometry["points"]) >= 4:
-            old = [(p["x"], p["y"]) for p in geometry["points"]]
+            old = _source_to_target([(p["x"], p["y"]) for p in geometry["points"]], source, target)
             start = attachment(nodes[edge.source], source, old[1])
             end = attachment(nodes[edge.target], target, old[-2])
-            points = sample_cubic((start, old[1], old[-2], end))
+            controls = [start, *old[1:-1], end]
+            if (len(controls)-1) % 3 == 0:
+                points = [start]
+                for index in range(0, len(controls)-1, 3):
+                    points.extend(sample_cubic(controls[index:index+4])[1:])
+            else:
+                points = sample_cubic((start, old[1], old[-2], end))
         elif routing == "angled" and edge.routing is None and edge.source_port == edge.target_port == "auto":
-            old = [(p["x"], p["y"]) for p in geometry["points"]]
+            old = _source_to_target([(p["x"], p["y"]) for p in geometry["points"]], source, target)
             # Preserve Graphviz obstacle avoidance. Extend from the last control point to the contour.
             start = attachment(nodes[edge.source], source, old[1] if len(old) > 2 else (target["x"], target["y"]))
             end = attachment(nodes[edge.target], target, old[-2] if len(old) > 2 else (source["x"], source["y"]))
@@ -167,6 +197,9 @@ def normalize_edges(project, layout):
             if math.dist(point, deduplicated[-1]) > 1e-7:
                 deduplicated.append(point)
         geometry["points"] = [{"x": x, "y": y} for x, y in deduplicated]
+        # These are final source-to-target polylines, not Bézier controls.
+        # Native rendering must not interpret or reroute them a second time.
+        geometry["normalized"] = True
         middle = route_midpoint(deduplicated)
         if edge.waypoints or edge.routing or nodes[edge.source].icon or nodes[edge.target].icon or edge.source_port != "auto" or edge.target_port != "auto":
             geometry["labelX"], geometry["labelY"] = middle[0], middle[1]+.15
@@ -199,3 +232,13 @@ def normalize_edges(project, layout):
         layout["minX"], layout["minY"] = left, bottom
         layout["width"], layout["height"] = right-left, top-bottom
     return layout
+
+
+def _source_to_target(points, source, target):
+    """Orient Graphviz spline points from the model edge's source toward its target."""
+    if len(points) < 2:
+        return points
+    first, last = points[0], points[-1]
+    direct = math.dist(first, (source["x"], source["y"])) + math.dist(last, (target["x"], target["y"]))
+    reverse = math.dist(last, (source["x"], source["y"])) + math.dist(first, (target["x"], target["y"]))
+    return list(reversed(points)) if reverse + 1e-7 < direct else points

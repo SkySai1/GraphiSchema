@@ -286,6 +286,48 @@ final class AppModel: ObservableObject {
         changed()
     }
 
+    func moveNodes(_ ids: Set<String>, deltaX: Double, deltaY: Double) {
+        guard !isEditingLocked, !ids.isEmpty, var current = diagram else { return }
+        let positions = Dictionary(uniqueKeysWithValues: (layout?.nodes ?? []).map { ($0.id, $0) })
+        current.diagram.layoutMode = "manual"
+        for index in current.nodes.indices {
+            if current.nodes[index].x == nil || current.nodes[index].y == nil,
+               let position = positions[current.nodes[index].id] {
+                current.nodes[index].x = position.x
+                current.nodes[index].y = position.y
+            }
+            guard ids.contains(current.nodes[index].id),
+                  let x = current.nodes[index].x, let y = current.nodes[index].y else { continue }
+            current.nodes[index].x = min(1000, max(-1000, x + deltaX))
+            current.nodes[index].y = min(1000, max(-1000, y + deltaY))
+        }
+        diagram = current
+        if ids.count == 1, let id = ids.first { selection = .node(id) }
+        else { selection = .nodes(ids) }
+        changed()
+    }
+
+    func scaleNodes(_ ids: Set<String>, factor: Double) {
+        guard !isEditingLocked, ids.count > 1, factor.isFinite, factor > 0, var current = diagram else { return }
+        let positions = Dictionary(uniqueKeysWithValues: (layout?.nodes ?? []).map { ($0.id, $0) })
+        current.diagram.layoutMode = "manual"
+        for index in current.nodes.indices {
+            let node = current.nodes[index]
+            guard let position = positions[node.id] else { continue }
+            if current.nodes[index].x == nil { current.nodes[index].x = position.x }
+            if current.nodes[index].y == nil { current.nodes[index].y = position.y }
+            guard ids.contains(node.id) else { continue }
+            let width = node.width ?? position.width
+            let height = node.height ?? position.height
+            let boundedFactor = min(min(10 / width, 10 / height), max(max(0.5 / width, 0.5 / height), factor))
+            current.nodes[index].width = width * boundedFactor
+            current.nodes[index].height = height * boundedFactor
+        }
+        diagram = current
+        selection = .nodes(ids)
+        changed()
+    }
+
     func moveContainer(_ id: String, deltaX: Double, deltaY: Double) {
         guard !isEditingLocked else { return }
         guard var current = diagram, current.containers.contains(where: { $0.id == id }) else { return }
@@ -437,6 +479,9 @@ final class AppModel: ObservableObject {
         case .node(let id):
             current.nodes.removeAll { $0.id == id }
             current.edges.removeAll { $0.source == id || $0.target == id }
+        case .nodes(let ids):
+            current.nodes.removeAll { ids.contains($0.id) }
+            current.edges.removeAll { ids.contains($0.source) || ids.contains($0.target) }
         case .edge(let id):
             current.edges.removeAll { $0.id == id }
         case .container(let id):

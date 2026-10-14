@@ -34,21 +34,26 @@ final class PromptVariablesWindowController: NSWindowController, NSTableViewData
         let root = NSView(); root.wantsLayer = true; root.layer?.name = "theme-surface-window"
         root.layer?.backgroundColor = AppTheme.surface("window").cgColor; window?.contentView = root
         let left = NSStackView(); left.orientation = .vertical; left.alignment = .leading; left.spacing = 12
+        let listLabel = HelpFieldLabel("Переменные", explanation: "Список значений, доступных в системном промпте. Встроенную декларацию Graphviz можно изменить или восстановить.", identifier: "prompt-variable-list-help", fontSize: 11)
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("variable"))
         column.title = "Переменная"; column.width = 210
         table.addTableColumn(column); table.headerView = nil; table.delegate = self; table.dataSource = self
         table.identifier = NSUserInterfaceItemIdentifier("prompt-variables-list")
+        table.toolTip = "Локальная библиотека значений, подставляемых в системный промпт по имени переменной."
         table.rowHeight = 28
         let list = NSScrollView(); list.documentView = table; list.hasVerticalScroller = true; list.borderType = .bezelBorder
+        left.addArrangedSubview(listLabel)
         left.addArrangedSubview(list)
         let add = button("Добавить", identifier: "prompt-variable-add") { [weak self] in self?.addVariable() }
         let delete = button("Удалить", identifier: "prompt-variable-delete") { [weak self] in self?.deleteVariable() }
         let listActions = NSStackView(views: [add, delete]); listActions.spacing = 7; left.addArrangedSubview(listActions)
 
         nameField.identifier = NSUserInterfaceItemIdentifier("prompt-variable-name")
+        nameField.toolTip = "Имя Jinja-переменной. В промпте используйте синтаксис {{ имя_переменной }}."
         valueView.identifier = NSUserInterfaceItemIdentifier("prompt-variable-value")
         valueView.isRichText = false; valueView.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         valueView.isAutomaticQuoteSubstitutionEnabled = false; valueView.isAutomaticDashSubstitutionEnabled = false
+        valueView.toolTip = "Содержимое переменной; оно подставляется в системный промпт перед обращением к Ollama."
         valueView.textContainerInset = NSSize(width: 12, height: 12)
         valueView.isVerticallyResizable = true; valueView.isHorizontallyResizable = false
         valueView.autoresizingMask = [.width]; valueView.textContainer?.widthTracksTextView = true
@@ -57,7 +62,9 @@ final class PromptVariablesWindowController: NSWindowController, NSTableViewData
         let reset = button("По умолчанию", identifier: "prompt-variable-reset") { [weak self] in self?.resetDefault() }
         let preview = button("Предпросмотр промпта", identifier: "prompt-variable-preview") { [weak self] in self?.preview() }
         let row = NSStackView(views: [save, reset, preview]); row.spacing = 8
-        let right = NSStackView(views: [NSTextField(labelWithString: "Имя (латинские буквы, цифры и _)"), nameField, editor, row, status])
+        let nameLabel = HelpFieldLabel("Имя переменной", explanation: "Используйте латинские буквы, цифры и подчёркивание. В системном промпте обращайтесь к значению как {{ имя_переменной }}.", identifier: "prompt-variable-help-name", fontSize: 11)
+        let valueLabel = HelpFieldLabel("Значение", explanation: "Этот текст будет подставлен на место переменной перед запросом к модели. Встроенный справочник Graphviz можно восстановить кнопкой «По умолчанию».", identifier: "prompt-variable-help-value", fontSize: 11)
+        let right = NSStackView(views: [nameLabel, nameField, valueLabel, editor, row, status])
         right.orientation = .vertical; right.alignment = .leading; right.spacing = 10
         status.font = .systemFont(ofSize: 11); status.textColor = .secondaryLabelColor; status.lineBreakMode = .byWordWrapping
         [left, right].forEach { $0.translatesAutoresizingMaskIntoConstraints = false; root.addSubview($0) }
@@ -65,7 +72,7 @@ final class PromptVariablesWindowController: NSWindowController, NSTableViewData
             left.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 20),
             left.topAnchor.constraint(equalTo: root.topAnchor, constant: 20), left.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -20),
             left.widthAnchor.constraint(equalToConstant: 210), list.widthAnchor.constraint(equalTo: left.widthAnchor),
-            list.heightAnchor.constraint(equalTo: left.heightAnchor, constant: -40),
+            list.heightAnchor.constraint(equalTo: left.heightAnchor, constant: -70),
             right.leadingAnchor.constraint(equalTo: left.trailingAnchor, constant: 20), right.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -20),
             right.topAnchor.constraint(equalTo: root.topAnchor, constant: 20), right.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -20),
             nameField.widthAnchor.constraint(equalTo: right.widthAnchor), editor.widthAnchor.constraint(equalTo: right.widthAnchor),
