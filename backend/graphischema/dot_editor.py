@@ -208,6 +208,12 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
 
     existing_nodes = {item.id: item for item in project.nodes}
     existing_containers = {item.id: item for item in project.containers}
+    from .dot import to_dot
+
+    try:
+        generated_nodes, generated_containers, _ = _Parser(to_dot(project)).parse()
+    except DOTEditError:
+        generated_nodes, generated_containers = {}, {}
     containers = []
     for container_id, statement in container_statements.items():
         attrs = statement.attrs
@@ -215,11 +221,15 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
         _require_value(attrs, "style", "rounded,filled", f"контейнера {container_id}")
         _require_number(attrs, "penwidth", "1.2", f"контейнера {container_id}")
         old = existing_containers.get(container_id)
+        original_margin = generated_containers.get(container_id)
+        padding = _container_padding(attrs, old.padding if old else None, container_id)
+        if old and original_margin and attrs.get("margin") == original_margin.attrs.get("margin"):
+            padding = old.padding
         containers.append({
             "id": container_id,
             "label": attrs.get("label", old.label if old else container_id),
             "parent_id": statement.parent_id,
-            "padding": _container_padding(attrs, old.padding if old else None, container_id),
+            "padding": padding,
             "x": _number(attrs["gs_x"], f"gs_x контейнера {container_id}") if "gs_x" in attrs else old.x if old else None,
             "y": _number(attrs["gs_y"], f"gs_y контейнера {container_id}") if "gs_y" in attrs else old.y if old else None,
             "width": _number(attrs["gs_width"], f"gs_width контейнера {container_id}") if "gs_width" in attrs else old.width if old else 3,
@@ -256,6 +266,10 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
         position = _position(attrs["pos"], node_id) if "pos" in attrs else None
         if position:
             explicit_positions.add(node_id)
+            original = generated_nodes.get(node_id)
+            if old and original and attrs.get("pos") == original.attrs.get("pos"):
+                # Rendering rounds point coordinates; unchanged DOT must retain exact JSON positions.
+                position = (old.x, old.y)
         nodes.append({
             "id": node_id,
             "label": attrs.get("label", old.label if old else node_id),
@@ -285,14 +299,8 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
             raise DOTEditError("Для ручной компоновки задайте pos всем новым узлам или включите ручной режим на холсте: " + ", ".join(missing))
 
     edges = _build_edges(project, edge_statements)
-    from .dot import to_dot
-
-    try:
-        generated_nodes, generated_containers, _ = _Parser(to_dot(project)).parse()
-        unchanged_node_order = tuple(node_statements) == tuple(generated_nodes)
-        unchanged_container_order = tuple(container_statements) == tuple(generated_containers)
-    except DOTEditError:
-        unchanged_node_order = unchanged_container_order = False
+    unchanged_node_order = tuple(node_statements) == tuple(generated_nodes)
+    unchanged_container_order = tuple(container_statements) == tuple(generated_containers)
     if unchanged_node_order:
         order = {node.id: index for index, node in enumerate(project.nodes)}
         nodes.sort(key=lambda node: (0, order[node["id"]]) if node["id"] in order else (1, node["id"]))
@@ -326,7 +334,7 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
         candidate = DiagramProject.model_validate(candidate_data)
     except ValidationError as exc:
         raise DOTEditError("DOT нарушает ограничения канонической модели: " + _validation_message(exc)) from exc
-    changes = _changes(project, candidate)
+    changes = describe_dot_changes(project, candidate)
     return candidate, changes
 
 
@@ -517,7 +525,7 @@ def _new_edge_id(source: str, target: str, index: int, used: set[str]) -> str:
     return candidate
 
 
-def _changes(before: DiagramProject, after: DiagramProject) -> dict[str, list[str]]:
+def describe_dot_changes(before: DiagramProject, after: DiagramProject) -> dict[str, list[str]]:
     result: dict[str, list[str]] = {}
     for key in ("containers", "nodes", "edges"):
         old = {item.id: item.model_dump(mode="json") for item in getattr(before, key)}

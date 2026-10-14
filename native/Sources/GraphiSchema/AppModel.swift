@@ -22,7 +22,8 @@ final class AppModel: ObservableObject {
     var onPreviewChange: (() -> Void)?
     var onAlert: ((String) -> Void)?
 
-    let backend = BackendService()
+    let backend: BackendService
+    private let session: URLSession
     private var saveTask: Task<Void, Never>?
     private var isSaving = false
     private var saveQueued = false
@@ -30,6 +31,8 @@ final class AppModel: ObservableObject {
     private var cachedJSONProject: DiagramProject?
     private var cachedPrettyJSON = ""
     private var lastSerializedDOT = ""
+    private var dotSourceBaseDiagram: DiagramProject?
+    private(set) var isCheckingDOT = false
     private var dotPreviewSource: String?
     private var proposalBaseRevision: String?
     private var proposalBaseDiagram: DiagramProject?
@@ -38,7 +41,8 @@ final class AppModel: ObservableObject {
     var containers: [DiagramContainer] { diagram?.containers ?? [] }
     var edges: [DiagramEdge] { diagram?.edges ?? [] }
     var activeProposal: DiagramProposal? { dotPreview ?? ollamaProposal }
-    var isEditingLocked: Bool { jsonDraftIsDirty || activeProposal != nil }
+    var isEditingLocked: Bool { jsonDraftIsDirty || activeProposal != nil || isCheckingDOT }
+    var dotDraftIsDirty: Bool { dotSource != lastSerializedDOT }
     var inverseTrackpad: Bool {
         get { UserDefaults.standard.object(forKey: "GraphiSchema.inverseTrackpad") as? Bool ?? false }
         set { UserDefaults.standard.set(newValue, forKey: "GraphiSchema.inverseTrackpad"); onModelChange?() }
@@ -49,7 +53,9 @@ final class AppModel: ObservableObject {
         set { UserDefaults.standard.set(newValue, forKey: "GraphiSchema.loadStarterOnLaunch"); onModelChange?() }
     }
 
-    init() {
+    init(backend: BackendService? = nil, session: URLSession = .shared) {
+        self.backend = backend ?? BackendService()
+        self.session = session
         if let data = UserDefaults.standard.data(forKey: "GraphiSchema.ollama.preferences"),
            let saved = try? JSONDecoder().decode(OllamaPreferences.self, from: data) {
             ollamaPreferences = saved
@@ -634,10 +640,10 @@ final class AppModel: ObservableObject {
                 jsonDraft = prettyJSON(diagram)
             }
         } else if tab == .dot {
-            if dotSource.isEmpty || dotSource == lastSerializedDOT {
+            if !dotDraftIsDirty {
                 do {
-                    dotSource = try await requestText("api/dot")
-                    lastSerializedDOT = dotSource
+                    try await flushPendingSave()
+                    try await refreshDOTSource()
                 } catch { alertMessage = error.localizedDescription; onAlert?(error.localizedDescription) }
             }
         }
@@ -659,6 +665,7 @@ final class AppModel: ObservableObject {
     }
 
     func updateDOTDraft(_ value: String) {
+        if dotSourceBaseDiagram == nil { dotSourceBaseDiagram = diagram }
         dotSource = value
         dotPreview = nil
         ollamaProposal = nil
@@ -671,25 +678,29 @@ final class AppModel: ObservableObject {
     }
 
     func previewDOTDraft() async throws {
-        guard !jsonDraftIsDirty else { throw ClientError.pendingChanges }
+        guard !isEditingLocked else { throw ClientError.pendingChanges }
+        isCheckingDOT = true
+        onModelChange?()
+        defer { isCheckingDOT = false; onModelChange?() }
         try await flushPendingSave()
+        if !dotDraftIsDirty { try await refreshDOTSource() }
         let source = dotSource
         let baseDiagram = diagram
         let baseRevision = revision
         let response: DOTPreviewResponse = try await request(
             "api/dot/preview",
             method: "POST",
-            body: try encode(DOTPreviewRequest(dot: source)),
+            body: try encode(DOTPreviewRequest(dot: source, baseDiagram: dotSourceBaseDiagram ?? baseDiagram)),
             ifMatch: baseRevision
         )
         guard source == dotSource, baseRevision == revision, baseDiagram == diagram else { throw ClientError.staleProposal }
         ollamaProposal = nil
-        dotPreview = response
-        dotPreviewSource = source
-        proposalBaseRevision = baseRevision
-        proposalBaseDiagram = baseDiagram
         let count = response.changes.entries.count
-        status = count == 0 ? "DOT корректен · изменений нет" : "Предпросмотр · изменений: \(count)"
+        dotPreview = count == 0 ? nil : response
+        dotPreviewSource = count == 0 ? nil : source
+        proposalBaseRevision = count == 0 ? nil : baseRevision
+        proposalBaseDiagram = count == 0 ? nil : baseDiagram
+        status = count == 0 ? "DOT корректен · изменений нет" : "DOT проверен · изменений: \(count) · примените или отмените справа"
         onModelChange?()
         onPreviewChange?()
     }
@@ -708,7 +719,7 @@ final class AppModel: ObservableObject {
     }
 
     func generateWithOllama(_ prompt: String, editing: Bool) async throws -> DiagramProposal {
-        guard !jsonDraftIsDirty else { throw ClientError.pendingChanges }
+        guard !isEditingLocked else { throw ClientError.pendingChanges }
         try await flushPendingSave()
         let baseDiagram = diagram
         let baseRevision = revision
@@ -730,7 +741,7 @@ final class AppModel: ObservableObject {
     }
 
     func reviewWithOllama(_ prompt: String) async throws -> OllamaReviewResponse {
-        guard !jsonDraftIsDirty else { throw ClientError.pendingChanges }
+        guard !isEditingLocked else { throw ClientError.pendingChanges }
         try await flushPendingSave()
         let baseDiagram = diagram
         let baseRevision = revision
@@ -743,6 +754,7 @@ final class AppModel: ObservableObject {
     func applyCurrentProposal() async throws {
         guard !jsonDraftIsDirty else { throw ClientError.pendingChanges }
         guard let candidate = activeProposal?.diagram else { return }
+        let wasDOT = dotPreview != nil
         guard proposalBaseRevision == revision, proposalBaseDiagram == diagram else {
             cancelCurrentProposal()
             throw ClientError.staleProposal
@@ -758,22 +770,24 @@ final class AppModel: ObservableObject {
         jsonDraft = prettyJSON(envelope.diagram)
         jsonDraftIsDirty = false
         lastSerializedJSON = jsonDraft
-        dotSource = try await requestText("api/dot")
+        // Mark the applied draft clean so layout refresh replaces it with current generated DOT.
         lastSerializedDOT = dotSource
+        dotSourceBaseDiagram = envelope.diagram
         selection = .project
-        status = "Предложение применено"
+        status = wasDOT ? "Изменения DOT применены" : "Предложение применено"
         await refreshLayout()
         await refreshHistoryState()
         onModelChange?()
     }
 
     func cancelCurrentProposal() {
+        let wasDOT = dotPreview != nil
         dotPreview = nil
         ollamaProposal = nil
         dotPreviewSource = nil
         proposalBaseRevision = nil
         proposalBaseDiagram = nil
-        status = "Предложение отменено"
+        status = wasDOT ? "Проверка DOT отменена · диаграмма не изменена" : "Предложение отменено"
         onModelChange?()
         onPreviewChange?()
     }
@@ -841,7 +855,7 @@ final class AppModel: ObservableObject {
         guard let url = components.url else { throw ClientError.invalidResponse }
         var request = URLRequest(url: url)
         request.timeoutInterval = 30
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         try check(response: response, data: data)
         guard (response as? HTTPURLResponse)?.mimeType == "image/png" else { throw ClientError.invalidResponse }
         return data
@@ -983,12 +997,28 @@ final class AppModel: ObservableObject {
     }
 
     private func refreshLayout() async {
-        do { layout = try await request("api/layout") }
+        let current = diagram, currentRevision = revision
+        do {
+            let updated: DiagramLayout = try await request("api/layout")
+            guard current == diagram, currentRevision == revision else { return }
+            layout = updated
+        }
         catch {
             alertMessage = "Не удалось получить геометрию диаграммы: \(error.localizedDescription)"
             onAlert?(alertMessage ?? "Ошибка компоновки")
         }
+        if !dotDraftIsDirty { try? await refreshDOTSource() }
         onPreviewChange?()
+    }
+
+    private func refreshDOTSource() async throws {
+        guard !dotDraftIsDirty else { return }
+        let source = dotSource, current = diagram, currentRevision = revision
+        let generated = try await requestText("api/dot", ifMatch: currentRevision)
+        guard source == dotSource, !dotDraftIsDirty, current == diagram, currentRevision == revision else { return }
+        dotSource = generated
+        lastSerializedDOT = generated
+        dotSourceBaseDiagram = current
     }
 
     private func refreshHistoryState() async {
@@ -1012,16 +1042,17 @@ final class AppModel: ObservableObject {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
         if let ifMatch { request.setValue(ifMatch, forHTTPHeaderField: "If-Match") }
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         try check(response: response, data: data)
         return try decode(T.self, from: data)
     }
 
-    private func requestText(_ path: String) async throws -> String {
+    private func requestText(_ path: String, ifMatch: String? = nil) async throws -> String {
         guard let baseURL = backend.baseURL else { throw ClientError.backendUnavailable }
         var request = URLRequest(url: baseURL.appending(path: path))
         request.timeoutInterval = 10
-        let (data, response) = try await URLSession.shared.data(for: request)
+        if let ifMatch { request.setValue(ifMatch, forHTTPHeaderField: "If-Match") }
+        let (data, response) = try await session.data(for: request)
         try check(response: response, data: data)
         guard let text = String(data: data, encoding: .utf8) else { throw ClientError.invalidResponse }
         return text

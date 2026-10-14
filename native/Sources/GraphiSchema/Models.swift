@@ -201,6 +201,7 @@ struct DiagramResponse: Decodable {
 
 struct DOTPreviewRequest: Encodable {
     var dot: String
+    var baseDiagram: DiagramProject? = nil
 }
 
 struct DiagramProposal: Decodable {

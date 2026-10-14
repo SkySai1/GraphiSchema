@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .application.controller import ApplicationController, HistoryUnavailable
 from .dot import to_dot
-from .dot_editor import DOTEditError, MAX_DOT_BYTES, apply_dot
+from .dot_editor import DOTEditError, MAX_DOT_BYTES, apply_dot, describe_dot_changes
 from .layout import LayoutError as GeometryError, compute_layout
 from .merge import merge_projects
 from .models import DiagramProject
@@ -44,6 +44,7 @@ app = FastAPI(title="GraphiSchema", version="0.1.0", description="Локальн
 class DOTPreviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     dot: str = Field(min_length=1, max_length=MAX_DOT_BYTES)
+    base_diagram: DiagramProject | None = None
 
 
 @app.get("/", include_in_schema=False)
@@ -59,6 +60,7 @@ def health() -> dict[str, str]:
         "app": "GraphiSchema",
         "revision_merge": "three_way_v1",
         "edge_routing": "graphviz_v1",
+        "dot_sync": "three_way_v1",
         "canvas_geometry": "icon_ports_v1",
         "prompt_templates": "jinja_v1",
         "storage_scope": storage_scope,
@@ -104,15 +106,22 @@ def validate(project: DiagramProject) -> dict[str, Any]:
 
 
 @app.get("/api/dot", response_class=Response)
-def get_dot() -> Response:
-    return Response(to_dot(STORE.load()), media_type="text/vnd.graphviz; charset=utf-8")
+def get_dot(if_match: str | None = Header(default=None, alias="If-Match")) -> Response:
+    return Response(to_dot(_checked_project(if_match)), media_type="text/vnd.graphviz; charset=utf-8")
 
 
 @app.post("/api/dot/preview")
 def preview_dot(request: DOTPreviewRequest, if_match: str | None = Header(default=None, alias="If-Match")) -> dict[str, Any]:
     try:
         current = _checked_project(if_match)
-        candidate, changes = apply_dot(current, request.dot)
+        base = request.base_diagram or current
+        if base.project.id != current.project.id:
+            raise DOTEditError("Черновик DOT относится к другому проекту. Откройте DOT текущей диаграммы.")
+        edited, _ = apply_dot(base, request.dot)
+        candidate = merge_projects(base, edited, current)
+        if candidate is None:
+            raise HTTPException(status_code=409, detail="DOT и холст изменили одни и те же поля. Согласуйте правки перед применением. Текущая диаграмма сохранена.")
+        changes = describe_dot_changes(current, candidate)
         layout = compute_layout(candidate)
     except DOTEditError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -156,12 +165,11 @@ async def ollama_generate(request: OllamaTaskRequest, if_match: str | None = Hea
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except GeometryError as exc:
         raise HTTPException(status_code=422, detail=f"Не удалось рассчитать компоновку: {exc}") from exc
-    from .dot_editor import _changes
 
     return {
         "diagram": candidate.model_dump(mode="json"),
         "layout": layout,
-        "changes": _changes(current, candidate),
+        "changes": describe_dot_changes(current, candidate),
     }
 
 

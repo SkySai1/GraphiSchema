@@ -277,7 +277,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
         }
         workspace.onApplyProposal = { [weak self] in self?.applyProposalFromChat() }
         workspace.onCancelProposal = { [weak self] in
-            guard let self else { return }
+            guard let self, self.model.ollamaProposal != nil else { return }
             self.model.cancelCurrentProposal()
             self.workspace.appendChatMessage(role: "Ассистент", text: "Предложение отменено. Проект и его версия не изменены.")
         }
@@ -298,6 +298,17 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
                 do { try await self.model.previewDOTDraft() }
                 catch { self.showAlert(error.localizedDescription) }
             }
+        }
+        codePanel.onApplyDOT = { [weak self] in
+            guard let self, self.model.dotPreview != nil else { return }
+            Task { @MainActor in
+                do { try await self.model.applyCurrentProposal(); self.refreshAll() }
+                catch { self.showAlert(error.localizedDescription) }
+            }
+        }
+        codePanel.onCancelDOT = { [weak self] in
+            guard let self, self.model.dotPreview != nil else { return }
+            self.model.cancelCurrentProposal()
         }
         model.onModelChange = { [weak self] in
             guard let self else { return }
@@ -953,6 +964,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
     }
 
     private func applyProposalFromChat() {
+        guard model.ollamaProposal != nil else { return }
         Task { @MainActor in
             do {
                 try await model.applyCurrentProposal()
@@ -1698,7 +1710,7 @@ private final class WorkspaceView: NSView {
     func refresh(model: AppModel) {
         countLabel.stringValue = "\(model.nodes.count) объектов · \(model.edges.count) связей"
         updateCanvasStatus(model)
-        let proposal = model.activeProposal
+        let proposal = model.ollamaProposal
         canvasView.isReadOnly = model.isEditingLocked
         canvasView.inverseTrackpad = model.inverseTrackpad
         canvasView.update(
@@ -1926,6 +1938,8 @@ private final class JSONCodePanelView: NSView, NSTextViewDelegate {
     var onValidateJSON: (() -> Void)?
     var onFormatJSON: (() -> Void)?
     var onPreviewDOT: (() -> Void)?
+    var onApplyDOT: (() -> Void)?
+    var onCancelDOT: (() -> Void)?
 
     private let modeControl = NSSegmentedControl(labels: ["JSON", "DOT"], trackingMode: .selectOne, target: nil, action: nil)
     private let codeScroll = NSScrollView()
@@ -1936,6 +1950,10 @@ private final class JSONCodePanelView: NSView, NSTextViewDelegate {
     private let applyJSONButton = makeButton("Применить JSON", symbol: "checkmark.circle.fill") { _ in }
     private let discardJSONButton = makeButton("Сбросить", symbol: "arrow.uturn.backward") { _ in }
     private let previewDOTButton = makeButton("Проверить DOT", symbol: "checkmark.magnifyingglass") { _ in }
+    private let applyDOTButton = makeButton("Применить", symbol: "checkmark.circle.fill") { _ in }
+    private let cancelDOTButton = makeButton("Отмена", symbol: "xmark") { _ in }
+    private let jsonActions = NSStackView()
+    private let dotActions = NSStackView()
     private var actions: [ControlAction] = []
     private var lastCode = ""
     private var isUpdatingCode = false
@@ -1965,16 +1983,26 @@ private final class JSONCodePanelView: NSView, NSTextViewDelegate {
             isUpdatingCode = false
         }
         let isJSON = tab == .json
-        modeControl.isEnabled = model.activeProposal == nil
-        codeTextView.isEditable = model.activeProposal == nil
+        jsonActions.isHidden = !isJSON
+        dotActions.isHidden = isJSON
+        modeControl.isEnabled = model.activeProposal == nil && !model.isCheckingDOT
+        codeTextView.isEditable = model.activeProposal == nil && !model.isCheckingDOT
         formatButton.isHidden = !isJSON || model.activeProposal != nil
         validateButton.isHidden = !isJSON || model.activeProposal != nil
         applyJSONButton.isHidden = !isJSON || model.activeProposal != nil
         discardJSONButton.isHidden = !isJSON || model.activeProposal != nil
-        previewDOTButton.isHidden = isJSON || model.activeProposal != nil
+        previewDOTButton.isHidden = isJSON || model.ollamaProposal != nil
+        previewDOTButton.isEnabled = model.diagram != nil && !model.isEditingLocked
+        applyDOTButton.isHidden = isJSON || model.dotPreview == nil
+        cancelDOTButton.isHidden = isJSON || model.dotPreview == nil
+        applyDOTButton.isEnabled = model.dotPreview != nil && !model.isCheckingDOT
+        cancelDOTButton.isEnabled = model.dotPreview != nil && !model.isCheckingDOT
         discardJSONButton.isEnabled = isJSON && model.jsonDraftIsDirty
         updateJSONStatus()
-        if !isJSON { statusLabel.stringValue = model.status }
+        if !isJSON {
+            statusLabel.stringValue = model.isCheckingDOT ? "Проверка DOT текущей диаграммы…" : model.status
+            statusLabel.toolTip = model.dotPreview?.changes.entries.joined(separator: "\n")
+        }
     }
 
     private func build() {
@@ -2009,9 +2037,15 @@ private final class JSONCodePanelView: NSView, NSTextViewDelegate {
         let applyAction = ControlAction { [weak self] _ in self?.onApplyJSON?() }
         let discardAction = ControlAction { [weak self] _ in self?.onDiscardJSON?() }
         let dotAction = ControlAction { [weak self] _ in self?.onPreviewDOT?() }
+        let applyDOTAction = ControlAction { [weak self] _ in self?.onApplyDOT?() }
+        let cancelDOTAction = ControlAction { [weak self] _ in self?.onCancelDOT?() }
+        previewDOTButton.identifier = NSUserInterfaceItemIdentifier("dot-check")
+        applyDOTButton.identifier = NSUserInterfaceItemIdentifier("dot-apply")
+        cancelDOTButton.identifier = NSUserInterfaceItemIdentifier("dot-cancel")
         for (button, action) in [
             (formatButton, formatAction), (validateButton, validateAction), (applyJSONButton, applyAction),
             (discardJSONButton, discardAction), (previewDOTButton, dotAction),
+            (applyDOTButton, applyDOTAction), (cancelDOTButton, cancelDOTAction),
         ] {
             button.target = action
             button.action = #selector(ControlAction.invoke(_:))
@@ -2022,13 +2056,15 @@ private final class JSONCodePanelView: NSView, NSTextViewDelegate {
         modeRow.orientation = .horizontal
         modeRow.alignment = .centerY
         modeRow.spacing = 8
-        let jsonActions = NSStackView(views: [formatButton, validateButton, applyJSONButton, discardJSONButton])
+        [formatButton, validateButton, applyJSONButton, discardJSONButton].forEach(jsonActions.addArrangedSubview)
         jsonActions.orientation = .horizontal
         jsonActions.alignment = .centerY
         jsonActions.spacing = 5
-        let dotActions = NSStackView(views: [previewDOTButton])
+        [previewDOTButton, applyDOTButton, cancelDOTButton].forEach(dotActions.addArrangedSubview)
         dotActions.orientation = .horizontal
         dotActions.alignment = .centerY
+        dotActions.spacing = 5
+        dotActions.identifier = NSUserInterfaceItemIdentifier("dot-action-toolbar")
         let toolbar = NSStackView(views: [jsonActions, dotActions])
         toolbar.orientation = .horizontal
         toolbar.alignment = .centerY

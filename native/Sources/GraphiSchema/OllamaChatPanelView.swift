@@ -39,9 +39,9 @@ final class OllamaChatPanelView: NSView, NSTextViewDelegate {
 
     func update(model: AppModel) {
         modelIsLocked = model.isEditingLocked
-        statusLabel.stringValue = model.activeProposal == nil ? model.status : "Есть предложение · JSON показан справа"
-        applyButton.isHidden = model.activeProposal == nil
-        cancelButton.isHidden = model.activeProposal == nil
+        statusLabel.stringValue = model.ollamaProposal == nil ? model.status : "Есть предложение · JSON показан справа"
+        applyButton.isHidden = model.ollamaProposal == nil
+        cancelButton.isHidden = model.ollamaProposal == nil
         updateInputState()
     }
 

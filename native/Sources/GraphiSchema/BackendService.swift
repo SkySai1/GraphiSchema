@@ -12,6 +12,11 @@ final class BackendService: ObservableObject {
     private var process: Process?
     private(set) var projectRoot: URL?
 
+    init(baseURL: URL? = nil) {
+        self.baseURL = baseURL
+        if baseURL != nil { isReady = true; status = "Backend готов" }
+    }
+
     func start() async {
         guard !isReady else { return }
         if let process, process.isRunning {
@@ -110,6 +115,7 @@ final class BackendService: ObservableObject {
                 && payload["status"] == "ok"
                 && payload["revision_merge"] == "three_way_v1"
                 && payload["edge_routing"] == "graphviz_v1"
+                && payload["dot_sync"] == "three_way_v1"
                 && payload["canvas_geometry"] == "icon_ports_v1"
                 && payload["prompt_templates"] == "jinja_v1"
                 && payload["storage_scope"] == "application-support"

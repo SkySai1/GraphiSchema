@@ -12,7 +12,7 @@ from urllib.request import Request, urlopen
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .dot import to_dot
-from .dot_editor import _changes
+from .dot_editor import describe_dot_changes
 from .models import DiagramProject
 from .validation import validate_diagram
 from .prompt_templates import PromptPreviewRequest, PromptTemplateError, render_system_prompt
@@ -206,7 +206,7 @@ def apply_operations(project: DiagramProject, operations: list[dict[str, Any]]) 
         candidate = DiagramProject.model_validate(data)
     except ValidationError as exc:
         raise OllamaError("Операции не применены: " + _validation_message(exc)) from exc
-    return candidate, _changes(project, candidate)
+    return candidate, describe_dot_changes(project, candidate)
 
 
 async def _chat_json(settings: OllamaSettings, system: str, user: str, output_schema: Any = "json") -> Any:

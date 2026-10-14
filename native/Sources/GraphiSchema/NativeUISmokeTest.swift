@@ -50,6 +50,7 @@ enum NativeUISmokeTest {
         guard let starter = try? decoder.decode(DiagramProject.self, from: starterData) else {
             fail("Native UI smoke test cannot decode the starter project.")
         }
+        if let failure = NativeDOTRegressionTests.run(starter) { fail(failure) }
         checkNodeStacking(starter)
         checkContainerAttachmentFromCanvas(starter)
         checkEmptyContainerContextMenu(starter)
@@ -58,6 +59,7 @@ enum NativeUISmokeTest {
         checkCanvasControlGeometry(starter)
         checkTrackpadNavigation()
         checkNodeStackContextMenu()
+        checkDOTConfirmationPanelAndCanvas(starter)
         model.diagram = starter
         model.jsonDraft = model.prettyJSON(starter)
         var localEdit = starter
@@ -609,6 +611,66 @@ enum NativeUISmokeTest {
             fail("Moving an attached group must keep existing container membership.")
         }
         print("Container attachment: edge grab, nested target, group attachment and retained membership passed.")
+        window.close()
+    }
+
+    private static func checkDOTConfirmationPanelAndCanvas(_ starter: DiagramProject) {
+        var current = starter
+        current.diagram.layoutMode = "manual"
+        var added = current.nodes[0]; added.id = "latest_canvas_node"; added.containerId = nil; added.icon = nil
+        added.x = 7; added.y = 4; added.width = 1; added.height = 1
+        current.nodes.append(added)
+        for index in current.nodes.indices {
+            current.nodes[index].x = Double(index + 1); current.nodes[index].y = 2
+        }
+        let layout = DiagramLayout(engine: "neato", width: 12, height: 6, minX: 0, minY: 0,
+            nodes: current.nodes.map { LayoutNode(id: $0.id, x: $0.x!, y: $0.y!, width: $0.width ?? 1, height: $0.height ?? 1) }, edges: [])
+        let model = AppModel(); model.diagram = current; model.layout = layout; model.revision = "latest"
+        model.workspaceTab = .dot; model.dotSource = "digraph Draft { waf [label=\"DOT draft\"]; }"
+        model.dotPreview = DiagramProposal(diagram: starter,
+            layout: DiagramLayout(engine: "dot", width: 4, height: 3, minX: 0, minY: 0,
+                nodes: starter.nodes.map { LayoutNode(id: $0.id, x: 1, y: 1, width: 1, height: 1) }, edges: []),
+            changes: DOTChangeSummary(containers: [], nodes: ["~ waf"], edges: [], settings: []))
+        let controller = MainWindowController(model: model)
+        controller.refreshAll(); controller.showWindow(nil)
+        guard let window = controller.window, let root = window.contentView,
+              let canvas = findView(identifier: "diagram-canvas", in: root) as? DiagramCanvasView,
+              let code = findView(identifier: "diagram-code-editor", in: root),
+              let chat = findView(identifier: "ollama-chat-panel", in: root) else { fail("DOT confirmation test needs the real editor, canvas and chat.") }
+        root.layoutSubtreeIfNeeded(); window.displayIfNeeded()
+        guard canvas.nodePositions == layout.nodes else {
+            fail("Checking DOT must display the current canvas, including recent nodes and coordinates, until explicit application.")
+        }
+        guard let check = findView(identifier: "dot-check", in: code) as? NSButton,
+              let apply = findView(identifier: "dot-apply", in: code) as? NSButton,
+              let cancel = findView(identifier: "dot-cancel", in: code) as? NSButton,
+              !check.isHidden, !apply.isHidden, !cancel.isHidden,
+              check.superview === apply.superview, apply.superview === cancel.superview,
+              (findButton(title: "Применить · сохранить версию", in: chat)?.isHidden ?? true),
+              (findButton(title: "Отмена", in: chat)?.isHidden ?? true) else {
+            fail("DOT confirmation buttons must sit next to Check DOT in the right panel and stay hidden in Ollama chat.")
+        }
+        let frames = [check, apply, cancel].map { $0.superview!.convert($0.alignmentRect(forFrame: $0.frame), to: code) }
+        guard frames.allSatisfy({ code.bounds.contains($0) }),
+              frames[0].maxX <= frames[1].minX, frames[1].maxX <= frames[2].minX else {
+            fail("DOT check/apply/cancel buttons must fit the right panel without clipping or overlap: \(frames).")
+        }
+        capture(root, name: "dot-pending-confirmation-right-panel")
+        let viewport = canvas.screenPoint(for: .zero)
+        perform(cancel)
+        guard model.dotPreview == nil, model.diagram == current, model.layout == layout,
+              model.revision == "latest", model.dotSource.contains("DOT draft"),
+              canvas.nodePositions == layout.nodes, canvas.screenPoint(for: .zero) == viewport,
+              apply.isHidden, cancel.isHidden else { fail("Cancelling DOT must retain the live diagram, revision, draft and camera.") }
+        capture(root, name: "dot-confirmation-right-panel")
+        model.ollamaProposal = DiagramProposal(diagram: current, layout: layout,
+            changes: DOTChangeSummary(containers: [], nodes: ["~ waf"], edges: [], settings: []))
+        model.workspaceTab = .json
+        controller.refreshAll()
+        guard findButton(title: "Применить · сохранить версию", in: chat)?.isHidden == false,
+              findButton(title: "Отмена", in: chat)?.isHidden == false,
+              apply.isHidden, cancel.isHidden else { fail("Ollama proposals must retain their chat confirmation controls, while DOT controls stay hidden.") }
+        model.cancelCurrentProposal()
         window.close()
     }
 
