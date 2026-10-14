@@ -330,9 +330,13 @@ final class AppModel: ObservableObject {
         changed()
     }
 
-    func moveNodes(_ ids: Set<String>, deltaX: Double, deltaY: Double) {
-        guard !isEditingLocked, !ids.isEmpty, var current = diagram else { return }
+    func moveNodes(_ destinations: [String: NSPoint], containerIDs: [String: String] = [:]) {
+        guard !isEditingLocked, !destinations.isEmpty,
+              destinations.values.allSatisfy({ $0.x.isFinite && $0.y.isFinite }), var current = diagram else { return }
+        let ids = Set(destinations.keys).intersection(Set(current.nodes.map(\.id)))
+        guard !ids.isEmpty else { return }
         let positions = Dictionary(uniqueKeysWithValues: (layout?.nodes ?? []).map { ($0.id, $0) })
+        let validContainerIDs = Set(current.containers.map(\.id))
         current.diagram.layoutMode = "manual"
         for index in current.nodes.indices {
             if current.nodes[index].x == nil || current.nodes[index].y == nil,
@@ -340,10 +344,13 @@ final class AppModel: ObservableObject {
                 current.nodes[index].x = position.x
                 current.nodes[index].y = position.y
             }
-            guard ids.contains(current.nodes[index].id),
-                  let x = current.nodes[index].x, let y = current.nodes[index].y else { continue }
-            current.nodes[index].x = min(1000, max(-1000, x + deltaX))
-            current.nodes[index].y = min(1000, max(-1000, y + deltaY))
+            guard let destination = destinations[current.nodes[index].id] else { continue }
+            current.nodes[index].x = min(1000, max(-1000, Double(destination.x)))
+            current.nodes[index].y = min(1000, max(-1000, Double(destination.y)))
+            if current.nodes[index].containerId == nil, let target = containerIDs[current.nodes[index].id],
+               validContainerIDs.contains(target) {
+                current.nodes[index].containerId = target
+            }
         }
         diagram = current
         if ids.count == 1, let id = ids.first { selection = .node(id) }
@@ -463,8 +470,9 @@ final class AppModel: ObservableObject {
         changed()
     }
 
-    func addContainer() {
+    func addContainer(at position: (x: Double, y: Double)? = nil) {
         guard !isEditingLocked else { return }
+        if let position, !position.x.isFinite || !position.y.isFinite { return }
         guard var current = diagram else { return }
         let id = makeID("zone")
         current.containers.append(DiagramContainer(
@@ -472,8 +480,8 @@ final class AppModel: ObservableObject {
             label: "Новая зона",
             parentId: nil,
             style: ContainerStyle(fill: "#EEF3FF", stroke: "#9CB4F5", text: "#3554A5"),
-            x: (layout?.minX ?? 0) + 1.7 + Double(current.containers.count % 3) * 3.4,
-            y: (layout?.minY ?? 0) + 1.2 + Double(current.containers.count / 3) * 2.5
+            x: min(1000, max(-1000, position?.x ?? ((layout?.minX ?? 0) + 1.7 + Double(current.containers.count % 3) * 3.4))),
+            y: min(1000, max(-1000, position?.y ?? ((layout?.minY ?? 0) + 1.2 + Double(current.containers.count / 3) * 2.5)))
         ))
         diagram = current
         selection = .container(id)

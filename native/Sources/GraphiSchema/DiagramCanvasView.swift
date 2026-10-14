@@ -4,10 +4,11 @@ import AppKit
 final class DiagramCanvasView: NSView {
     var onSelect: ((DiagramSelection) -> Void)?
     var onMoveNode: ((String, Double, Double, String?) -> Void)?
+    var onCreateEmptyContainer: ((Double, Double) -> Void)?
     var onDetachNodeFromContainer: ((String) -> Void)?
     var onSetNodeZIndex: ((String, Int) -> Void)?
     var onMoveNodeInStack: ((String, Bool) -> Void)?
-    var onMoveNodes: ((Set<String>, Double, Double) -> Void)?
+    var onMoveNodes: (([String: NSPoint], [String: String]) -> Void)?
     var onResizeNode: ((String, Double, Double) -> Void)?
     var onScaleNodes: ((Set<String>, Double) -> Void)?
     var onEditNodeText: ((String) -> Void)?
@@ -128,14 +129,19 @@ final class DiagramCanvasView: NSView {
         edgeByID = Dictionary(uniqueKeysWithValues: (diagram?.edges ?? []).map { ($0.id, $0) })
         layoutNodeByID = Dictionary(uniqueKeysWithValues: (diagramLayout?.nodes ?? []).map { ($0.id, $0) })
         rebuildContainerGeometryIndex()
-        dragPreview.removeAll()
+        let activeDragIDs = draggingNodeIDs
+            .union(draggingNodeID.map { Set([$0]) } ?? [])
+            .union(draggingContainerID == nil ? [] : Set(containerMemberCenters.keys))
+        dragPreview = dragPreview.filter { activeDragIDs.contains($0.key) && nodeByID[$0.key] != nil }
         nodeSizePreview.removeAll()
         waypointPreview.removeAll()
         containerPaddingPreview.removeAll()
         emptyContainerSizePreview.removeAll()
         if draggingContainerID == nil { emptyContainerDragPreview.removeAll() }
-        nodeDropBounds.removeAll()
-        dropTargetContainerID = nil
+        if draggingNodeID == nil, draggingNodeIDs.isEmpty {
+            nodeDropBounds.removeAll()
+            dropTargetContainerID = nil
+        }
         endpointDrag = nil
         endpointPointer = nil
         if wasEmpty, diagramLayout != nil { shouldFitOnLayout = true }
@@ -559,6 +565,7 @@ final class DiagramCanvasView: NSView {
         guard let position = layoutNodeByID[node.id] else { return }
         if activeIDs.count > 1 {
             draggingNodeIDs = activeIDs
+            captureNodeDropBounds()
             groupDragStart = worldPoint(for: point)
             groupInitialCenters = Dictionary(uniqueKeysWithValues: activeIDs.compactMap { id in
                 guard let nodePosition = layoutNodeByID[id] else { return nil }
@@ -572,10 +579,7 @@ final class DiagramCanvasView: NSView {
         }
         draggingNodeID = node.id
         let center = dragPreview[node.id] ?? NSPoint(x: CGFloat(position.x), y: CGFloat(position.y))
-        nodeDropBounds = Dictionary(uniqueKeysWithValues: orderedContainers.compactMap { container -> (String, NSRect)? in
-            guard let rect = containerWorldRect(container.id, diagram: diagram, layout: layout) else { return nil }
-            return (container.id, rect)
-        })
+        captureNodeDropBounds()
         dropTargetContainerID = node.containerId ?? containerAtDropPoint(center)
         let pointer = worldPoint(for: point)
         dragPointerOffset = NSPoint(x: center.x - pointer.x, y: center.y - pointer.y)
@@ -585,8 +589,8 @@ final class DiagramCanvasView: NSView {
         needsDisplay = true
     }
 
-    override func rightMouseDown(with event: NSEvent) {
-        guard !isReadOnly, let diagram, let layout = diagramLayout else { return }
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard !isReadOnly, let diagram, let layout = diagramLayout else { return nil }
         let point = convert(event.locationInWindow, from: nil)
         if let node = hitNode(at: point, diagram: diagram, layout: layout) {
             if !selectedNodeIDs.contains(node.id) {
@@ -600,7 +604,13 @@ final class DiagramCanvasView: NSView {
             selection = .container(id)
             onSelect?(selection)
         } else {
-            return
+            let menu = NSMenu()
+            let create = NSMenuItem(title: "Создать пустой контейнер", action: #selector(contextCreateEmptyContainer(_:)), keyEquivalent: "")
+            create.target = self
+            create.representedObject = NSValue(point: worldPoint(for: point))
+            create.image = NSImage(systemSymbolName: "rectangle.dashed", accessibilityDescription: nil)
+            menu.addItem(create)
+            return menu
         }
         needsDisplay = true
         let menu = NSMenu()
@@ -623,7 +633,7 @@ final class DiagramCanvasView: NSView {
         let delete = NSMenuItem(title: "Удалить", action: #selector(deleteContextSelection), keyEquivalent: "")
         delete.target = self
         menu.addItem(delete)
-        NSMenu.popUpContextMenu(menu, with: event, for: self)
+        return menu
     }
 
     func nodeStackMenuItems(for id: String) -> [NSMenuItem] {
@@ -680,6 +690,15 @@ final class DiagramCanvasView: NSView {
     }
 
     @objc private func openContextStyle() { onRequestStyle?() }
+    @objc private func contextCreateEmptyContainer(_ sender: NSMenuItem) {
+        guard !isReadOnly, let value = sender.representedObject as? NSValue else { return }
+        let position = value.pointValue
+        let previousScale = scale, previousOffset = offset
+        onCreateEmptyContainer?(Double(position.x), Double(position.y))
+        // The clicked position must stay under the pointer when the new selection refreshes.
+        scale = previousScale; offset = previousOffset
+        needsDisplay = true
+    }
     @objc private func deleteContextSelection() { onDeleteSelection?() }
     @objc private func editContextNodeText(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String else { return }
@@ -819,6 +838,7 @@ final class DiagramCanvasView: NSView {
             for (id, center) in groupInitialCenters {
                 dragPreview[id] = NSPoint(x: center.x + delta.x, y: center.y + delta.y)
             }
+            dropTargetContainerID = containerAtDropPoint(world)
             didDragGroup = hypot(delta.x, delta.y) > 0.015
             needsDisplay = true
             return
@@ -827,7 +847,7 @@ final class DiagramCanvasView: NSView {
         let pointer = worldPoint(for: point)
         let center = NSPoint(x: pointer.x + dragPointerOffset.x, y: pointer.y + dragPointerOffset.y)
         dragPreview[id] = center
-        dropTargetContainerID = nodeByID[id]?.containerId ?? containerAtDropPoint(center)
+        dropTargetContainerID = nodeDropTarget(for: id, center: center, pointer: pointer)
         didDragNode = true
         needsDisplay = true
     }
@@ -938,24 +958,40 @@ final class DiagramCanvasView: NSView {
             return
         }
         if !draggingNodeIDs.isEmpty {
-            if didDragGroup, let start = groupDragStart {
-                let end = worldPoint(for: convert(event.locationInWindow, from: nil))
-                onMoveNodes?(draggingNodeIDs, Double(end.x - start.x), Double(end.y - start.y))
+            let ids = draggingNodeIDs
+            let start = groupDragStart
+            let end = worldPoint(for: convert(event.locationInWindow, from: nil))
+            let shouldCommit = didDragGroup
+            var containerIDs: [String: String] = [:]
+            var destinations: [String: NSPoint] = [:]
+            if let start {
+                for (id, initial) in groupInitialCenters {
+                    let center = NSPoint(x: initial.x + end.x - start.x, y: initial.y + end.y - start.y)
+                    destinations[id] = center
+                    if let target = nodeDropTarget(for: id, center: center) { containerIDs[id] = target }
+                }
             }
             draggingNodeIDs.removeAll()
             groupDragStart = nil
             groupInitialCenters.removeAll()
             didDragGroup = false
+            ids.forEach { dragPreview.removeValue(forKey: $0) }
+            nodeDropBounds.removeAll(); dropTargetContainerID = nil
+            if shouldCommit { onMoveNodes?(destinations, containerIDs) }
+            needsDisplay = true
             return
         }
-        defer {
-            draggingNodeID = nil
-            didDragNode = false
-        }
-        guard didDragNode, let id = draggingNodeID, let point = dragPreview[id] else { return }
-        onMoveNode?(id, Double(point.x), Double(point.y), dropTargetContainerID)
-        nodeDropBounds.removeAll()
-        dropTargetContainerID = nil
+        let id = draggingNodeID
+        let pointer = worldPoint(for: convert(event.locationInWindow, from: nil))
+        let center = NSPoint(x: pointer.x + dragPointerOffset.x, y: pointer.y + dragPointerOffset.y)
+        let target = id.flatMap { nodeDropTarget(for: $0, center: center, pointer: pointer) }
+        let shouldCommit = didDragNode
+        draggingNodeID = nil
+        didDragNode = false
+        if let id { dragPreview.removeValue(forKey: id) }
+        nodeDropBounds.removeAll(); dropTargetContainerID = nil
+        if shouldCommit, let id { onMoveNode?(id, Double(center.x), Double(center.y), target) }
+        needsDisplay = true
     }
 
     private func scheduleLongPress(for nodeID: String, at point: NSPoint) {
@@ -1100,6 +1136,18 @@ final class DiagramCanvasView: NSView {
         orderedContainers.first { nodeDropBounds[$0.id]?.contains(point) == true }?.id
     }
 
+    private func captureNodeDropBounds() {
+        guard let diagram, let layout = diagramLayout else { return }
+        // Freeze world-space target bounds for the gesture, including asynchronous layout refreshes.
+        nodeDropBounds = Dictionary(uniqueKeysWithValues: orderedContainers.compactMap { container in
+            containerWorldRect(container.id, diagram: diagram, layout: layout).map { (container.id, $0) }
+        })
+    }
+
+    private func nodeDropTarget(for id: String, center: NSPoint, pointer: NSPoint? = nil) -> String? {
+        nodeByID[id]?.containerId ?? pointer.flatMap(containerAtDropPoint) ?? containerAtDropPoint(center)
+    }
+
     private func memberPositions(_ containerID: String, diagram: DiagramProject, layout: DiagramLayout) -> [LayoutNode] {
         memberPositionsByContainer[containerID] ?? []
     }
@@ -1169,7 +1217,7 @@ final class DiagramCanvasView: NSView {
         for container in orderedContainers.reversed() {
             guard let rect = containerScreenRect(container.id, diagram: diagram, layout: layout) else { continue }
             let path = NSBezierPath(roundedRect: rect, xRadius: 11, yRadius: 11)
-            let isDropTarget = container.id == dropTargetContainerID && draggingNodeID != nil
+            let isDropTarget = container.id == dropTargetContainerID && (draggingNodeID != nil || !draggingNodeIDs.isEmpty)
             let fill = NSColor(hex: container.style.fill)
             (isDropTarget ? NSColor.controlAccentColor.withAlphaComponent(0.08) : fill.withAlphaComponent(fill.alphaComponent * 0.42)).setFill()
             (isDropTarget ? NSColor.controlAccentColor : NSColor(hex: container.style.stroke)).setStroke()

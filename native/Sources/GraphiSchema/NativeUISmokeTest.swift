@@ -51,6 +51,8 @@ enum NativeUISmokeTest {
             fail("Native UI smoke test cannot decode the starter project.")
         }
         checkNodeStacking(starter)
+        checkContainerAttachmentFromCanvas(starter)
+        checkEmptyContainerContextMenu(starter)
         checkContainerDragBehavior(starter)
         checkEmptyContainerDragThroughController(starter)
         checkCanvasControlGeometry(starter)
@@ -335,7 +337,7 @@ enum NativeUISmokeTest {
         }
         checkNewCanvasFeatures(model: model, controller: mainWindow, assistant: assistantWindow, root: root,
                                inspector: styleContent, firstPaletteTile: firstPaletteTile)
-        print("Native UI smoke test passed: container drag preview through controller refresh, retained membership and explicit detachment, physical trackpad directions, aligned circular controls, compact project properties, JSON, version history and Ollama.")
+        print("Native UI smoke test passed: reliable single/group container attachment, blank-canvas creation menu, live container drag through controller refresh, explicit detachment, physical trackpad directions, aligned controls, compact properties, JSON, version history and Ollama.")
     }
 
     private static func fail(_ message: String, file: StaticString = #fileID, line: UInt = #line) -> Never {
@@ -473,6 +475,202 @@ enum NativeUISmokeTest {
         guard probe.nodes.first(where: { $0.id == nodes[0].id })?.effectiveZIndex == 23 else {
             fail("Manual z-index input must update the project model.")
         }
+    }
+
+    private static func checkContainerAttachmentFromCanvas(_ starter: DiagramProject) {
+        let probe = AppModel()
+        let controller = MainWindowController(model: probe)
+        controller.showWindow(nil)
+        guard let window = controller.window, let root = window.contentView,
+              let canvas = findView(identifier: "diagram-canvas", in: root) as? DiagramCanvasView else {
+            fail("Attachment regression needs the real canvas controller.")
+        }
+        root.layoutSubtreeIfNeeded(); window.displayIfNeeded()
+        let style = ContainerStyle(fill: "#E8EEF8", stroke: "#607090", text: "#172238")
+        let starts = [NSPoint(x: -1, y: 3), NSPoint(x: 9, y: 3), NSPoint(x: 4, y: -1), NSPoint(x: 4, y: 7),
+                      NSPoint(x: -1, y: -1), NSPoint(x: -1, y: 7), NSPoint(x: 9, y: -1), NSPoint(x: 9, y: 7)]
+        var checks = 0
+        func event(_ type: NSEvent.EventType, _ point: NSPoint) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: canvas.convert(point, to: nil), modifierFlags: [], timestamp: 0,
+                               windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 1)!
+        }
+        for occupied in [false, true] {
+            for refreshStage in ["none", "mid-drag", "before-release", "release-only"] {
+                for start in starts {
+                    var project = starter
+                    var node = starter.nodes[0]
+                    node.id = "drop_probe"; node.icon = nil; node.shape = "box"; node.containerId = nil
+                    node.x = start.x; node.y = start.y; node.width = 1; node.height = 1
+                    project.nodes = [node]; project.edges = []; project.diagram.layoutMode = "manual"
+                    project.containers = [DiagramContainer(id: "drop_target", label: "Drop target", parentId: nil,
+                        style: style, x: 4, y: 3, width: 3, height: 2)]
+                    var positions = [LayoutNode(id: node.id, x: start.x, y: start.y, width: 1, height: 1)]
+                    if occupied {
+                        var member = node; member.id = "existing_member"; member.containerId = "drop_target"
+                        member.x = 4; member.y = 3; member.width = 3; member.height = 2
+                        project.nodes.append(member)
+                        positions.append(LayoutNode(id: member.id, x: 4, y: 3, width: 3, height: 2))
+                    }
+                    probe.diagram = project; probe.selection = .project
+                    probe.layout = DiagramLayout(engine: "neato", width: 12, height: 10, minX: -2, minY: -2, nodes: positions, edges: [])
+                    controller.refreshAll(); canvas.fitToContent(); canvas.zoom(by: 0.85)
+                    canvas.scrollWheel(with: CanvasScrollFixtureEvent(delta: NSPoint(x: 10, y: -6), natural: true))
+                    let source = canvas.screenPoint(for: start)
+                    let destination = canvas.screenPoint(for: NSPoint(x: 4, y: 3))
+                    let halfway = NSPoint(x: (source.x + destination.x) / 2, y: (source.y + destination.y) / 2)
+                    canvas.mouseDown(with: event(.leftMouseDown, source))
+                    canvas.mouseDragged(with: event(.leftMouseDragged, halfway))
+                    if refreshStage == "mid-drag" {
+                        probe.layout?.width += 0.25
+                        controller.refreshAll()
+                    }
+                    if refreshStage != "release-only" {
+                        canvas.mouseDragged(with: event(.leftMouseDragged, destination))
+                    }
+                    if refreshStage == "before-release" {
+                        probe.layout?.width += 0.25
+                        controller.refreshAll()
+                    }
+                    canvas.mouseUp(with: event(.leftMouseUp, destination))
+                    guard let moved = probe.nodes.first, moved.containerId == "drop_target",
+                          abs((moved.x ?? -100) - 4) < 1e-6, abs((moved.y ?? -100) - 3) < 1e-6 else {
+                        fail("Attachment must work from every canvas direction through layout refresh and mouse-up: occupied=\(occupied), stage=\(refreshStage), source=\(start), result=\(String(describing: probe.nodes.first)).")
+                    }
+                    let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
+                    guard let saved = try? decoder.decode(DiagramProject.self, from: Data(probe.jsonDraft.utf8)),
+                          saved.nodes.first?.containerId == "drop_target" else {
+                        fail("Canvas attachment must synchronize container_id into project JSON.")
+                    }
+                    checks += 1
+                }
+            }
+        }
+        print("Container attachment: \(checks) controller scenarios passed (8 directions, empty/occupied targets, 4 refresh/release modes).")
+
+        var project = starter
+        var node = starter.nodes[0]
+        node.id = "edge_grab"; node.icon = nil; node.shape = "box"; node.containerId = nil
+        node.x = -1; node.y = 3; node.width = 2; node.height = 1
+        project.nodes = [node]; project.edges = []; project.diagram.layoutMode = "manual"
+        project.containers = [DiagramContainer(id: "drop_target", label: "Target", parentId: nil, style: style,
+                                              x: 4, y: 3, width: 3, height: 2)]
+        func load(_ project: DiagramProject, selection: DiagramSelection = .project) {
+            probe.diagram = project; probe.selection = selection
+            probe.layout = DiagramLayout(engine: "neato", width: 12, height: 10, minX: -2, minY: -2,
+                nodes: project.nodes.map { LayoutNode(id: $0.id, x: $0.x!, y: $0.y!, width: $0.width!, height: $0.height!) }, edges: [])
+            controller.refreshAll(); canvas.fitToContent()
+        }
+        load(project)
+        let grabbed = canvas.screenPoint(for: NSPoint(x: -0.15, y: 3))
+        let pointerDrop = canvas.screenPoint(for: NSPoint(x: 2.55, y: 3))
+        canvas.mouseDown(with: event(.leftMouseDown, grabbed))
+        canvas.mouseDragged(with: event(.leftMouseDragged, pointerDrop))
+        canvas.mouseUp(with: event(.leftMouseUp, pointerDrop))
+        guard probe.nodes.first?.containerId == "drop_target", abs((probe.nodes.first?.x ?? 0) - 1.7) < 1e-6 else {
+            fail("Grabbing a shape near its edge must attach where the pointer is released, preserving the pointer-to-center offset.")
+        }
+
+        project.containers.insert(DiagramContainer(id: "outer", label: "Outer", parentId: nil, style: style,
+                                                 x: 4, y: 3, width: 5, height: 4), at: 0)
+        project.containers[1].parentId = "outer"
+        load(project)
+        let start = canvas.screenPoint(for: NSPoint(x: -1, y: 3))
+        let end = canvas.screenPoint(for: NSPoint(x: 4, y: 3))
+        canvas.mouseDown(with: event(.leftMouseDown, start)); canvas.mouseDragged(with: event(.leftMouseDragged, end))
+        canvas.mouseUp(with: event(.leftMouseUp, end))
+        guard probe.nodes.first?.containerId == "drop_target" else { fail("Overlapping nested containers must attach to the deepest target.") }
+
+        project.containers.removeFirst(); project.containers[0].parentId = nil
+        node.width = 1; node.y = 2.6
+        var second = node; second.id = "group_second"; second.y = 3.4
+        var outside = node; outside.id = "group_outside"; outside.y = 6.4
+        project.nodes = [node, second, outside]
+        let ids = Set(project.nodes.map(\.id))
+        load(project, selection: .nodes(ids))
+        project.diagram.layoutMode = "auto"
+        for index in project.nodes.indices { project.nodes[index].x = nil; project.nodes[index].y = nil }
+        probe.diagram = project; controller.refreshAll()
+        let groupStart = canvas.screenPoint(for: NSPoint(x: -1, y: 2.6))
+        let groupEnd = canvas.screenPoint(for: NSPoint(x: 4, y: 2.6))
+        canvas.mouseDown(with: event(.leftMouseDown, groupStart)); canvas.mouseDragged(with: event(.leftMouseDragged, groupEnd))
+        probe.layout?.width += 0.25
+        for index in probe.layout!.nodes.indices { probe.layout!.nodes[index].x += 1 }
+        controller.refreshAll()
+        canvas.mouseUp(with: event(.leftMouseUp, groupEnd))
+        guard probe.nodes[0].containerId == "drop_target", probe.nodes[1].containerId == "drop_target",
+              probe.nodes[2].containerId == nil, probe.nodes.allSatisfy({ abs(($0.x ?? 0) - 4) < 1e-6 }) else {
+            fail("Group movement must atomically attach members inside the target and leave outside members free, including layout refresh before release.")
+        }
+        let attachedStart = canvas.screenPoint(for: NSPoint(x: 4, y: 2.6))
+        let attachedEnd = canvas.screenPoint(for: NSPoint(x: 8, y: 2.6))
+        canvas.mouseDown(with: event(.leftMouseDown, attachedStart)); canvas.mouseDragged(with: event(.leftMouseDragged, attachedEnd))
+        canvas.mouseUp(with: event(.leftMouseUp, attachedEnd))
+        guard probe.nodes[0].containerId == "drop_target", probe.nodes[1].containerId == "drop_target" else {
+            fail("Moving an attached group must keep existing container membership.")
+        }
+        print("Container attachment: edge grab, nested target, group attachment and retained membership passed.")
+        window.close()
+    }
+
+    private static func checkEmptyContainerContextMenu(_ starter: DiagramProject) {
+        var project = starter
+        var node = starter.nodes[0]
+        node.id = "context_node"; node.icon = nil; node.shape = "box"; node.containerId = nil
+        node.x = -2; node.y = -2; node.width = 1; node.height = 1
+        project.nodes = [node]; project.edges = []; project.containers = []; project.diagram.layoutMode = "manual"
+        let probe = AppModel(); probe.diagram = project
+        probe.layout = DiagramLayout(engine: "neato", width: 16, height: 12, minX: -4, minY: -4,
+            nodes: [LayoutNode(id: node.id, x: -2, y: -2, width: 1, height: 1)], edges: [])
+        let controller = MainWindowController(model: probe)
+        controller.refreshAll(); controller.showWindow(nil)
+        guard let window = controller.window, let root = window.contentView,
+              let canvas = findView(identifier: "diagram-canvas", in: root) as? DiagramCanvasView else {
+            fail("Empty-container context menu regression needs the real canvas controller.")
+        }
+        root.layoutSubtreeIfNeeded(); window.displayIfNeeded(); canvas.fitToContent(); canvas.zoom(by: 0.8)
+        canvas.scrollWheel(with: CanvasScrollFixtureEvent(delta: NSPoint(x: -10, y: 8), natural: true))
+        func event(_ world: NSPoint) -> NSEvent {
+            NSEvent.mouseEvent(with: .rightMouseDown, location: canvas.convert(canvas.screenPoint(for: world), to: nil),
+                               modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                               eventNumber: 1, clickCount: 1, pressure: 1)!
+        }
+        let world = NSPoint(x: 8, y: 5)
+        let clicked = canvas.screenPoint(for: world)
+        guard let menu = canvas.menu(for: event(world)),
+              menu.items.map(\.title) == ["Создать пустой контейнер"],
+              let create = menu.items.first, let action = create.action else {
+            fail("Right-clicking blank canvas must offer creation of an empty container.")
+        }
+        _ = NSApp.sendAction(action, to: create.target, from: create)
+        guard probe.containers.count == 1, let created = probe.containers.first,
+              created.parentId == nil, abs((created.x ?? 0) - 8) < 1e-6, abs((created.y ?? 0) - 5) < 1e-6,
+              probe.nodes == project.nodes, probe.selection == .container(created.id),
+              let frame = canvas.containerScreenFrame(for: created.id),
+              abs(frame.midX - clicked.x) < 1e-6, abs(frame.midY - clicked.y) < 1e-6 else {
+            fail("The canvas context action must create an empty selected container at the clicked point without moving the camera: count=\(probe.containers.count), container=\(String(describing: probe.containers.first)), selection=\(probe.selection), frame=\(String(describing: probe.containers.first.flatMap { canvas.containerScreenFrame(for: $0.id) })), clicked=\(clicked).")
+        }
+        let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
+        guard let saved = try? decoder.decode(DiagramProject.self, from: Data(probe.jsonDraft.utf8)),
+              saved.containers.first == created else { fail("The new context-created container must synchronize into canonical JSON.") }
+        guard let nodeMenu = canvas.menu(for: event(NSPoint(x: -2, y: -2))),
+              nodeMenu.items.contains(where: { $0.title == "Оформление и свойства…" }),
+              !nodeMenu.items.contains(where: { $0.title == "Создать пустой контейнер" }),
+              let containerMenu = canvas.menu(for: event(world)),
+              containerMenu.items.contains(where: { $0.title == "Оформление и свойства…" }),
+              !containerMenu.items.contains(where: { $0.title == "Создать пустой контейнер" }) else {
+            fail("Node and container right-click menus must retain their own editing actions.")
+        }
+        capture(canvas, name: "context-created-empty-container")
+        let count = probe.containers.count
+        probe.updateJSONDraft("{}")
+        guard canvas.menu(for: event(NSPoint(x: 1, y: 5))) == nil else {
+            fail("A canvas locked by an unapplied JSON draft must not offer creation actions.")
+        }
+        _ = NSApp.sendAction(action, to: create.target, from: create)
+        guard probe.containers.count == count else { fail("A stale context menu action must not modify a locked project.") }
+        probe.discardJSONDraft()
+        print("Canvas context menu: empty container at clicked world/screen coordinates, JSON synchronization, existing menus and editing lock passed.")
+        window.close()
     }
 
     private static func checkContainerDragBehavior(_ starter: DiagramProject) {

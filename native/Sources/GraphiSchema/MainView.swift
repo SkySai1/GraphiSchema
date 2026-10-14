@@ -220,12 +220,15 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate {
         workspace.onMoveNode = { [weak self] id, x, y, containerID in
             self?.model.moveNode(id, x: x, y: y, containerID: containerID)
         }
+        workspace.onCreateEmptyContainer = { [weak self] x, y in self?.model.addContainer(at: (x: x, y: y)) }
         workspace.onDetachNodeFromContainer = { [weak self] id in self?.model.detachNodeFromContainer(id) }
         workspace.onSetNodeZIndex = { [weak self] id, value in self?.model.setNodeZIndex(id, value) }
         workspace.onMoveNodeInStack = { [weak self] id, front in
             if front { self?.model.moveNodeToFront(id) } else { self?.model.moveNodeToBack(id) }
         }
-        workspace.onMoveNodes = { [weak self] ids, dx, dy in self?.model.moveNodes(ids, deltaX: dx, deltaY: dy) }
+        workspace.onMoveNodes = { [weak self] destinations, containerIDs in
+            self?.model.moveNodes(destinations, containerIDs: containerIDs)
+        }
         workspace.onScaleNodes = { [weak self] ids, factor in self?.model.scaleNodes(ids, factor: factor) }
         workspace.onEditNodeText = { [weak self] id in self?.showNodeTextEditor(id) }
         workspace.onResizeNode = { [weak self] id, width, height in
@@ -1643,10 +1646,11 @@ private final class SidebarElementButton: NSButton {
 private final class WorkspaceView: NSView {
     var onSelectElement: ((DiagramSelection) -> Void)?
     var onMoveNode: ((String, Double, Double, String?) -> Void)?
+    var onCreateEmptyContainer: ((Double, Double) -> Void)?
     var onDetachNodeFromContainer: ((String) -> Void)?
     var onSetNodeZIndex: ((String, Int) -> Void)?
     var onMoveNodeInStack: ((String, Bool) -> Void)?
-    var onMoveNodes: ((Set<String>, Double, Double) -> Void)?
+    var onMoveNodes: (([String: NSPoint], [String: String]) -> Void)?
     var onResizeNode: ((String, Double, Double) -> Void)?
     var onScaleNodes: ((Set<String>, Double) -> Void)?
     var onEditNodeText: ((String) -> Void)?
@@ -1801,10 +1805,11 @@ private final class WorkspaceView: NSView {
         [applyProposalButton, cancelProposalButton].forEach { $0.controlSize = .small; $0.isHidden = true }
         canvasView.onSelect = { [weak self] selection in self?.onSelectElement?(selection) }
         canvasView.onMoveNode = { [weak self] id, x, y, containerID in self?.onMoveNode?(id, x, y, containerID) }
+        canvasView.onCreateEmptyContainer = { [weak self] x, y in self?.onCreateEmptyContainer?(x, y) }
         canvasView.onDetachNodeFromContainer = { [weak self] id in self?.onDetachNodeFromContainer?(id) }
         canvasView.onSetNodeZIndex = { [weak self] id, value in self?.onSetNodeZIndex?(id, value) }
         canvasView.onMoveNodeInStack = { [weak self] id, front in self?.onMoveNodeInStack?(id, front) }
-        canvasView.onMoveNodes = { [weak self] ids, dx, dy in self?.onMoveNodes?(ids, dx, dy) }
+        canvasView.onMoveNodes = { [weak self] destinations, containerIDs in self?.onMoveNodes?(destinations, containerIDs) }
         canvasView.onResizeNode = { [weak self] id, width, height in self?.onResizeNode?(id, width, height) }
         canvasView.onScaleNodes = { [weak self] ids, factor in self?.onScaleNodes?(ids, factor) }
         canvasView.onEditNodeText = { [weak self] id in self?.onEditNodeText?(id) }
