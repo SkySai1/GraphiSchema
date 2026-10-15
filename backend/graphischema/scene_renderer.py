@@ -8,6 +8,8 @@ from .container_layout import FONT_SIZE, LABEL_HEIGHT, LABEL_INSET_X, LABEL_INSE
 
 
 def render_scene(project, layout, background=None):
+    from .colors import resolved_project
+    project = resolved_project(project)
     pad = 28
     width, height = max(1, layout["width"]*72+pad*2), max(1, layout["height"]*72+pad*2+20)
     def point(x, y):
@@ -95,13 +97,15 @@ def render_scene(project, layout, background=None):
         closed = icon_library()[node.icon]["closed"] if node.icon else [True]+[False]*(len(paths)-1)
         out.append(f'<g data-node="{node.id}"' + (f' data-icon="{node.icon}"' if node.icon else "") + ">")
         fill, fill_alpha = color(node.style.fill); stroke, stroke_alpha = color(node.style.stroke)
-        closed_indices = [i for i, value in enumerate(closed) if value]
-        base_index = max(closed_indices, key=lambda i: _area(paths[i])) if closed_indices else None
+        fills = icon_library()[node.icon].get("fill_paths", []) if node.icon else [paths[0]]
+        # A compound nonzero path paints overlapping bodies only once, preserving alpha.
+        fill_data = " ".join(data([point(n["x"]+(x-.5)*n["width"], n["y"]+(y-.5)*n["height"]) for x,y in path], True) for path in fills)
+        if fill_data:
+            out.append(f'<path data-node-fill="{node.id}" d="{fill_data}" fill="{fill}" fill-opacity="{fill_alpha:.4f}" fill-rule="nonzero" stroke="none"/>')
         dash = {"dashed": ' stroke-dasharray="6 4"', "dotted": ' stroke-dasharray="1.5 3"'}.get(node.style.line_style, "")
-        for path_index, (path, close) in enumerate(zip(paths, closed)):
+        for path, close in zip(paths, closed):
             points = [point(n["x"]+(x-.5)*n["width"], n["y"]+(y-.5)*n["height"]) for x, y in path]
-            fill_value = fill if close and path_index == base_index else "none"
-            out.append(f'<path d="{data(points, close)}" fill="{fill_value}" fill-opacity="{fill_alpha:.4f}" stroke="{stroke}" stroke-opacity="{stroke_alpha:.4f}" stroke-width="{node.style.penwidth}" stroke-linecap="round" stroke-linejoin="round"{dash}/>')
+            out.append(f'<path data-node-stroke="{node.id}" d="{data(points, close)}" fill="none" stroke="{stroke}" stroke-opacity="{stroke_alpha:.4f}" stroke-width="{node.style.penwidth}" stroke-linecap="round" stroke-linejoin="round"{dash}/>')
         left_x = point(n["x"]-n["width"]/2, n["y"])[0]
         center_x, center_y = point(n["x"], n["y"])
         right_x = point(n["x"]+n["width"]/2, n["y"])[0]
@@ -113,7 +117,7 @@ def render_scene(project, layout, background=None):
         font_size = node.style.font_size
         y = {"top": top_y+6+font_size*.8, "middle": center_y+font_size*.3, "bottom": bottom_y-6-font_size*.2}[vertical_alignment]
         text_anchor = {"left": "start", "center": "middle", "right": "end"}[horizontal_alignment]
-        label_color = "#FFFFFF" if node.icon and dark and node.style.text.upper() in {"#172238", "#0F172A"} else node.style.text
+        label_color = node.style.text
         label_color, label_alpha = color(label_color)
         if node.label_wrap or "\n" in node.label or "\r" in node.label:
             inset_x = min(8, n["width"]*72*.08)

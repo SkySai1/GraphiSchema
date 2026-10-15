@@ -5,6 +5,7 @@ struct IconGeometry: Decodable {
     let paths: [[[Double]]]
     let closed: [Bool]
     let vertices: [[Double]]
+    let fillPaths: [[[Double]]]?
 }
 
 enum ProjectResources {
@@ -78,6 +79,13 @@ enum CanvasGeometry {
         return [vertices + [vertices[0]]]
     }
 
+    static func fillPaths(_ node: DiagramNode) -> [[NSPoint]] {
+        if let icon = node.icon, let geometry = icons[icon], let fill = geometry.fillPaths {
+            return fill.map { $0.map { NSPoint(x: $0[0], y: $0[1]) } }
+        }
+        return [paths(node)[0]]
+    }
+
     static func vertices(_ node: DiagramNode) -> [NSPoint] {
         if let icon = node.icon, let g = icons[icon] { return g.vertices.map { .init(x: $0[0], y: $0[1]) } }
         let path = paths(node)[0]
@@ -98,6 +106,14 @@ enum CanvasGeometry {
     /// coordinates and tolerance are screen points, independent of canvas zoom.
     static func contains(_ point: NSPoint, node: DiagramNode, in rect: NSRect, tolerance: CGFloat) -> Bool {
         guard rect.insetBy(dx: -tolerance, dy: -tolerance).contains(point) else { return false }
+        for contour in fillPaths(node) {
+            let path = NSBezierPath()
+            for (index, p) in contour.enumerated() {
+                let value = NSPoint(x: rect.minX+p.x*rect.width, y: rect.minY+p.y*rect.height)
+                if index == 0 { path.move(to: value) } else { path.line(to: value) }
+            }
+            path.close(); if path.contains(point) { return true }
+        }
         let closed = node.icon.flatMap { icons[$0]?.closed } ?? [true]
         for (index, contour) in paths(node).enumerated() {
             var points = contour.map { NSPoint(x: rect.minX+$0.x*rect.width, y: rect.minY+$0.y*rect.height) }
@@ -122,6 +138,17 @@ enum CanvasGeometry {
         let dx = b.x-a.x, dy = b.y-a.y, length = dx*dx+dy*dy
         let t = length > 0 ? max(0, min(1, ((point.x-a.x)*dx+(point.y-a.y)*dy)/length)) : 0
         return NSPoint(x: a.x+t*dx, y: a.y+t*dy)
+    }
+
+    static func segmentIntersectsRect(_ a: NSPoint, _ b: NSPoint, _ rect: NSRect) -> Bool {
+        var low: CGFloat = 0, high: CGFloat = 1
+        for (origin, delta, minimum, maximum) in [(a.x,b.x-a.x,rect.minX,rect.maxX),(a.y,b.y-a.y,rect.minY,rect.maxY)] {
+            if abs(delta) < 1e-10 { if origin < minimum || origin > maximum { return false }; continue }
+            let enter = (minimum-origin)/delta, leave = (maximum-origin)/delta
+            low = max(low,min(enter,leave)); high = min(high,max(enter,leave))
+            if low > high { return false }
+        }
+        return true
     }
 
     static func attachment(_ node: DiagramNode, at position: LayoutNode, toward: NSPoint, port: String) -> NSPoint {
@@ -189,7 +216,10 @@ enum CanvasGeometry {
             bends = [.init(x: source.x+source.width, y: source.y), .init(x: source.x+source.width, y: source.y+source.height), .init(x: source.x, y: source.y+source.height)]
         }
         let result: [NSPoint]
-        if edge.sourcePort != "auto" || edge.targetPort != "auto" {
+        if routing == "curved", !bends.isEmpty || edge.sourcePort != "auto" || edge.targetPort != "auto" {
+            result = smoothRoute([start] + bends + [end], source: edge.sourcePort == "auto" ? nil : source,
+                                 target: edge.targetPort == "auto" ? nil : target)
+        } else if edge.sourcePort != "auto" || edge.targetPort != "auto" {
             let leadLength = min(0.25, hypot(end.x-start.x, end.y-start.y)/3)
             let anchors = [portLead(start, at: source, port: edge.sourcePort, routing: routing, length: leadLength)] + bends
                 + [portLead(end, at: target, port: edge.targetPort, routing: routing, length: leadLength)]
@@ -217,6 +247,31 @@ enum CanvasGeometry {
             }
         } else { result = route(start, end, routing: routing, horizontal: horizontal) }
         return deduplicate(result)
+    }
+
+    static func smoothRoute(_ anchors: [NSPoint], source: LayoutNode? = nil, target: LayoutNode? = nil) -> [NSPoint] {
+        let points = deduplicate(anchors)
+        guard points.count > 1 else { return points }
+        var tangents: [NSPoint] = [], lengths: [CGFloat] = []
+        for (index, point) in points.enumerated() {
+            let before = points[max(0, index-1)], after = points[min(points.count-1,index+1)]
+            let vector: NSPoint
+            if index == 0, let source { vector = .init(x: point.x-source.x, y: point.y-source.y) }
+            else if index == points.count-1, let target { vector = .init(x: target.x-point.x, y: target.y-point.y) }
+            else { vector = .init(x: after.x-before.x, y: after.y-before.y) }
+            let norm = hypot(vector.x,vector.y)
+            tangents.append(norm > 1e-9 ? .init(x: vector.x/norm,y: vector.y/norm) : .init(x: 1,y: 0))
+            let distances = [before,after].map { hypot(point.x-$0.x,point.y-$0.y) }.filter { $0 > 1e-7 }
+            lengths.append(min(2,(distances.min() ?? 0)*0.35))
+        }
+        var result = [points[0]]
+        for index in 0..<points.count-1 {
+            let a = points[index], b = points[index+1], u = tangents[index], v = tangents[index+1]
+            let c1 = NSPoint(x: a.x+u.x*lengths[index], y: a.y+u.y*lengths[index])
+            let c2 = NSPoint(x: b.x-v.x*lengths[index+1], y: b.y-v.y*lengths[index+1])
+            result += sampleCubic(a,c1,c2,b,segments: 96).dropFirst()
+        }
+        return result
     }
 
     private static func deduplicate(_ input: [NSPoint]) -> [NSPoint] {

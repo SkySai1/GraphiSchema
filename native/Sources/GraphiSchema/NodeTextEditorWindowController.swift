@@ -68,8 +68,8 @@ final class NodeTextEditorWindowController: NSWindowController, NSTextViewDelega
         let root = NSStackView()
         root.orientation = .vertical
         root.alignment = .leading
-        root.spacing = 10
-        root.edgeInsets = NSEdgeInsets(top: 16, left: 20, bottom: 16, right: 20)
+        root.spacing = 4
+        root.edgeInsets = NSEdgeInsets(top: 12, left: 20, bottom: 12, right: 20)
         root.translatesAutoresizingMaskIntoConstraints = false
         let textHelp = "Подпись внутри фигуры. Ввод сразу обновляет холст и JSON. Enter добавляет ручной перевод строки; автоматический перенос включается отдельно."
         root.addArrangedSubview(HelpFieldLabel("Текст фигуры", explanation: textHelp, identifier: "node-text-help"))
@@ -140,6 +140,8 @@ final class NodeTextEditorWindowController: NSWindowController, NSTextViewDelega
             root.topAnchor.constraint(equalTo: content.topAnchor),
             root.bottomAnchor.constraint(equalTo: content.bottomAnchor),
         ])
+        content.layoutSubtreeIfNeeded()
+        window?.setContentSize(NSSize(width: 380, height: root.fittingSize.height))
     }
 
     private func select(_ popup: NSPopUpButton, value: String) {

@@ -25,12 +25,14 @@ struct DiagramColorSelection {
     var selection: DiagramSelection
     var caption: String
     var color: String?
+    var mode: String? = "custom"
     var isMixed = false
     var isEditable = false
 }
 
 @MainActor
-final class ColorEditorWindowController: NSWindowController {
+final class ColorEditorWindowController: NSWindowController, ProjectThemedWindow {
+    var projectModel: AppModel { model }
     let parameter: DiagramColorParameter
     private let model: AppModel
     private let targetLabel = NSTextField(labelWithString: "")
@@ -47,6 +49,12 @@ final class ColorEditorWindowController: NSWindowController {
     private var currentColor = NSColor.white
     private var hue: CGFloat = 0
     private var isUpdating = false
+    private let colorMode = NSPopUpButton()
+    private let savedGrid = NSStackView()
+    private var savedSnapshot: [String] = []
+    private let pencils = PencilPaletteView()
+    private var saveColorButton: NSButton?
+
 
     init(parameter: DiagramColorParameter, model: AppModel) {
         self.parameter = parameter
@@ -67,6 +75,7 @@ final class ColorEditorWindowController: NSWindowController {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     func refresh() {
+        AppTheme.configure(window, dark: model.diagram?.presentation.theme == "dark")
         let state = model.colorSelection(for: parameter)
         let selectionChanged = boundSelection != state.selection || boundProjectID != state.projectID
         isUpdating = true
@@ -83,6 +92,12 @@ final class ColorEditorWindowController: NSWindowController {
             : "Изменения применяются сразу к текущему выделению."
         for control in editableControls { control.isEnabled = state.isEditable }
         saturationView.isEditable = state.isEditable
+        pencils.isEditable = state.isEditable
+        colorMode.isEnabled = state.isEditable && state.selection != .project
+        if let item = colorMode.itemArray.first(where: { ($0.representedObject as? String) == state.mode }) { colorMode.select(item) }
+        else { colorMode.selectItem(at: 0) }
+        saveColorButton?.isEnabled = state.isEditable && (model.diagram?.presentation.savedColors?.count ?? 0) < 64
+        refreshSavedColors()
         if let value = state.color {
             let color = NSColor(hex: value)
             if selectionChanged || color.hexRGBA != currentColor.hexRGBA {
@@ -107,6 +122,13 @@ final class ColorEditorWindowController: NSWindowController {
         targetLabel.lineBreakMode = .byTruncatingTail
         targetLabel.widthAnchor.constraint(equalToConstant: 328).isActive = true
         root.addArrangedSubview(targetLabel)
+        root.addArrangedSubview(HelpFieldLabel("Режим цвета", explanation: "Свой цвет сохраняет выбранный RGBA. По теме: фон белый днём и чёрный ночью, текст и граница наоборот. Инверсия меняет эту пару местами. Смена темы обновляет автоматические цвета, ручной выбор отключает автоматику.", identifier: "color-mode-help"))
+        for (value, title) in [("mixed", "Разные режимы"), ("custom", "Свой цвет"), ("theme", "Чёрный / белый по теме"), ("inverse", "Инверсия чёрного / белого")] {
+            colorMode.addItem(withTitle: title); colorMode.lastItem?.representedObject = value
+        }
+        colorMode.identifier = NSUserInterfaceItemIdentifier("color-mode")
+        colorMode.target = self; colorMode.action = #selector(modeChanged(_:))
+        root.addArrangedSubview(colorMode)
         root.addArrangedSubview(HelpFieldLabel("Насыщенность и яркость", explanation: "По горизонтали меняется насыщенность, по вертикали — яркость. Цвет применяется к текущему выделению; прозрачность сохраняется.", identifier: "color-\(parameter.rawValue)-palette-help"))
         saturationView.widthAnchor.constraint(equalToConstant: 328).isActive = true
         saturationView.heightAnchor.constraint(equalToConstant: 150).isActive = true
@@ -156,7 +178,7 @@ final class ColorEditorWindowController: NSWindowController {
             field.alignment = .right
             field.identifier = NSUserInterfaceItemIdentifier("color-\(parameter.rawValue)-channel-\(index)")
             field.widthAnchor.constraint(equalToConstant: 56).isActive = true
-            slider.widthAnchor.constraint(equalToConstant: 160).isActive = true
+            slider.widthAnchor.constraint(equalToConstant: 130).isActive = true
             let help = index == 3 ? "0% — полностью прозрачно, 100% — непрозрачно. Alpha-канал сохраняется в JSON, DOT и экспорте."
                 : "Значение канала RGB от 0 до 255. Обновляет цвет текущего объекта сразу."
             let heading = HelpFieldLabel(label, explanation: help, identifier: "color-\(parameter.rawValue)-channel-help-\(index)")
@@ -164,7 +186,7 @@ final class ColorEditorWindowController: NSWindowController {
             row.orientation = .horizontal
             row.alignment = .centerY
             row.spacing = 5
-            heading.widthAnchor.constraint(equalToConstant: 102).isActive = true
+            heading.widthAnchor.constraint(equalToConstant: 132).isActive = true
             root.addArrangedSubview(row)
             channelSliders.append(slider)
             channelFields.append(field)
@@ -188,6 +210,23 @@ final class ColorEditorWindowController: NSWindowController {
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.maximumNumberOfLines = 2
         statusLabel.widthAnchor.constraint(equalToConstant: 328).isActive = true
+        root.addArrangedSubview(HelpFieldLabel("Карандаши и цвета проекта", explanation: "Карандаш выбирает цвет и сохраняет текущую прозрачность. Сохранённые цвета хранятся в схеме, отдельно для каждого проекта, вместе с прозрачностью и историей версий. ПКМ по сохранённому цвету удаляет его из палитры.", identifier: "color-saved-help"))
+        let tabs = NSTabView(); tabs.widthAnchor.constraint(equalToConstant: 328).isActive = true; tabs.heightAnchor.constraint(equalToConstant: 132).isActive = true
+        let pencilTab = NSTabViewItem(identifier: "pencils"); pencilTab.label = "Карандаши"; pencilTab.view = pencils
+        pencils.identifier = NSUserInterfaceItemIdentifier("color-pencils")
+        pencils.onChoose = { [weak self] color in guard let self else { return }; self.commit(color.withAlphaComponent(self.currentColor.alphaComponent)) }
+        tabs.addTabViewItem(pencilTab)
+        let savedTab = NSTabViewItem(identifier: "saved"); savedTab.label = "Цвета проекта"
+        let savedScroll = NSScrollView(); savedScroll.hasVerticalScroller = true; savedScroll.drawsBackground = false
+        savedGrid.orientation = .vertical; savedGrid.alignment = .leading; savedGrid.spacing = 4; savedGrid.edgeInsets = NSEdgeInsets(top: 6, left: 6, bottom: 6, right: 6)
+        savedGrid.identifier = NSUserInterfaceItemIdentifier("color-saved-grid")
+        savedScroll.documentView = savedGrid; savedTab.view = savedScroll; tabs.addTabViewItem(savedTab)
+        root.addArrangedSubview(tabs)
+        let save = ActionButton("Сохранить цвет в палитру проекта", symbol: "plus") { [weak self] in
+            guard let self else { return }; self.model.savePaletteColor(self.currentColor.hexRGBA); self.refreshSavedColors()
+        }
+        save.identifier = NSUserInterfaceItemIdentifier("color-save-project"); saveColorButton = save
+        root.addArrangedSubview(save)
         root.addArrangedSubview(statusLabel)
         window?.contentView = NSView()
         guard let content = window?.contentView else { return }
@@ -200,6 +239,31 @@ final class ColorEditorWindowController: NSWindowController {
         ])
         root.layoutSubtreeIfNeeded()
         window?.setContentSize(NSSize(width: 360, height: max(510, root.fittingSize.height)))
+    }
+
+    @objc private func modeChanged(_ sender: NSPopUpButton) {
+        guard !isUpdating, let mode = sender.selectedItem?.representedObject as? String, mode != "mixed" else { return }
+        model.setSelectionColorMode(parameter, mode: mode); refresh()
+    }
+
+    private func refreshSavedColors() {
+        let colors = model.diagram?.presentation.savedColors ?? []
+        guard colors != savedSnapshot || savedGrid.arrangedSubviews.isEmpty else { return }
+        savedSnapshot = colors
+        for child in savedGrid.arrangedSubviews { savedGrid.removeArrangedSubview(child); child.removeFromSuperview() }
+        if colors.isEmpty { savedGrid.addArrangedSubview(NSTextField(labelWithString: "Сохраните цвет кнопкой ниже.")) }
+        for start in stride(from: 0, to: colors.count, by: 8) {
+            let row = NSStackView(); row.orientation = .horizontal; row.spacing = 4
+            for color in colors[start..<min(start+8, colors.count)] {
+                let button = SavedColorButton(color: color)
+                button.onChoose = { [weak self] in self?.commit(NSColor(hex: color)) }
+                button.onRemove = { [weak self] in self?.model.savePaletteColor(color, remove: true); self?.refreshSavedColors() }
+                button.widthAnchor.constraint(equalToConstant: 31).isActive = true; button.heightAnchor.constraint(equalToConstant: 25).isActive = true
+                row.addArrangedSubview(button)
+            }
+            savedGrid.addArrangedSubview(row)
+        }
+        savedGrid.frame = NSRect(origin: .zero, size: NSSize(width: 310, height: max(90, savedGrid.fittingSize.height)))
     }
 
     private func syncControls(updateHue: Bool) {

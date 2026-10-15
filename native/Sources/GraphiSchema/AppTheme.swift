@@ -1,6 +1,13 @@
 import AppKit
 
 @MainActor
+protocol ProjectThemedWindow: AnyObject { var projectModel: AppModel { get } }
+
+extension ProjectThemedWindow {
+    var projectTheme: String? { projectModel.diagram?.presentation.theme }
+}
+
+@MainActor
 enum AppTheme {
     private static var currentDark: Bool?
     private static var currentMode = "system"
@@ -8,18 +15,21 @@ enum AppTheme {
     static func apply(dark: Bool, mode: String = "manual") {
         guard currentDark != dark || currentMode != mode else { return }
         currentMode = mode
-        NSApp.appearance = mode == "system" ? nil : NSAppearance(named: dark ? .darkAqua : .aqua)
+        // Keep the application appearance tied to macOS so system-following
+        // projects can observe OS changes independently of manual project themes.
+        if NSApp.appearance != nil { NSApp.appearance = nil }
         currentDark = dark
         for window in NSApp.windows {
-            configure(window)
+            if window.identifier?.rawValue != "project-editor" { configure(window) }
         }
     }
 
-    static func configure(_ window: NSWindow?) {
+    static func configure(_ window: NSWindow?, dark override: Bool? = nil) {
         guard let window else { return }
-        let dark = currentDark ?? false
-        window.appearance = currentMode == "system" ? nil : NSAppearance(named: dark ? .darkAqua : .aqua)
-        window.backgroundColor = surface("window")
+        let project = (window.windowController as? ProjectThemedWindow)?.projectTheme
+        let dark = override ?? project.map { $0 == "dark" } ?? currentDark ?? false
+        window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        window.backgroundColor = NSColor(hex: dark ? "#292135" : "#F5F7FA")
         if let root = window.contentView { refresh(root, dark: dark) }
     }
 

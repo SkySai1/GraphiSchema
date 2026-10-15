@@ -1,7 +1,8 @@
 import AppKit
 
 @MainActor
-final class PromptVariablesWindowController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate {
+final class PromptVariablesWindowController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, ProjectThemedWindow {
+    var projectModel: AppModel { model }
     private let model: AppModel
     private let promptSource: () -> String
     private let table = NSTableView()

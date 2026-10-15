@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException, Query, Response
+from fastapi import FastAPI, Header, HTTPException, Query, Response, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -29,16 +28,35 @@ from .ollama import (
     review_project,
 )
 from .rendering import LayoutError as RenderError, render_png, render_svg
-from .storage import ProjectStore, RevisionConflict, VersionNotFound
+from .storage import ProjectStore, RevisionConflict, VersionNotFound, ProjectNotFound, REQUEST_SCOPE
+from .paths import data_directory
 from .validation import validate_diagram
 from .prompt_templates import DEFAULT_VARIABLES, PromptPreviewRequest, PromptTemplateError, render_system_prompt
 
 
 ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = Path(os.environ.get("GRAPHI_SCHEMA_DATA_DIR", ROOT / "data"))
+DATA_DIR = data_directory()
 STORE = ProjectStore(DATA_DIR, ROOT / "examples" / "starter.json")
 CONTROLLER = ApplicationController(STORE)
 app = FastAPI(title="GraphiSchema", version="0.1.0", description="Локальный редактор архитектурных диаграмм")
+
+@app.middleware("http")
+async def workspace_scope(request: Request, call_next):
+    token = REQUEST_SCOPE.set((request.headers.get("X-GraphiSchema-Project"), request.headers.get("X-GraphiSchema-Branch")))
+    try:
+        response = await call_next(request)
+        if request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Vary"] = "X-GraphiSchema-Project, X-GraphiSchema-Branch"
+        return response
+    finally:
+        REQUEST_SCOPE.reset(token)
+
+
+def _diagram_envelope(project, revision=None):
+    workspace = STORE.workspace()
+    return {"diagram": project.model_dump(mode="json"), "revision": revision or STORE.revision(project),
+            "branchId": workspace["id"], "branchName": workspace["name"], "headVersionId": workspace["head_version_id"]}
 
 
 class DOTPreviewRequest(BaseModel):
@@ -54,7 +72,7 @@ def root() -> dict[str, str]:
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
-    storage_scope = "application-support" if os.environ.get("GRAPHI_SCHEMA_DATA_DIR") else "project-local"
+    storage_scope = "config"
     return {
         "status": "ok",
         "app": "GraphiSchema",
@@ -69,15 +87,108 @@ def health() -> dict[str, str]:
         "outline_styles": "nodes_clusters_v1",
         "version_preview": "snapshot_layout_v1",
         "container_headers": "fixed_11pt_v1",
+        "workspaces": "projects_branches_v2",
         "prompt_templates": "jinja_v1",
         "storage_scope": storage_scope,
+        "data_directory": str(STORE.data_dir.resolve()),
     }
 
 
 @app.get("/api/diagram")
 def get_diagram() -> dict[str, Any]:
     project = STORE.load()
-    return {"diagram": project.model_dump(mode="json"), "revision": STORE.revision(project)}
+    return _diagram_envelope(project)
+
+
+class CreateProjectRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(min_length=1, max_length=160)
+    template: bool = False
+    version_id: int | None = Field(default=None, ge=1)
+
+
+class CreateBranchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=80)
+    from_version_id: int | None = Field(default=None, ge=1)
+
+
+class CommitRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    message: str = Field(min_length=1, max_length=500)
+
+
+@app.get("/api/projects")
+def projects():
+    return {"projects": STORE.list_projects()}
+
+
+@app.post("/api/projects")
+def create_project(request: CreateProjectRequest):
+    template = DiagramProject.model_validate_json((ROOT/"examples"/"starter.json").read_text()) if request.template else None
+    return STORE.create_project(request.title, template)
+
+
+@app.post("/api/projects/fork")
+def fork_project(request: CreateProjectRequest):
+    template = STORE.get_version(request.version_id) if request.version_id else STORE.load()
+    return STORE.create_project(request.title, template, origin_project_id=template.project.id,
+                                origin_version_id=request.version_id or STORE.workspace()["head_version_id"])
+
+
+@app.post("/api/projects/import")
+def import_project(project: DiagramProject):
+    workspace = STORE.import_project(project)
+    token = REQUEST_SCOPE.set((workspace["projectId"], workspace["branchId"]))
+    try:
+        return _diagram_envelope(STORE.load())
+    finally:
+        REQUEST_SCOPE.reset(token)
+
+
+@app.post("/api/projects/open")
+def open_project(project: DiagramProject):
+    workspace = STORE.open_project(project)
+    token = REQUEST_SCOPE.set((workspace["projectId"], workspace["branchId"]))
+    try:
+        return _diagram_envelope(STORE.load())
+    finally:
+        REQUEST_SCOPE.reset(token)
+
+
+@app.get("/api/branches")
+def branches(project_id: str | None = None):
+    return {"branches": STORE.list_branches(project_id)}
+
+
+@app.post("/api/branches")
+def create_branch(request: CreateBranchRequest):
+    return STORE.create_branch(request.name, request.from_version_id)
+
+
+@app.get("/api/projects/{project_id}/branches")
+def project_branches(project_id: str):
+    return {"branches": STORE.list_branches(project_id)}
+
+
+@app.get("/api/commits/tree")
+def commit_tree():
+    return STORE.commit_tree()
+
+
+@app.post("/api/commits")
+def create_commit(request: CommitRequest, if_match: str | None = Header(default=None, alias="If-Match")):
+    project = STORE.load()
+    try:
+        revision = STORE.save(project, expected_revision=if_match, message=request.message, source="manual", force_commit=True)
+    except RevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _diagram_envelope(project, revision)
+
+
+@app.get("/api/storage")
+def storage_info():
+    return STORE.storage_info()
 
 
 @app.get("/api/ollama/variables/defaults")
@@ -104,7 +215,7 @@ def put_diagram(project: DiagramProject, if_match: str | None = Header(default=N
             result = _merge_stale_update(project, if_match)
         except RevisionConflict as merge_error:
             raise HTTPException(status_code=409, detail=str(merge_error)) from merge_error
-    return {"diagram": result.project.model_dump(mode="json"), "revision": result.revision}
+    return _diagram_envelope(result.project, result.revision)
 
 
 @app.post("/api/validate")
@@ -295,10 +406,11 @@ def restore_version(
     except VersionNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     try:
-        result = CONTROLLER.replace_project(project, expected_revision=if_match)
+        result = CONTROLLER.replace_project(project, expected_revision=if_match, source="restore",
+                                            message=f"Восстановление коммита №{STORE.get_version_number(version_id)}", force_commit=True)
     except RevisionConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {"diagram": result.project.model_dump(mode="json"), "revision": result.revision}
+    return _diagram_envelope(result.project, result.revision)
 
 
 @app.get("/api/history")
@@ -314,7 +426,7 @@ def undo(if_match: str | None = Header(default=None, alias="If-Match")) -> dict[
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except RevisionConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {"diagram": result.project.model_dump(mode="json"), "revision": result.revision}
+    return _diagram_envelope(result.project, result.revision)
 
 
 @app.post("/api/redo")
@@ -325,12 +437,18 @@ def redo(if_match: str | None = Header(default=None, alias="If-Match")) -> dict[
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except RevisionConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {"diagram": result.project.model_dump(mode="json"), "revision": result.revision}
+    return _diagram_envelope(result.project, result.revision)
 
 
 @app.exception_handler(ValueError)
 async def value_error_handler(_request: Any, exc: ValueError) -> JSONResponse:
     return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+
+@app.exception_handler(ProjectNotFound)
+@app.exception_handler(VersionNotFound)
+async def missing_workspace_handler(_request: Any, exc: Exception) -> JSONResponse:
+    return JSONResponse(status_code=404, content={"detail": str(exc)})
 
 
 def _checked_project(expected_revision: str | None) -> DiagramProject:

@@ -9,7 +9,9 @@ final class BackendService: ObservableObject {
 
     private let preferredPort = 8765
     private let isStartupSmoke = ProcessInfo.processInfo.arguments.contains("--startup-smoke-test")
+    private let isIsolatedTest = ProcessInfo.processInfo.arguments.contains { $0.hasSuffix("-test") }
     private var process: Process?
+    private var expectedDataDirectory: URL?
     private(set) var projectRoot: URL?
 
     init(baseURL: URL? = nil) {
@@ -17,15 +19,25 @@ final class BackendService: ObservableObject {
         if baseURL != nil { isReady = true; status = "Backend готов" }
     }
 
+    private var startupTask: Task<Void, Never>?
     func start() async {
+        if let startupTask { await startupTask.value; return }
+        let task = Task { await startBackend() }
+        startupTask = task
+        await task.value
+        startupTask = nil
+    }
+
+    private func startBackend() async {
         guard !isReady else { return }
         if let process, process.isRunning {
             status = "Запуск локального backend…"
             return
         }
+        expectedDataDirectory = SettingsStore.shared.directory.appendingPathComponent("projects", isDirectory: true)
         let preferredAddress = URL(string: "http://127.0.0.1:\(preferredPort)")!
 
-        if !isStartupSmoke, await respondsToHealthCheck(at: preferredAddress) {
+        if !isIsolatedTest, await respondsToHealthCheck(at: preferredAddress) {
             baseURL = preferredAddress
             isReady = true
             status = "Backend готов"
@@ -52,8 +64,9 @@ final class BackendService: ObservableObject {
             let environment = support.appendingPathComponent("backend-venv", isDirectory: true)
             let dataDirectory = isStartupSmoke
                 ? FileManager.default.temporaryDirectory.appendingPathComponent("graphischema-startup-\(UUID().uuidString)", isDirectory: true)
-                : support.appendingPathComponent("projects", isDirectory: true)
+                : SettingsStore.shared.directory.appendingPathComponent("projects", isDirectory: true)
             try FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
+            expectedDataDirectory = dataDirectory
 
             let server = Process()
             server.executableURL = uv
@@ -68,6 +81,8 @@ final class BackendService: ObservableObject {
             environmentVariables["PATH"] = (extraPaths + [environmentVariables["PATH"] ?? "/usr/bin:/bin"]).joined(separator: ":")
             environmentVariables["UV_PROJECT_ENVIRONMENT"] = environment.path
             environmentVariables["GRAPHI_SCHEMA_DATA_DIR"] = dataDirectory.path
+            environmentVariables["GRAPHI_SCHEMA_CONFIG_DIR"] = SettingsStore.shared.directory.path
+            if isIsolatedTest { environmentVariables["GRAPHI_SCHEMA_DISABLE_MIGRATION"] = "1" }
             environmentVariables["PYTHONDONTWRITEBYTECODE"] = "1"
             server.environment = environmentVariables
             server.standardOutput = FileHandle.nullDevice
@@ -124,11 +139,19 @@ final class BackendService: ObservableObject {
                 && payload["outline_styles"] == "nodes_clusters_v1"
                 && payload["version_preview"] == "snapshot_layout_v1"
                 && payload["container_headers"] == "fixed_11pt_v1"
+                && payload["workspaces"] == "projects_branches_v2"
                 && payload["prompt_templates"] == "jinja_v1"
-                && payload["storage_scope"] == "application-support"
+                && payload["storage_scope"] == "config"
+                && Self.matchesDataDirectory(payload["data_directory"], expected: expectedDataDirectory ?? SettingsStore.shared.directory.appendingPathComponent("projects"))
         } catch {
             return false
         }
+    }
+
+    static func matchesDataDirectory(_ reported: String?, expected: URL) -> Bool {
+        guard let reported else { return false }
+        return URL(fileURLWithPath: reported).standardizedFileURL.resolvingSymlinksInPath().path
+            == expected.standardizedFileURL.resolvingSymlinksInPath().path
     }
 
     private func findProjectRoot() -> URL? {

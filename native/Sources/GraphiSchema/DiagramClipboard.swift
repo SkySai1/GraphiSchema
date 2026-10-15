@@ -20,7 +20,7 @@ struct DiagramClipboard: Codable {
         case .project: return nil
         case .node(let id): nodeIds = [id]
         case .nodes(let ids): nodeIds = ids
-        case .edge(let id): edgeIds = [id]
+        case .edge, .edges: edgeIds = selection.edgeIDs
         case .container(let id):
             roots = [id]
             containerIds = [id]
@@ -135,7 +135,7 @@ struct DiagramClipboard: Codable {
         if let root = rootContainerIds.first.flatMap({ containerIds[$0] }) { selection = .container(root) }
         else if copiedNodes.count == 1 { selection = .node(copiedNodes[0].id) }
         else if !copiedNodes.isEmpty { selection = .nodes(Set(copiedNodes.map(\.id))) }
-        else { selection = .edge(copiedEdges[0].id) }
+        else { selection = .edgeGroup(Set(copiedEdges.map(\.id))) }
         return (result, selection)
     }
 }

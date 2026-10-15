@@ -3,9 +3,9 @@ import AppKit
 @MainActor
 enum NativeDOTRegressionTests {
     static func run(_ project: DiagramProject) -> String? {
-        let theme = UserDefaults.standard.object(forKey: "GraphiSchema.themeMode")
-        UserDefaults.standard.set("light", forKey: "GraphiSchema.themeMode")
-        defer { UserDefaults.standard.set(theme, forKey: "GraphiSchema.themeMode") }
+        let theme = SettingsStore.shared.object(forKey: "GraphiSchema.themeMode")
+        SettingsStore.shared.set("light", forKey: "GraphiSchema.themeMode")
+        defer { SettingsStore.shared.set(theme, forKey: "GraphiSchema.themeMode") }
         var completed = false
         var failure: String?
         let task = Task { @MainActor in

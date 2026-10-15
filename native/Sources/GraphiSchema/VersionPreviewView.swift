@@ -27,7 +27,7 @@ final class VersionPreviewView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     func show(_ preview: VersionPreview, version: ProjectVersion) {
-        titleLabel.stringValue = "Версия №\(version.id) — \(version.title)"
+        titleLabel.stringValue = "Версия №\(version.displayNumber) — \(version.title)"
         titleLabel.toolTip = titleLabel.stringValue
         let project = preview.diagram
         detailLabel.stringValue = "Объектов: \(project.nodes.count) · Контейнеров: \(project.containers.count) · Связей: \(project.edges.count)\n\(preview.layout.engine) · \(project.diagram.direction) · Только просмотр"
@@ -197,7 +197,7 @@ final class VersionHistoryCell: NSTableCellView {
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     func update(_ version: ProjectVersion) {
-        title.stringValue = "№\(version.id) — \(version.title)"
+        title.stringValue = "№\(version.displayNumber) — \(version.message ?? version.title)"
         let date = version.createdAt.replacingOccurrences(of: "T", with: " ").replacingOccurrences(of: "Z", with: " UTC")
         metadata.stringValue = "\(date)\n\(version.revision.prefix(12))"
         toolTip = "\(title.stringValue)\n\(date)\n\(version.revision)"

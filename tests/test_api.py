@@ -21,10 +21,12 @@ def test_health_and_local_editor_routes(monkeypatch) -> None:
         assert health["revision_merge"] == "three_way_v1"
         assert health["edge_routing"] == "graphviz_v1"
         assert health["dot_sync"] == "three_way_v1"
-        assert health["storage_scope"] == "project-local"
+        assert health["storage_scope"] == "config"
+        assert health["workspaces"] == "projects_branches_v2"
+        assert health["data_directory"] == str(api.STORE.data_dir.resolve())
         assert client.get("/").json()["client"] == "native macOS AppKit"
     monkeypatch.setenv("GRAPHI_SCHEMA_DATA_DIR", "/tmp/graphischema-test-projects")
-    assert api.health()["storage_scope"] == "application-support"
+    assert api.health()["storage_scope"] == "config"
 
 
 def test_diagram_api_merges_independent_stale_edits_and_rejects_overlapping_edits(tmp_path: Path, monkeypatch) -> None:

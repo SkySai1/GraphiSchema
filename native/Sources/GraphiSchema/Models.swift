@@ -83,6 +83,9 @@ struct DiagramContainer: Codable, Equatable, Identifiable {
 }
 
 struct ContainerStyle: Codable, Equatable {
+    var fillMode: String? = nil
+    var strokeMode: String? = nil
+    var textMode: String? = nil
     var fill: String
     var stroke: String
     var text: String
@@ -146,6 +149,9 @@ enum DiagramNodeStackOrder {
 }
 
 struct NodeStyle: Codable, Equatable {
+    var fillMode: String? = nil
+    var strokeMode: String? = nil
+    var textMode: String? = nil
     var fill: String
     var stroke: String
     var text: String
@@ -189,6 +195,8 @@ struct DiagramEdge: Codable, Equatable, Identifiable {
 struct RoutePoint: Codable, Equatable { var x: Double; var y: Double }
 
 struct EdgeStyle: Codable, Equatable {
+    var colorMode: String? = nil
+    var textMode: String? = nil
     var lineStyle: String
     var color: String
     var penwidth: Double
@@ -206,6 +214,7 @@ struct EdgeStyle: Codable, Equatable {
 struct PresentationSettings: Codable, Equatable {
     var theme: String
     var background: String
+    var savedColors: [String]? = nil
 
     var canvasBackground: String { theme == "dark" && background.uppercased() == "#FFFFFF" ? "#21172F" : background }
 }
@@ -213,6 +222,9 @@ struct PresentationSettings: Codable, Equatable {
 struct DiagramResponse: Decodable {
     var diagram: DiagramProject
     var revision: String
+    var branchId: String? = nil
+    var branchName: String? = nil
+    var headVersionId: Int? = nil
 }
 
 struct DOTPreviewRequest: Encodable {
@@ -358,6 +370,54 @@ struct ProjectVersion: Decodable, Identifiable {
     var title: String
     var revision: String
     var createdAt: String
+    var branchId: String? = nil
+    var parentId: Int? = nil
+    var message: String? = nil
+    var source: String? = nil
+    var projectNumber: Int? = nil
+    var displayNumber: Int { projectNumber ?? id }
+}
+
+struct ProjectWorkspace: Codable, Equatable { var projectId: String; var branchId: String }
+struct ProjectSummary: Decodable, Identifiable {
+    var id: String
+    var title: String
+    var createdAt: String
+    var updatedAt: String
+    var branchCount: Int
+    var originProjectId: String?
+    var originVersionId: Int?
+}
+struct ProjectsResponse: Decodable { var projects: [ProjectSummary] }
+struct BranchSummary: Decodable, Identifiable {
+    var id: String
+    var projectId: String
+    var name: String
+    var headVersionId: Int
+    var baseVersionId: Int?
+    var revision: String
+    var createdAt: String
+    var headVersionNumber: Int? = nil
+    var workspace: ProjectWorkspace { ProjectWorkspace(projectId: projectId, branchId: id) }
+}
+struct BranchesResponse: Decodable { var branches: [BranchSummary] }
+struct CommitTree: Decodable {
+    var projectId: String
+    var activeBranchId: String
+    var commits: [ProjectVersion]
+    var branches: [BranchSummary]
+}
+struct CreateProjectRequest: Encodable { var title: String; var template: Bool = false; var versionId: Int? = nil }
+struct CreateBranchRequest: Encodable { var name: String; var fromVersionId: Int? = nil }
+struct CommitRequest: Encodable { var message: String }
+struct StorageInfo: Decodable {
+    var databasePath: String
+    var databaseBytes: Int64
+    var walBytes: Int64
+    var shmBytes: Int64
+    var totalBytes: Int64
+    var projectCount: Int
+    var versionCount: Int
 }
 
 struct VersionPreview: Decodable {
@@ -407,6 +467,15 @@ enum DiagramSelection: Hashable {
     case nodes(Set<String>)
     case container(String)
     case edge(String)
+    case edges(Set<String>)
+
+    var edgeIDs: Set<String> {
+        switch self { case .edge(let id): return [id]; case .edges(let ids): return ids; default: return [] }
+    }
+    static func edgeGroup(_ ids: Set<String>) -> DiagramSelection {
+        if ids.count == 1, let id = ids.first { return .edge(id) }
+        return ids.isEmpty ? .project : .edges(ids)
+    }
 }
 
 enum WorkspaceTab: String, CaseIterable, Identifiable {

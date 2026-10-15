@@ -136,6 +136,38 @@ def port_lead(point, position, port, routing, length=.25):
     return (point[0]+length*dx/norm, point[1]+length*dy/norm) if norm > 1e-9 else point
 
 
+def smooth_route(anchors, source=None, target=None):
+    """C1 cubic chain with shared handles, including fixed endpoint normals.
+
+    There is no separate rigid port stub: curvature starts at the attachment.
+    Sampled curves are final geometry shared with the native renderer.
+    """
+    points = [anchors[0]]
+    for point in anchors[1:]:
+        if math.dist(point, points[-1]) > 1e-7: points.append(point)
+    if len(points) < 2: return points
+    def unit(dx, dy):
+        length = math.hypot(dx, dy)
+        return (dx/length, dy/length) if length > 1e-9 else (1, 0)
+    tangents, lengths = [], []
+    for index, point in enumerate(points):
+        before, after = points[max(0,index-1)], points[min(len(points)-1,index+1)]
+        if index == 0 and source is not None:
+            tangent = unit(point[0]-source["x"], point[1]-source["y"])
+        elif index == len(points)-1 and target is not None:
+            tangent = unit(target["x"]-point[0], target["y"]-point[1])
+        else: tangent = unit(after[0]-before[0], after[1]-before[1])
+        distances = [math.dist(point, peer) for peer in (before,after) if math.dist(point,peer)>1e-7]
+        tangents.append(tangent); lengths.append(min(2, min(distances)*.35))
+    result = [points[0]]
+    for index,(a,b) in enumerate(zip(points,points[1:])):
+        u,v = tangents[index],tangents[index+1]
+        c1 = (a[0]+u[0]*lengths[index],a[1]+u[1]*lengths[index])
+        c2 = (b[0]-v[0]*lengths[index+1],b[1]-v[1]*lengths[index+1])
+        result.extend(sample_cubic((a,c1,c2,b),segments=96)[1:])
+    return result
+
+
 def normalize_edges(project, layout):
     """Place arrow tips on visible contours, including icon strokes and explicit ports.
 
@@ -160,7 +192,10 @@ def normalize_edges(project, layout):
             start = attachment(nodes[edge.source], source, (x+w, y), edge.source_port if edge.source_port != "auto" else "e")
             end = attachment(nodes[edge.target], target, (x, y+h), edge.target_port if edge.target_port != "auto" else "n")
             waypoints = [(x+w, y), (x+w, y+h), (x, y+h)]
-        if edge.source_port != "auto" or edge.target_port != "auto":
+        if routing == "curved" and (waypoints or edge.source_port != "auto" or edge.target_port != "auto"):
+            points = smooth_route([start,*waypoints,end], source if edge.source_port != "auto" else None,
+                                  target if edge.target_port != "auto" else None)
+        elif edge.source_port != "auto" or edge.target_port != "auto":
             lead_length = min(.25, math.dist(start, end)/3)
             anchors = [port_lead(start, source, edge.source_port, routing, lead_length), *waypoints,
                        port_lead(end, target, edge.target_port, routing, lead_length)]

@@ -117,7 +117,14 @@ def test_fixed_side_leads_are_outside_the_fill_and_enter_normally(routing, ports
     directions = {"n": (0, 1), "e": (1, 0), "s": (0, -1), "w": (-1, 0)}
     for port, tip, outside in [(ports[0], points[0], points[1]), (ports[1], points[-1], points[-2])]:
         dx, dy = directions[port]
-        assert outside == pytest.approx((tip[0]+.25*dx, tip[1]+.25*dy))
+        if routing == "curved":
+            vector = (outside[0]-tip[0], outside[1]-tip[1])
+            length = math.hypot(*vector)
+            assert length > 0
+            assert (vector[0]*dx+vector[1]*dy)/length > .998
+            assert length < .25 # Curvature starts at the port, without a rigid stub.
+        else:
+            assert outside == pytest.approx((tip[0]+.25*dx, tip[1]+.25*dy))
 
 
 @pytest.mark.parametrize("routing", ["straight", "angled", "orthogonal", "curved"])

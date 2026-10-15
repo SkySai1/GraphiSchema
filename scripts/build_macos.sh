@@ -60,6 +60,8 @@ find "$BUNDLED_PROJECT/backend/graphischema" -type f -name '*.py[co]' -delete
 cp "$ROOT/examples/starter.json" "$BUNDLED_PROJECT/examples/starter.json"
 cp -R "$ROOT/resources/object-library" "$BUNDLED_PROJECT/resources/object-library"
 cp "$ROOT/pyproject.toml" "$ROOT/uv.lock" "$ROOT/README.md" "$ROOT/requirements.txt" "$BUNDLED_PROJECT/"
+cp "$ROOT/TODO.md" "$BUNDLED_PROJECT/"
+cp -R "$ROOT/docs" "$BUNDLED_PROJECT/docs"
 cp "$ROOT/LICENSE" "$RESOURCES/LICENSE"
 
 cat > "$CONTENTS/Info.plist" <<'PLIST'

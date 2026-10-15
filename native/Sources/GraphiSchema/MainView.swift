@@ -12,7 +12,9 @@ private final class ThemeRootView: NSView {
 }
 
 @MainActor
-final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMenuItemValidation {
+final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMenuItemValidation, NSWindowDelegate, ProjectThemedWindow {
+    var projectModel: AppModel { model }
+    var onOpenWorkspace: ((ProjectWorkspace, Bool) -> Void)?
     private let model: AppModel
     private let rootView = ThemeRootView()
     private let sidebar = SidebarView()
@@ -25,7 +27,11 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
     private enum StyleScope { case contextual, selected, project }
     private var styleScope: StyleScope = .contextual
     private var nodeTextEditorController: NodeTextEditorWindowController?
+    private var elementTextEditorController: ElementTextEditorWindowController?
     private var historyWindowController: VersionHistoryWindowController?
+    private var projectManager: ProjectManagerWindowController?
+    private var branchManager: BranchManagerWindowController?
+    private var settingsController: ApplicationSettingsWindowController?
     private(set) var pendingPDFExportAlert: NSAlert?
     private let titleField = NSTextField(string: "")
     private let statusLabel = NSTextField(labelWithString: "Подключение…")
@@ -36,13 +42,16 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
     private var didSetInitialSplitPositions = false
     private var sidebarVisible = true
     private var codePanelVisible = true
-    private var projectFileURL = UserDefaults.standard.string(forKey: "GraphiSchema.projectFile").map(URL.init(fileURLWithPath:))
+    private var projectFileURL: URL?
+    private var fileProjectID: String?
     private var sidebarMinimumWidth: NSLayoutConstraint?
     private var codeMinimumWidth: NSLayoutConstraint?
     private var menuItems: [String: NSMenuItem] = [:]
     private var lastCanvasDiagram: DiagramProject?
     private var lastCanvasLayout: DiagramLayout?
     private var lastCanvasSelection: DiagramSelection?
+    private var systemAppearanceObservation: NSKeyValueObservation?
+    private var displayedWorkspace: ProjectWorkspace?
 
     init(model: AppModel) {
         self.model = model
@@ -53,20 +62,63 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
             defer: false
         )
         window.title = "GraphiSchema"
+        window.identifier = NSUserInterfaceItemIdentifier("project-editor")
         window.minSize = NSSize(width: 960, height: 620)
         window.center()
         super.init(window: window)
+        window.delegate = self
         window.contentView = rootView
         buildInterface()
         connectModel()
-        installMainMenu()
+        if NSApp.mainMenu?.items.contains(where: { $0.title == "Файл" }) != true { installMainMenu() }
+        NotificationCenter.default.addObserver(self, selector: #selector(projectWindowBecameKey(_:)),
+                                               name: NSWindow.didBecomeKeyNotification, object: nil)
         rootView.onAppearanceChange = { [weak self] in self?.model.updateSystemTheme() }
+        systemAppearanceObservation = NSApp.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
+            Task { @MainActor in self?.model.updateSystemTheme() }
+        }
         AppTheme.configure(window)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
+    func windowDidBecomeKey(_ notification: Notification) {
+        installMainMenu()
+        refreshHeader()
+        Task { await model.reloadWorkspaceIfClean() }
+    }
+
+    @objc private func projectWindowBecameKey(_ notification: Notification) {
+        guard var active = notification.object as? NSWindow else { return }
+        while let parent = active.sheetParent { active = parent }
+        let owned = [window, historyWindowController?.window, branchManager?.window, projectManager?.window,
+                     settingsController?.window, styleWindowController?.window, nodeTextEditorController?.window,
+                     elementTextEditorController?.window, ollamaWindowController?.window]
+            + colorEditors.values.map { $0.window }
+        let context = (active.windowController as? ProjectThemedWindow)?.projectModel
+        guard context === model || owned.contains(where: { $0 === active }) else { return }
+        installMainMenu()
+        refreshHeader()
+    }
+
+    private func synchronizeWorkspaceWindows() {
+        guard displayedWorkspace != model.workspace else { return }
+        displayedWorkspace = model.workspace
+        historyWindowController?.close(); historyWindowController = nil
+        branchManager?.close(); branchManager = nil
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        Task { try? await model.saveNow() }
+        historyWindowController?.close()
+        branchManager?.close()
+        for editor in colorEditors.values { editor.close() }
+        nodeTextEditorController?.close()
+        elementTextEditorController?.close()
+    }
+
     func refreshAll() {
+        synchronizeWorkspaceWindows()
         refreshSidebar()
         refreshInspector()
         refreshCanvas(force: true)
@@ -242,6 +294,8 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         workspace.onPasteSelection = { [weak self] in self?.model.pasteSelection() }
         workspace.onDuplicateSelection = { [weak self] x, y, targets in self?.model.duplicateSelection(deltaX: x, deltaY: y, containerIDs: targets) }
         workspace.onEditNodeText = { [weak self] id in self?.showNodeTextEditor(id) }
+        workspace.onEditElementText = { [weak self] target in self?.showElementTextEditor(target) }
+        workspace.onResetSelectedRoutes = { [weak self] in self?.model.resetSelectedEdgeRoutes() }
         workspace.onResizeNode = { [weak self] id, width, height in
             self?.model.editNode(id) { $0.width = width; $0.height = height }
         }
@@ -333,6 +387,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         }
         model.onModelChange = { [weak self] in
             guard let self else { return }
+            self.synchronizeWorkspaceWindows()
             self.historyWindowController?.refreshInteractionState()
             self.refreshSidebar()
             self.refreshInspector()
@@ -388,14 +443,33 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         lastCanvasDiagram = model.diagram
         lastCanvasLayout = model.layout
         lastCanvasSelection = model.selection
+        for panel in [styleWindowController?.window, nodeTextEditorController?.window, elementTextEditorController?.window].compactMap({ $0 }) {
+            AppTheme.configure(panel, dark: model.diagram?.presentation.theme == "dark")
+        }
         refreshColorEditors()
     }
 
     private func refreshHeader() {
+        if let project = model.diagram?.project {
+            window?.title = "GraphiSchema — \(project.title) [\(model.branchName)]"
+            if fileProjectID != project.id {
+                fileProjectID = project.id
+                projectFileURL = SettingsStore.shared.string(forKey: "GraphiSchema.projectFile.\(project.id)").map(URL.init(fileURLWithPath:))
+                if projectFileURL == nil,
+                   let path = SettingsStore.shared.string(forKey: "GraphiSchema.projectFile"),
+                   let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let info = json["project"] as? [String: Any], info["id"] as? String == project.id {
+                    projectFileURL = URL(fileURLWithPath: path)
+                    SettingsStore.shared.set(path, forKey: "GraphiSchema.projectFile.\(project.id)")
+                }
+            }
+        }
         titleField.stringValue = model.diagram?.project.title ?? ""
         statusLabel.stringValue = model.status
         statusLabel.toolTip = model.backend.status
         AppTheme.apply(dark: model.diagram?.presentation.theme == "dark", mode: model.themeMode)
+        AppTheme.configure(window, dark: model.diagram?.presentation.theme == "dark")
         undoButton?.isEnabled = model.history.canUndo && !model.isEditingLocked
         redoButton?.isEnabled = model.history.canRedo && !model.isEditingLocked
         menuItems["startup-template"]?.state = model.loadStarterOnLaunch ? .on : .off
@@ -403,10 +477,15 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         menuItems["theme-light"]?.state = model.themeMode == "light" ? .on : .off
         menuItems["theme-dark"]?.state = model.themeMode == "dark" ? .on : .off
         menuItems["inverse-trackpad"]?.state = model.inverseTrackpad ? .on : .off
+        menuItems["alignment-guides"]?.state = model.alignmentGuides ? .on : .off
         menuItems["style-selection"]?.isEnabled = hasSelectedElement && !model.isEditingLocked
         menuItems["style-project"]?.isEnabled = model.diagram != nil && !model.isEditingLocked
+        for panel in [styleWindowController?.window, nodeTextEditorController?.window, elementTextEditorController?.window].compactMap({ $0 }) {
+            AppTheme.configure(panel, dark: model.diagram?.presentation.theme == "dark")
+        }
         refreshColorEditors()
         refreshNodeTextEditor()
+        elementTextEditorController?.refresh()
     }
 
     private func installMainMenu() {
@@ -415,11 +494,19 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         let appMenu = NSMenu()
         appMenu.addItem(NSMenuItem(title: "О GraphiSchema", action: nil, keyEquivalent: ""))
         appMenu.addItem(.separator())
+        appMenu.addItem(menuItem("Настройки…", #selector(showSettingsFromMenu(_:)), key: ",", modifiers: .command))
+        appMenu.addItem(.separator())
         appMenu.addItem(menuItem("Завершить GraphiSchema", #selector(NSApplication.terminate(_:)), key: "q", modifiers: .command, target: NSApp))
         appRoot.submenu = appMenu
 
         let fileRoot = NSMenuItem(title: "Файл", action: nil, keyEquivalent: ""); main.addItem(fileRoot)
         let file = NSMenu()
+        file.addItem(menuItem("Менеджер схем…", #selector(showProjectManagerFromMenu(_:)), key: "p", modifiers: [.command, .shift]))
+        file.addItem(menuItem("Новая схема…", #selector(newProjectFromMenu(_:)), key: "n", modifiers: .command))
+        file.addItem(menuItem("Открыть текущую ветку в новом окне", #selector(newWindowFromMenu(_:)), key: "n", modifiers: [.command, .shift]))
+        file.addItem(menuItem("Ветки и коммиты…", #selector(showBranchesFromMenu(_:)), key: "b", modifiers: [.command, .shift]))
+        file.addItem(menuItem("Сохранить коммит…", #selector(commitFromMenu(_:)), key: "k", modifiers: .command))
+        file.addItem(.separator())
         file.addItem(menuItem("Открыть проект…", #selector(openProjectFromMenu(_:)), key: "o", modifiers: .command))
         file.addItem(menuItem("Сохранить проект", #selector(saveProjectFromMenu(_:)), key: "s", modifiers: .command))
         file.addItem(menuItem("Сохранить проект как…", #selector(saveProjectAsFromMenu(_:)), key: "s", modifiers: [.command, .shift]))
@@ -455,6 +542,10 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         view.addItem(.separator())
         view.addItem(menuItem("Оптимизировать все линии", #selector(optimizeRoutesFromMenu(_:))))
         viewRoot.submenu = view
+        let alignment = menuItem("Помощь в выравнивании", #selector(toggleAlignmentFromMenu(_:)), key: "a", modifiers: [.command, .shift])
+        menuItems["alignment-guides"] = alignment
+        alignment.state = model.alignmentGuides ? .on : .off
+        view.addItem(alignment)
 
         let styleRoot = NSMenuItem(title: "Оформление", action: nil, keyEquivalent: "")
         let styleMenu = NSMenu()
@@ -497,7 +588,13 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         inverse.identifier = NSUserInterfaceItemIdentifier("inverse-trackpad")
         menuItems["inverse-trackpad"] = inverse; settings.addItem(inverse)
         settingsRoot.submenu = settings
-        NSApp.mainMenu = main
+        let windowsRoot = NSMenuItem(title: "Окно", action: nil, keyEquivalent: "")
+        let windowsMenu = NSMenu(title: "Окно")
+        let minimize = NSMenuItem(title: "Свернуть", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        minimize.keyEquivalentModifierMask = .command
+        windowsMenu.addItem(minimize)
+        windowsRoot.submenu = windowsMenu; main.addItem(windowsRoot)
+        NSApp.mainMenu = main; NSApp.windowsMenu = windowsMenu
     }
 
     private func menuItem(_ title: String, _ action: Selector, key: String = "", modifiers: NSEvent.ModifierFlags = [], target: AnyObject? = nil) -> NSMenuItem {
@@ -524,6 +621,53 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
     }
 
     @objc private func openProjectFromMenu(_ sender: Any?) { openProjectFile() }
+    @objc private func showProjectManagerFromMenu(_ sender: Any?) {
+        if projectManager == nil {
+            projectManager = ProjectManagerWindowController(model: model) { [weak self] target, newWindow in
+                self?.openManagedWorkspace(target, newWindow: newWindow)
+            }
+        }
+        projectManager?.reloadAndShow()
+    }
+    @objc private func newProjectFromMenu(_ sender: Any?) {
+        showProjectManagerFromMenu(sender)
+        projectManager?.createProject()
+    }
+    @objc private func newWindowFromMenu(_ sender: Any?) {
+        if let workspace = model.workspace { openManagedWorkspace(workspace, newWindow: true) }
+    }
+    @objc private func showBranchesFromMenu(_ sender: Any?) {
+        if branchManager == nil {
+            branchManager = BranchManagerWindowController(model: model) { [weak self] target, newWindow in
+                self?.openManagedWorkspace(target, newWindow: newWindow)
+            }
+        }
+        branchManager?.reloadAndShow()
+    }
+    @objc private func showSettingsFromMenu(_ sender: Any?) {
+        if settingsController == nil { settingsController = ApplicationSettingsWindowController(model: model) }
+        settingsController?.reloadAndShow()
+    }
+    @objc private func commitFromMenu(_ sender: Any?) {
+        let workspace = model.workspace
+        let alert = NSAlert()
+        alert.messageText = "Сохранить коммит в ветке \(model.branchName)"
+        let field = NSTextField(string: "Контрольная точка")
+        field.frame = NSRect(x: 0, y: 0, width: 360, height: 24)
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Сохранить"); alert.addButton(withTitle: "Отмена")
+        alert.beginSheetModal(for: window!) { [weak self] response in
+            guard response == .alertFirstButtonReturn, let self, self.model.workspace == workspace else { return }
+            Task { do { try await self.model.commit(message: field.stringValue) } catch { self.showAlert(error.localizedDescription) } }
+        }
+    }
+    private func openManagedWorkspace(_ target: ProjectWorkspace, newWindow: Bool) {
+        if !newWindow { historyWindowController?.close(); branchManager?.close() }
+        if let onOpenWorkspace { onOpenWorkspace(target, newWindow) }
+        else {
+            Task { do { try await model.openWorkspace(target); refreshAll() } catch { showAlert(error.localizedDescription) } }
+        }
+    }
     @objc private func saveProjectFromMenu(_ sender: Any?) { saveProject() }
     @objc private func saveProjectAsFromMenu(_ sender: Any?) { saveProjectAs() }
     @objc private func importJSONFromMenu(_ sender: Any?) { importJSON() }
@@ -546,6 +690,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
     @objc private func showOllamaFromMenu(_ sender: Any?) { showOllamaAssistant() }
     @objc private func showPromptVariablesFromMenu(_ sender: Any?) { showOllamaAssistant(showVariables: true) }
     @objc private func changeThemeFromMenu(_ sender: NSMenuItem) { model.updateThemeMode(sender.representedObject as? String ?? "system") }
+    @objc private func toggleAlignmentFromMenu(_ sender: NSMenuItem) { model.alignmentGuides.toggle() }
     @objc private func toggleTrackpadFromMenu(_ sender: NSMenuItem) { model.inverseTrackpad.toggle() }
     @objc private func toggleStarterOnLaunch(_ sender: NSMenuItem) { model.loadStarterOnLaunch.toggle() }
     @objc private func loadStarterFromMenu(_ sender: Any?) { loadStarterTemplate() }
@@ -577,7 +722,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         case .node(let id): return model.nodes.contains { $0.id == id }
         case .nodes(let ids): return model.nodes.contains { ids.contains($0.id) }
         case .container(let id): return model.containers.contains { $0.id == id }
-        case .edge(let id): return model.edges.contains { $0.id == id }
+        case .edge, .edges: return model.edges.contains { model.selection.edgeIDs.contains($0.id) }
         }
     }
 
@@ -671,6 +816,14 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         inspector.layoutSubtreeIfNeeded()
     }
 
+    private func showElementTextEditor(_ target: DiagramSelection) {
+        if case .node(let id) = target { showNodeTextEditor(id); return }
+        elementTextEditorController?.close()
+        let controller = ElementTextEditorWindowController(model: model, selection: target)
+        elementTextEditorController = controller
+        controller.showNearCursor(nil)
+    }
+
     private func showNodeTextEditor(_ id: String) {
         guard let node = model.nodes.first(where: { $0.id == id }) else { return }
         if let controller = nodeTextEditorController, controller.nodeID == id, controller.window?.isVisible == true {
@@ -755,7 +908,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
 
     private func setProjectFile(_ url: URL) {
         projectFileURL = url
-        UserDefaults.standard.set(url.path, forKey: "GraphiSchema.projectFile")
+        if let id = model.diagram?.project.id { SettingsStore.shared.set(url.path, forKey: "GraphiSchema.projectFile.\(id)") }
     }
 
     private func openProjectFile() {
@@ -772,7 +925,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
                     let scoped = url.startAccessingSecurityScopedResource()
                     defer { if scoped { url.stopAccessingSecurityScopedResource() } }
                     let data = try Data(contentsOf: url)
-                    if await self.model.importJSON(data) { self.setProjectFile(url) }
+                    if await self.model.importJSON(data, asNewProject: false) { self.setProjectFile(url) }
                     self.refreshAll()
                 } catch { self.showAlert("Не удалось открыть проект: \(error.localizedDescription)") }
             }
@@ -791,7 +944,8 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         guard !model.isEditingLocked else { showAlert("Сначала примените или сбросьте текущий черновик."); return }
         guard let data = starterTemplateData() else { showAlert("Файл базового шаблона не найден."); return }
         Task { @MainActor in
-            if await model.importJSON(data) { projectFileURL = nil; UserDefaults.standard.removeObject(forKey: "GraphiSchema.projectFile") }
+            do { try await model.applyTemplate(data) }
+            catch { showAlert(error.localizedDescription) }
             refreshAll()
         }
     }
@@ -799,7 +953,8 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
     func loadStarterTemplateIfNeeded() async {
         guard model.loadStarterOnLaunch, model.nodes.isEmpty, model.containers.isEmpty, model.edges.isEmpty,
               let data = starterTemplateData() else { return }
-        await model.importJSON(data)
+        do { try await model.applyTemplate(data) }
+        catch { showAlert(error.localizedDescription) }
         refreshAll()
     }
 
@@ -1012,10 +1167,12 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
     }
 
     private func showHistory() {
+        let workspace = model.workspace
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
                 let versions = try await model.fetchVersions()
+                guard model.workspace == workspace else { return }
                 let controller: VersionHistoryWindowController
                 if let current = historyWindowController {
                     controller = current
@@ -1030,7 +1187,10 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
                 controller.update(versions)
                 controller.showWindow(self)
                 controller.window?.makeKeyAndOrderFront(self)
-            } catch { showAlert("Не удалось загрузить историю: \(error.localizedDescription)") }
+            } catch {
+                guard model.workspace == workspace else { return }
+                showAlert("Не удалось загрузить историю: \(error.localizedDescription)")
+            }
         }
     }
 
@@ -1128,7 +1288,8 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
 }
 
 @MainActor
-final class VersionHistoryWindowController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate {
+final class VersionHistoryWindowController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSWindowDelegate, ProjectThemedWindow {
+    var projectModel: AppModel { model }
     private let model: AppModel
     private let tableView = NSTableView()
     private let statusLabel = NSTextField(labelWithString: "")
@@ -1171,6 +1332,16 @@ final class VersionHistoryWindowController: NSWindowController, NSTableViewDataS
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     func update(_ versions: [ProjectVersion]) {
+        guard versions.allSatisfy({ $0.projectId == model.diagram?.project.id }) else {
+            previewTask?.cancel(); previewRequestID = UUID()
+            self.versions = []; tableView.reloadData()
+            previewCache.removeAll(); cachedVersionIDs.removeAll(); displayedVersionID = nil
+            previewView.showPlaceholder("История недоступна", detail: "Ответ относится к другому проекту.")
+            refreshInteractionState()
+            showError("Список версий не относится к открытому проекту.")
+            return
+        }
+        window?.title = "История — \(model.diagram?.project.title ?? "") [\(model.branchName)]"
         let previousID = selectedVersion?.id
         isUpdatingVersions = true
         self.versions = versions
@@ -1330,7 +1501,7 @@ final class VersionHistoryWindowController: NSWindowController, NSTableViewDataS
             showPreview(cached, version: version)
             return
         }
-        previewView.showPlaceholder("Загрузка версии №\(version.id)…", detail: version.title, isLoading: true)
+        previewView.showPlaceholder("Загрузка версии №\(version.displayNumber)…", detail: version.title, isLoading: true)
         let requestID = previewRequestID
         let model = model
         previewTask = Task { @MainActor [weak self] in
@@ -1351,7 +1522,7 @@ final class VersionHistoryWindowController: NSWindowController, NSTableViewDataS
             } catch {
                 guard !Task.isCancelled, let self, self.previewRequestID == requestID, self.selectedVersion?.id == version.id else { return }
                 self.previewTask = nil
-                self.previewView.showPlaceholder("Не удалось открыть версию №\(version.id)", detail: error.localizedDescription, canRetry: true)
+                self.previewView.showPlaceholder("Не удалось открыть версию №\(version.displayNumber)", detail: error.localizedDescription, canRetry: true)
                 self.refreshInteractionState()
             }
         }
@@ -1418,7 +1589,7 @@ final class VersionHistoryWindowController: NSWindowController, NSTableViewDataS
         let alert = NSAlert()
         alert.window.appearance = NSApp.appearance
         alert.messageText = "Восстановить выбранную версию?"
-        alert.informativeText = "Версия №\(version.id): «\(version.title)» (\(version.revision.prefix(12))). Текущий проект будет сохранён в истории, затем его состояние заменится этим снимком."
+        alert.informativeText = "Версия №\(version.displayNumber): «\(version.title)» (\(version.revision.prefix(12))). Текущий проект будет сохранён в истории, затем его состояние заменится этим снимком."
         alert.addButton(withTitle: "Восстановить")
         alert.addButton(withTitle: "Отмена")
         alert.beginSheetModal(for: window!) { [weak self] response in
@@ -1664,6 +1835,7 @@ private final class SidebarView: NSView {
         case .nodes(let ids): selectionKey = "nodes:\(ids.sorted().joined(separator: ","))"
         case .container(let id): selectionKey = "container:\(id)"
         case .edge(let id): selectionKey = "edge:\(id)"
+        case .edges(let ids): selectionKey = "edges:\(ids.sorted().joined(separator: ","))"
         }
         func encoded(_ value: String) -> String { "\(value.utf8.count):\(value)" }
         let paletteFingerprint = "\(selectedCollectionID)|\(query)"
@@ -1793,7 +1965,12 @@ private final class SidebarView: NSView {
             let source = nodeLabels[edge.source] ?? edge.source
             let target = nodeLabels[edge.target] ?? edge.target
             let title = edge.label.isEmpty ? "\(source) → \(target)" : edge.label
-            addArranged(elementButton(title, symbol: "arrow.right", color: NSColor(hex: edge.style.color), selected: model.selection == .edge(edge.id), action: { [weak self] in self?.onSelect?(.edge(edge.id)) }, context: { [weak self] in self?.onSelect?(.edge(edge.id)); self?.onShowProperties?() }), to: contentStack)
+            addArranged(elementButton(title, symbol: "arrow.right", color: NSColor(hex: edge.style.color), selected: model.selection.edgeIDs.contains(edge.id), action: { [weak self] in
+                let ids = NSEvent.modifierFlags.contains(.shift) ? model.selection.edgeIDs.symmetricDifference([edge.id]) : [edge.id]
+                self?.onSelect?(.edgeGroup(ids))
+            }, context: { [weak self] in
+                if !model.selection.edgeIDs.contains(edge.id) { self?.onSelect?(.edge(edge.id)) }; self?.onShowProperties?()
+            }), to: contentStack)
         }
         addArranged(separator(), to: contentStack)
         let local = makeLabel("●  Данные и backend остаются локально", size: 9, weight: .medium, color: NSColor(hex: "#3F8064"))
@@ -1920,6 +2097,8 @@ private final class WorkspaceView: NSView {
     var onPasteSelection: (() -> Void)?
     var onDuplicateSelection: ((Double, Double, [String: String]) -> Void)?
     var onEditNodeText: ((String) -> Void)?
+    var onEditElementText: ((DiagramSelection) -> Void)?
+    var onResetSelectedRoutes: (() -> Void)?
     var onCreateEdge: ((String, String) -> Void)?
     var onSetEdgeWaypoints: ((String, [RoutePoint], [LayoutNode]) -> Void)?
     var onReattachEdge: ((String, Bool, String) -> Void)?
@@ -1970,6 +2149,7 @@ private final class WorkspaceView: NSView {
         let proposal = model.ollamaProposal
         canvasView.isReadOnly = model.isEditingLocked
         canvasView.inverseTrackpad = model.inverseTrackpad
+        canvasView.alignmentGuides = model.alignmentGuides
         canvasView.update(
             diagram: proposal?.diagram ?? model.diagram,
             layout: proposal?.layout ?? model.layout,
@@ -2002,6 +2182,7 @@ private final class WorkspaceView: NSView {
     func setInteractionState(model: AppModel) {
         canvasView.isReadOnly = model.isEditingLocked
         canvasView.inverseTrackpad = model.inverseTrackpad
+        canvasView.alignmentGuides = model.alignmentGuides
         styleButton.isEnabled = !model.isEditingLocked
         autoLayoutButton.isEnabled = model.diagram != nil && !model.isEditingLocked
         autoLayoutButton.title = model.isAutoLayoutRunning ? "Компоновка…" : "Автокомпоновка"
@@ -2096,6 +2277,8 @@ private final class WorkspaceView: NSView {
         canvasView.onPasteSelection = { [weak self] in self?.onPasteSelection?() }
         canvasView.onDuplicateSelection = { [weak self] x, y, targets in self?.onDuplicateSelection?(x, y, targets) }
         canvasView.onEditNodeText = { [weak self] id in self?.onEditNodeText?(id) }
+        canvasView.onEditElementText = { [weak self] target in self?.onEditElementText?(target) }
+        canvasView.onResetSelectedRoutes = { [weak self] in self?.onResetSelectedRoutes?() }
         canvasView.onSetEdgeWaypoints = { [weak self] id, points, positions in self?.onSetEdgeWaypoints?(id, points, positions) }
         canvasView.onReattachEdge = { [weak self] id, source, nodeID in self?.onReattachEdge?(id, source, nodeID) }
         canvasView.onCreateEdge = { [weak self] source, target in self?.onCreateEdge?(source, target) }
@@ -2624,6 +2807,21 @@ private final class InspectorView: NSView {
                 addColor("Граница", value: item.style.stroke, parameter: .stroke)
                 addColor("Текст", value: item.style.text, parameter: .text)
                 addStrokeWidth("Толщина границы, pt", value: item.style.effectivePenwidth, target: .container(id), model: model)
+            }
+        case .edges(let ids):
+            title.stringValue = "\(ids.count) связей"
+            addSection("ГРУППОВОЕ ОФОРМЛЕНИЕ")
+            if let item = model.edges.first(where: { ids.contains($0.id) }) {
+                addPopup("Стиль линии", value: item.style.lineStyle, choices: DiagramStyleOptions.edgeLines) { model.setStyle(.lineStyle($0), for: .edges(ids)) }
+                addPopup("Направление", value: item.direction, choices: DiagramStyleOptions.directions) { model.setStyle(.direction($0), for: .edges(ids)) }
+                addPopup("Маршрут", value: item.routing ?? "", choices: DiagramStyleOptions.routes) { model.setStyle(.routing($0.isEmpty ? nil : $0), for: .edges(ids)) }
+                addPopup("Наконечник", value: item.style.arrowhead, choices: DiagramStyleOptions.arrows) { model.setStyle(.arrowhead($0), for: .edges(ids)) }
+                addPopup("Хвост", value: item.style.arrowtail, choices: DiagramStyleOptions.arrows) { model.setStyle(.arrowtail($0), for: .edges(ids)) }
+                addStrokeWidth("Толщина, pt", value: item.style.penwidth, target: .edges(ids), model: model)
+                addColor("Линия", value: model.colorSelection(for: .stroke).color ?? item.style.color, parameter: .stroke)
+                addColor("Текст", value: model.colorSelection(for: .text).color ?? "#000000", parameter: .text)
+                addFullWidth(makeButton("Сбросить маршруты", symbol: "arrow.counterclockwise") { _ in model.resetSelectedEdgeRoutes() })
+                addFullWidth(makeButton("Поменять начало и конец", symbol: "arrow.left.arrow.right") { _ in model.setStyle(.reverse, for: .edges(ids)) })
             }
         case .edge(let id):
             title.stringValue = "Связь"

@@ -2,7 +2,8 @@ import AppKit
 import ObjectiveC
 
 @MainActor
-final class OllamaAssistantWindowController: NSWindowController {
+final class OllamaAssistantWindowController: NSWindowController, ProjectThemedWindow {
+    var projectModel: AppModel { model }
     private let model: AppModel
     private let endpointField = NSTextField(string: "")
     private let modelField = NSComboBox()

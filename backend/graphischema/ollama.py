@@ -85,6 +85,9 @@ async def generate_project(request: OllamaTaskRequest, current: DiagramProject) 
         candidate = DiagramProject.model_validate(output)
     except ValidationError as exc:
         raise OllamaError("Ollama сгенерировал модель, не соответствующую схеме: " + _validation_message(exc)) from exc
+    # A generation replaces the contents of the active workspace. Project
+    # identity belongs to the repository, never to a model-generated payload.
+    candidate.project.id = current.project.id
     return candidate
 
 
@@ -199,6 +202,9 @@ def apply_operations(project: DiagramProject, operations: list[dict[str, Any]]) 
         for key, value in changes.items():
             if key == "style" and isinstance(value, dict) and isinstance(target.get("style"), dict):
                 target["style"].update(value)
+                for parameter in ("fill", "stroke", "text", "color"):
+                    if parameter in value and parameter+"_mode" not in value:
+                        target["style"][parameter+"_mode"] = "custom"
             else:
                 target[key] = value
 

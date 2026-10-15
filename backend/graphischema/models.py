@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 
 Color = str
+ColorMode = Literal["custom", "theme", "inverse"]
 _COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$")
 _ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
 
@@ -46,6 +47,9 @@ class DiagramSettings(StrictModel):
 
 
 class ContainerStyle(StrictModel):
+    fill_mode: ColorMode = "custom"
+    stroke_mode: ColorMode = "custom"
+    text_mode: ColorMode = "custom"
     fill: Color = "#F1F5F9"
     stroke: Color = "#94A3B8"
     text: Color = "#334155"
@@ -61,7 +65,7 @@ class DiagramContainer(StrictModel):
     id: str
     label: str = Field(min_length=1, max_length=120)
     parent_id: str | None = None
-    style: ContainerStyle = Field(default_factory=ContainerStyle)
+    style: ContainerStyle = Field(default_factory=lambda: ContainerStyle(fill_mode="theme", stroke_mode="theme", text_mode="theme"))
     padding: float = Field(default=16, ge=4, le=48)
     x: float | None = Field(default=None, ge=-1000, le=1000, allow_inf_nan=False)
     y: float | None = Field(default=None, ge=-1000, le=1000, allow_inf_nan=False)
@@ -77,6 +81,9 @@ class DiagramContainer(StrictModel):
 
 
 class NodeStyle(StrictModel):
+    fill_mode: ColorMode = "custom"
+    stroke_mode: ColorMode = "custom"
+    text_mode: ColorMode = "custom"
     fill: Color = "#FFFFFF"
     stroke: Color = "#2563EB"
     text: Color = "#0F172A"
@@ -98,7 +105,7 @@ class DiagramNode(StrictModel):
     shape: Literal["box", "ellipse", "cylinder", "diamond", "hexagon", "cloud"] = "box"
     icon: str | None = None
     container_id: str | None = None
-    style: NodeStyle = Field(default_factory=NodeStyle)
+    style: NodeStyle = Field(default_factory=lambda: NodeStyle(fill_mode="theme", stroke_mode="theme", text_mode="theme"))
     x: float | None = None
     y: float | None = None
     width: float | None = Field(default=None, ge=0.5, le=10)
@@ -139,6 +146,8 @@ class DiagramNode(StrictModel):
 
 
 class EdgeStyle(StrictModel):
+    color_mode: ColorMode = "custom"
+    text_mode: ColorMode = "custom"
     line_style: Literal["solid", "dashed", "dotted", "bold"] = "solid"
     color: Color = "#64748B"
     text: Color | None = None
@@ -167,7 +176,7 @@ class DiagramEdge(StrictModel):
     target: str
     label: str = Field(default="", max_length=160)
     direction: Literal["forward", "both", "none"] = "forward"
-    style: EdgeStyle = Field(default_factory=EdgeStyle)
+    style: EdgeStyle = Field(default_factory=lambda: EdgeStyle(color_mode="theme", text_mode="theme"))
     source_port: str = "auto"
     target_port: str = "auto"
     routing: Literal["straight", "angled", "orthogonal", "curved"] | None = None
@@ -189,6 +198,13 @@ class DiagramEdge(StrictModel):
 
 
 class PresentationSettings(StrictModel):
+    saved_colors: list[Color] = Field(default_factory=list, max_length=64)
+
+    @field_validator("saved_colors")
+    @classmethod
+    def valid_saved_colors(cls, values):
+        return list(dict.fromkeys(_validate_color(value) for value in values))
+
     theme: Literal["light", "dark"] = "light"
     background: Color = "#FFFFFF"
 

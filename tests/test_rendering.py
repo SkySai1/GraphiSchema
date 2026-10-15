@@ -1,5 +1,7 @@
 from pathlib import Path
 import shutil
+import re
+import math
 from xml.etree import ElementTree
 
 import pytest
@@ -54,7 +56,19 @@ def test_fallback_svg_respects_edge_routing(project: DiagramProject, routing: st
         if item.tag.endswith("path") and item.get("fill") == "none" and item.get("stroke") == "#123ABC"
     )
 
-    assert path.get("d", "").count(" L ") == segments
+    from graphischema.geometry import route
+    points = [tuple(map(float, pair)) for pair in re.findall(r"(?:M|L) ([\d.-]+) ([\d.-]+)", path.get("d", ""))]
+    assert len(points) >= 2
+    if routing == "straight":
+        # A short solid join reaches the arrow base; collinear segments retain
+        # the same straight route regardless of serialization segment count.
+        vector = (points[-1][0]-points[0][0],points[-1][1]-points[0][1])
+        assert all(abs((p[0]-points[0][0])*vector[1]-(p[1]-points[0][1])*vector[0]) < 1e-4 for p in points)
+    elif routing == "orthogonal":
+        assert all(abs(a[0]-b[0]) < 1e-4 or abs(a[1]-b[1]) < 1e-4 for a,b in zip(points,points[1:]))
+    else:
+        assert len(points) >= 3
+    assert all(math.isfinite(c) for p in points for c in p)
 
 
 def test_fallback_svg_reflects_custom_node_dimensions(project: DiagramProject) -> None:
@@ -62,7 +76,11 @@ def test_fallback_svg_reflects_custom_node_dimensions(project: DiagramProject) -
     project.nodes[0].width = 4.0
     project.nodes[0].height = 1.2
     svg = render_fallback_svg(project)
-    assert 'width="304.0" height="162.6"' in svg
+    root = ElementTree.fromstring(svg)
+    fill = next(e for e in root.iter() if e.get("data-node-fill") == project.nodes[0].id)
+    points = [tuple(map(float, pair)) for pair in re.findall(r"(?:M|L) ([\d.-]+) ([\d.-]+)", fill.get("d", ""))]
+    assert max(p[0] for p in points)-min(p[0] for p in points) == pytest.approx(4*72)
+    assert max(p[1] for p in points)-min(p[1] for p in points) == pytest.approx(1.2*72)
 
 
 def test_fallback_svg_escapes_untrusted_text(project: DiagramProject) -> None:
@@ -88,8 +106,10 @@ def test_rgba_node_style_exports_transparency(project: DiagramProject) -> None:
     path = next(item for item in group if item.tag.endswith("path") and item.get("fill") != "none")
     assert path.get("fill") == "#123456"
     assert float(path.get("fill-opacity", "1")) == pytest.approx(128/255, abs=0.001)
-    assert path.get("stroke") == "#ABCDEF"
-    assert float(path.get("stroke-opacity", "1")) == pytest.approx(64/255, abs=0.001)
+    strokes = [e for e in group if e.get("data-node-stroke") == project.nodes[0].id]
+    assert strokes and all(e.get("stroke") == "#ABCDEF" for e in strokes)
+    assert all(float(e.get("stroke-opacity", "1")) == pytest.approx(64/255, abs=0.001) for e in strokes)
+    assert list(group).index(path) < list(group).index(strokes[0])
 
 
 def test_empty_container_exports_with_stored_geometry() -> None:
@@ -98,8 +118,13 @@ def test_empty_container_exports_with_stored_geometry() -> None:
     })
     svg, _ = render_svg(project)
     root = ElementTree.fromstring(svg)
-    assert any(item.tag.endswith("rect") and item.get("fill") == "#F1F5F9" for item in root.iter())
-    assert any(item.tag.endswith("text") and item.text == "Пустая зона" for item in root.iter())
+    frame = next(e for e in root if e.tag.endswith("rect") and e.get("rx") == "11")
+    assert frame.get("fill") == "#FFFFFF" # New containers follow the theme.
+    assert float(frame.get("width")) == pytest.approx(3*72)
+    assert float(frame.get("height")) == pytest.approx(2*72)
+    caption = next(e for e in root.iter() if e.get("data-container-label") == "empty")
+    assert "Пустая зона" in "".join(caption.itertext())
+    assert caption.get("font-size") == "11"
 
 
 def test_svg_paints_nodes_by_z_index_and_keeps_stable_order_for_ties(project: DiagramProject) -> None:

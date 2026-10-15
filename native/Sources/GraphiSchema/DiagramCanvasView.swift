@@ -16,6 +16,8 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
     var onPasteSelection: (() -> Void)?
     var onDuplicateSelection: ((Double, Double, [String: String]) -> Void)?
     var onEditNodeText: ((String) -> Void)?
+    var onEditElementText: ((DiagramSelection) -> Void)?
+    var onResetSelectedRoutes: (() -> Void)?
     var onCreateEdge: ((String, String) -> Void)?
     var onSetEdgeWaypoints: ((String, [RoutePoint], [LayoutNode]) -> Void)?
     var onReattachEdge: ((String, Bool, String) -> Void)?
@@ -69,9 +71,10 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
     private var didResizeGroup = false
     private var marqueeStart: NSPoint?
     private var selectionMarquee: NSRect?
+    private var marqueeBaseEdges: Set<String> = []
     private var marqueeBaseSelection: Set<String> = []
     private var longPressTask: Task<Void, Never>?
-    private var longPressNodeID: String?
+    private var longPressSelection: DiagramSelection?
     private var longPressOrigin: NSPoint?
     private var didTriggerLongPress = false
     private var connectingFromNodeID: String?
@@ -101,6 +104,9 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
     private var draggingWaypoint: (id: String, index: Int)?
     private var waypointPreview: [String: [RoutePoint]] = [:]
     var inverseTrackpad = false
+    var alignmentGuides = true
+    private var alignmentVertical: CGFloat?
+    private var alignmentHorizontal: CGFloat?
     var exportBackground: String?
 
     var isGridVisible = true { didSet { needsDisplay = true } }
@@ -541,6 +547,7 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
                 if hypot(center.x-point.x, center.y-point.y) <= 9 {
                     waypointPreview[id] = edge.waypoints.isEmpty ? [RoutePoint(x: handle.x, y: handle.y)] : edge.waypoints
                     draggingWaypoint = (id, index)
+                    scheduleElementLongPress(.edge(id), at: point)
                     return
                 }
             }
@@ -638,8 +645,10 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
                     bends.insert(RoutePoint(x: world.x, y: world.y), at: min(segment, bends.count))
                     onSetEdgeWaypoints?(edgeID, bends, layout.nodes)
                 }
-                selection = .edge(edgeID)
-                onSelect?(.edge(edgeID))
+                let ids = event.modifierFlags.contains(.shift) ? selection.edgeIDs.symmetricDifference([edgeID]) : [edgeID]
+                selection = .edgeGroup(ids)
+                onSelect?(selection)
+                if event.clickCount == 1 && !event.modifierFlags.contains(.shift) { scheduleElementLongPress(.edge(edgeID), at: point) }
             } else if let id = hitContainer(at: point, diagram: diagram, layout: layout) {
                 selection = .container(id)
                 onSelect?(.container(id))
@@ -668,11 +677,13 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
                     ($0.id, NSPoint(x: CGFloat($0.x), y: CGFloat($0.y)))
                 })
                 didMoveContainer = false
+                if !isCopyDrag { scheduleElementLongPress(.container(id), at: point) }
             } else {
                 draggingContainerID = nil
                 marqueeStart = point
                 selectionMarquee = NSRect(origin: point, size: .zero)
                 marqueeBaseSelection = event.modifierFlags.contains(.shift) ? selectedNodeIDs : []
+                marqueeBaseEdges = event.modifierFlags.contains(.shift) ? selection.edgeIDs : []
             }
             needsDisplay = true
             return
@@ -730,8 +741,7 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
                 onSelect?(selection)
             }
         } else if let edgeID = hitEdge(at: point, diagram: diagram, layout: layout) {
-            selection = .edge(edgeID)
-            onSelect?(selection)
+            if !selection.edgeIDs.contains(edgeID) { selection = .edge(edgeID); onSelect?(selection) }
         } else if let id = hitContainer(at: point, diagram: diagram, layout: layout) {
             selection = .container(id)
             onSelect?(selection)
@@ -768,10 +778,15 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
             editText.representedObject = nodeID
             menu.addItem(editText)
         }
-        if case .edge(let edgeID) = selection, edgeByID[edgeID]?.waypoints.isEmpty == false {
+        if selection.edgeIDs.contains(where: { edgeByID[$0]?.waypoints.isEmpty == false }) {
             let resetRoute = NSMenuItem(title: "Сбросить маршрут этой связи", action: #selector(resetContextRoute), keyEquivalent: "")
             resetRoute.target = self
             menu.addItem(resetRoute)
+        }
+        if case .container = selection {
+            let edit = NSMenuItem(title: "Текст контейнера…", action: #selector(editContextElementText), keyEquivalent: ""); edit.target = self; menu.addItem(edit)
+        } else if case .edge = selection {
+            let edit = NSMenuItem(title: "Текст связи…", action: #selector(editContextElementText), keyEquivalent: ""); edit.target = self; menu.addItem(edit)
         }
         let delete = NSMenuItem(title: "Удалить", action: #selector(deleteContextSelection), keyEquivalent: "")
         delete.target = self
@@ -790,7 +805,7 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
             item.representedObject = parameter.rawValue
             switch selection {
             case .project: item.isEnabled = parameter == .fill
-            case .edge: item.isEnabled = parameter != .fill
+            case .edge, .edges: item.isEnabled = parameter != .fill
             default: break
             }
             return item
@@ -814,17 +829,18 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
         case .container(let id):
             guard let style = containerByID[id]?.style else { return [] }
             return [widthSubmenu("Толщина границы", current: [style.effectivePenwidth])]
-        case .edge(let id):
-            guard let edge = edgeByID[id] else { return [] }
-            let direction = styleSubmenu("Направление", choices: DiagramStyleOptions.directions, current: [edge.direction], change: DiagramStyleChange.direction)
+        case .edge, .edges:
+            let edges = selection.edgeIDs.sorted().compactMap { edgeByID[$0] }
+            guard !edges.isEmpty else { return [] }
+            let direction = styleSubmenu("Направление", choices: DiagramStyleOptions.directions, current: edges.map { $0.direction }, change: DiagramStyleChange.direction)
             direction.submenu?.addItem(.separator())
             direction.submenu?.addItem(styleItem("Поменять начало и конец", change: .reverse))
             return [
-                styleSubmenu("Стиль линии", choices: DiagramStyleOptions.edgeLines, current: [edge.style.lineStyle], change: DiagramStyleChange.lineStyle),
-                styleSubmenu("Маршрут", choices: DiagramStyleOptions.routes, current: [edge.routing ?? ""], change: { .routing($0.isEmpty ? nil : $0) }),
-                widthSubmenu("Толщина линии", current: [edge.style.penwidth]),
-                styleSubmenu("Наконечник у цели", choices: DiagramStyleOptions.arrows, current: [edge.style.arrowhead], change: DiagramStyleChange.arrowhead),
-                styleSubmenu("Наконечник у источника", choices: DiagramStyleOptions.arrows, current: [edge.style.arrowtail], change: DiagramStyleChange.arrowtail),
+                styleSubmenu("Стиль линии", choices: DiagramStyleOptions.edgeLines, current: edges.map { $0.style.lineStyle }, change: DiagramStyleChange.lineStyle),
+                styleSubmenu("Маршрут", choices: DiagramStyleOptions.routes, current: edges.map { $0.routing ?? "" }, change: { .routing($0.isEmpty ? nil : $0) }),
+                widthSubmenu("Толщина линии", current: edges.map { $0.style.penwidth }),
+                styleSubmenu("Наконечник у цели", choices: DiagramStyleOptions.arrows, current: edges.map { $0.style.arrowhead }, change: DiagramStyleChange.arrowhead),
+                styleSubmenu("Наконечник у источника", choices: DiagramStyleOptions.arrows, current: edges.map { $0.style.arrowtail }, change: DiagramStyleChange.arrowtail),
                 direction,
             ]
         case .project: return []
@@ -875,7 +891,7 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
            let parameter = DiagramColorParameter(rawValue: value) {
             switch selection {
             case .project: return parameter == .fill
-            case .edge: return parameter != .fill
+            case .edge, .edges: return parameter != .fill
             default: return true
             }
         }
@@ -955,10 +971,10 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
         onDetachNodeFromContainer?(id)
     }
     @objc private func resetContextRoute() {
-        guard case .edge(let id) = selection, let edge = edgeByID[id] else { return }
-        onSetEdgeWaypoints?(id, [], diagramLayout?.nodes ?? [])
-        waypointPreview.removeValue(forKey: edge.id)
+        onResetSelectedRoutes?()
+        for id in selection.edgeIDs { waypointPreview.removeValue(forKey: id) }
     }
+    @objc private func editContextElementText() { onEditElementText?(selection) }
     @objc private func contextMoveNodeToFront(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String else { return }
         onMoveNodeInStack?(id, true)
@@ -1124,6 +1140,7 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
     override func mouseUp(with event: NSEvent) {
         defer {
             dragGestureStart = nil
+            alignmentVertical = nil; alignmentHorizontal = nil
             singleDragInitialCenter = nil
             lockedDragAxis = nil
             pendingShiftToggleID = nil
@@ -1184,8 +1201,17 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
             if hypot(end.x - start.x, end.y - start.y) > 3 {
                 for id in nodeByID.keys where nodeScreenRect(for: id)?.intersects(rect) == true { ids.insert(id) }
             }
-            setNodeSelection(ids)
+            if ids.isEmpty {
+                var edgeIDs = marqueeBaseEdges
+                if hypot(end.x - start.x, end.y - start.y) > 3 {
+                    for id in edgeByID.keys {
+                        if let drawing = edgeDrawing(for: id), zip(drawing.shaft,drawing.shaft.dropFirst()).contains(where: { CanvasGeometry.segmentIntersectsRect($0.0,$0.1,rect) }) { edgeIDs.insert(id) }
+                    }
+                }
+                selection = .edgeGroup(edgeIDs)
+            } else { setNodeSelection(ids) }
             onSelect?(selection)
+            marqueeBaseEdges.removeAll()
             marqueeStart = nil
             selectionMarquee = nil
             marqueeBaseSelection.removeAll()
@@ -1296,15 +1322,20 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
     }
 
     private func scheduleLongPress(for nodeID: String, at point: NSPoint) {
+        scheduleElementLongPress(.node(nodeID), at: point)
+    }
+
+    private func scheduleElementLongPress(_ target: DiagramSelection, at point: NSPoint) {
         cancelLongPress(resetTrigger: true)
-        longPressNodeID = nodeID
+        longPressSelection = target
         longPressOrigin = point
+        let deadline = ContinuousClock.now.advanced(by: .milliseconds(600))
         longPressTask = Task { @MainActor [weak self] in
-            do { try await Task.sleep(for: .milliseconds(600)) }
+            do { try await Task.sleep(until: deadline, clock: .continuous) }
             catch { return }
-            guard let self, self.longPressNodeID == nodeID else { return }
+            guard let self, self.longPressSelection == target else { return }
             self.longPressTask = nil
-            self.longPressNodeID = nil
+            self.longPressSelection = nil
             self.longPressOrigin = nil
             self.didTriggerLongPress = true
             self.draggingNodeID = nil
@@ -1313,28 +1344,60 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
             self.groupInitialCenters.removeAll()
             self.didDragNode = false
             self.didDragGroup = false
-            self.onEditNodeText?(nodeID)
+            if let waypoint = self.draggingWaypoint { self.waypointPreview.removeValue(forKey: waypoint.id) }
+            self.draggingWaypoint = nil
+            self.draggingContainerID = nil
+            self.containerDragStart = nil
+            self.didMoveContainer = false
+            self.dragPreview.removeAll()
+            self.emptyContainerDragPreview.removeAll()
+            self.containerMemberCenters.removeAll()
+            self.containerEmptyCenters.removeAll()
+            self.emptyContainerDragOriginCenter = nil
+            self.nodeDropBounds.removeAll()
+            self.dropTargetContainerID = nil
+            self.needsDisplay = true
+            if case .node(let id) = target { self.onEditNodeText?(id) }
+            else { self.onEditElementText?(target) }
         }
     }
 
     private func constrainedDragPointer(_ point: NSPoint, event: NSEvent) -> NSPoint {
-        let pointer = worldPoint(for: point)
-        guard let start = dragGestureStart, event.modifierFlags.contains(.shift) else {
-            lockedDragAxis = nil
-            return pointer
+        var pointer = worldPoint(for: point)
+        guard let start = dragGestureStart else { return pointer }
+        if event.modifierFlags.contains(.shift) {
+            let delta = NSPoint(x: pointer.x - start.x, y: pointer.y - start.y)
+            if lockedDragAxis == nil, hypot(delta.x, delta.y) > 0.015 { lockedDragAxis = abs(delta.x) >= abs(delta.y) }
+            if let horizontal = lockedDragAxis { pointer = horizontal ? .init(x: pointer.x, y: start.y) : .init(x: start.x, y: pointer.y) }
+        } else { lockedDragAxis = nil }
+        var movingIDs = draggingNodeIDs
+        if let id = draggingNodeID { movingIDs.insert(id) }
+        if draggingContainerID != nil { movingIDs.formUnion(containerMemberCenters.keys) }
+        var frames = movingIDs.sorted().compactMap { id -> NSRect? in
+            guard let position = layoutNodeByID[id] else { return nil }
+            return NSRect(x: position.x-position.width/2, y: position.y-position.height/2, width: position.width, height: position.height)
         }
-        let delta = NSPoint(x: pointer.x - start.x, y: pointer.y - start.y)
-        if lockedDragAxis == nil, hypot(delta.x, delta.y) > 0.015 {
-            lockedDragAxis = abs(delta.x) >= abs(delta.y)
+        if frames.isEmpty, let id = draggingContainerID, let diagram, let layout = diagramLayout,
+           let frame = containerWorldRects(diagram: diagram, layout: layout)[id] {
+            if let origin = emptyContainerDragOriginCenter { frames = [frame.offsetBy(dx: origin.x-frame.midX, dy: origin.y-frame.midY)] }
+            else { frames = [frame] }
         }
-        guard let horizontal = lockedDragAxis else { return start }
-        return horizontal ? NSPoint(x: pointer.x, y: start.y) : NSPoint(x: start.x, y: pointer.y)
+        guard let first = frames.first else { return pointer }
+        let peers = layoutNodeByID.keys.sorted().filter { !movingIDs.contains($0) }.compactMap { id -> NSRect? in
+            guard let position = layoutNodeByID[id] else { return nil }
+            return NSRect(x: position.x-position.width/2, y: position.y-position.height/2, width: position.width, height: position.height)
+        }
+        let result = DiagramAlignment.snap(moving: frames.dropFirst().reduce(first) { $0.union($1) }, peers: peers,
+            delta: .init(x: pointer.x-start.x, y: pointer.y-start.y), scale: scale, enabled: alignmentGuides,
+            lockedHorizontal: lockedDragAxis)
+        alignmentVertical = result.vertical; alignmentHorizontal = result.horizontal
+        return .init(x: start.x+result.delta.x, y: start.y+result.delta.y)
     }
 
     private func cancelLongPress(resetTrigger: Bool = false) {
         longPressTask?.cancel()
         longPressTask = nil
-        longPressNodeID = nil
+        longPressSelection = nil
         longPressOrigin = nil
         if resetTrigger { didTriggerLongPress = false }
     }
@@ -1391,6 +1454,12 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
     }
 
     private func drawSelectionOverlay() {
+        if alignmentGuides {
+            let path = NSBezierPath(); path.lineWidth = 1; path.setLineDash([4, 3], count: 2, phase: 0)
+            if let x = alignmentVertical.map({ screenPoint(for: .init(x: $0, y: 0)).x }) { path.move(to: .init(x: x, y: bounds.minY)); path.line(to: .init(x: x, y: bounds.maxY)) }
+            if let y = alignmentHorizontal.map({ screenPoint(for: .init(x: 0, y: $0)).y }) { path.move(to: .init(x: bounds.minX, y: y)); path.line(to: .init(x: bounds.maxX, y: y)) }
+            NSColor.systemPink.setStroke(); path.stroke()
+        }
         if let selectionMarquee {
             let path = NSBezierPath(roundedRect: selectionMarquee, xRadius: 3, yRadius: 3)
             path.lineWidth = 1
@@ -1528,9 +1597,9 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
                               width: world.width*scale, height: world.height*scale)
             let path = NSBezierPath(roundedRect: rect, xRadius: 11, yRadius: 11)
             let isDropTarget = container.id == dropTargetContainerID && (draggingNodeID != nil || !draggingNodeIDs.isEmpty)
-            let fill = NSColor(hex: container.style.fill)
+            let fill = NSColor(hex: container.style.resolved(.fill, theme: diagram.presentation.theme))
             (isDropTarget ? NSColor.controlAccentColor.withAlphaComponent(0.08) : fill.withAlphaComponent(fill.alphaComponent * 0.42)).setFill()
-            (isDropTarget ? NSColor.controlAccentColor : NSColor(hex: container.style.stroke)).setStroke()
+            (isDropTarget ? NSColor.controlAccentColor : NSColor(hex: container.style.resolved(.stroke, theme: diagram.presentation.theme))).setStroke()
             path.lineWidth = isDropTarget ? max(2.4, CGFloat(container.style.effectivePenwidth)) : CGFloat(container.style.effectivePenwidth)
             path.fill()
             path.stroke()
@@ -1538,7 +1607,7 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
             NSGraphicsContext.saveGraphicsState()
             NSBezierPath(rect: titleFrame).addClip()
             let title = container.label.components(separatedBy: .newlines).joined(separator: " ")
-            drawText(title, in: titleFrame, color: NSColor(hex: container.style.text),
+            drawText(title, in: titleFrame, color: NSColor(hex: container.style.resolved(.text, theme: diagram.presentation.theme)),
                      size: DiagramContainerLayout.fontSize, weight: .bold, alignment: .left)
             NSGraphicsContext.restoreGraphicsState()
             if showSelection && selection == .container(container.id) {
@@ -1556,7 +1625,7 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
             guard points.count >= 2 else { continue }
             let drawing = drawing(edge, points: points)
             let path = NSBezierPath()
-            let isSelected = selection == .edge(edge.id)
+            let isSelected = selection.edgeIDs.contains(edge.id)
             if isSelected {
                 let highlight = NSBezierPath()
                 highlight.lineWidth = max(7, CGFloat(edge.style.penwidth) + 5)
@@ -1576,7 +1645,7 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
             case "dotted": setDash([1.5, 3], on: path)
             default: break
             }
-            NSColor(hex: edge.style.color).setStroke()
+            NSColor(hex: edge.style.resolved(.stroke, theme: diagram.presentation.theme)).setStroke()
             let dashed = ["dashed", "dotted"].contains(edge.style.lineStyle)
             var shaft = drawing.shaft
             if dashed {
@@ -1629,7 +1698,7 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
                     NSColor(hex: diagram.presentation.theme == "dark" ? "#352C43" : "#FFFFFF").setFill()
                     pill.fill()
                 }
-                drawText(edge.label, in: rect, color: edge.style.text.map { NSColor(hex: $0) } ?? (diagram.presentation.theme == "dark" ? .white : NSColor(hex: "#172238")), size: 9, weight: .medium, alignment: .center)
+                drawText(edge.label, in: rect, color: NSColor(hex: edge.style.resolved(.text, theme: diagram.presentation.theme)), size: 9, weight: .medium, alignment: .center)
             }
         }
     }
@@ -1638,7 +1707,7 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
         for edgeLayout in layout.edges {
             guard let edge = edgeByID[edgeLayout.id] else { continue }
             guard let drawing = edgeDrawing(for: edge.id) else { continue }
-            let color = NSColor(hex: edge.style.color)
+            let color = NSColor(hex: edge.style.resolved(.stroke, theme: diagram.presentation.theme))
             for marker in [drawing.head, drawing.tail].compactMap({ $0 }) {
                 drawArrow(marker, color: color, lineWidth: edgeLineWidth(edge))
             }
@@ -1654,15 +1723,12 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
             let selected = showSelection && selectedNodeIDs.contains(node.id)
             let contours = CanvasGeometry.paths(node)
             let closed = node.icon.flatMap { CanvasGeometry.icons[$0]?.closed } ?? [true]
-            let baseContour = contours.indices.filter { closed.indices.contains($0) && closed[$0] }
-                .max { contourArea(contours[$0]) < contourArea(contours[$1]) }
-            if let baseContour {
-                let points = contours[baseContour].map { NSPoint(x: rect.minX+$0.x*rect.width, y: rect.minY+$0.y*rect.height) }
-                if let first = points.first {
-                    let fill = NSBezierPath(); fill.move(to: first); appendEdgeSegments(points, to: fill); fill.close()
-                    NSColor(hex: node.style.fill).setFill(); fill.fill()
-                }
+            let fill = NSBezierPath(); fill.windingRule = .nonZero
+            for contour in CanvasGeometry.fillPaths(node) {
+                let points = contour.map { NSPoint(x: rect.minX+$0.x*rect.width, y: rect.minY+$0.y*rect.height) }
+                if let first = points.first { fill.move(to: first); appendEdgeSegments(points, to: fill); fill.close() }
             }
+            NSColor(hex: node.style.resolved(.fill, theme: diagram.presentation.theme)).setFill(); fill.fill()
             for (index, contour) in contours.enumerated() {
                 let path = NSBezierPath()
                 let points = contour.map { NSPoint(x: rect.minX+$0.x*rect.width, y: rect.minY+$0.y*rect.height) }
@@ -1673,12 +1739,10 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
                 if node.style.effectiveLineStyle == "dashed" { path.setLineDash([6, 4], count: 2, phase: 0) }
                 if node.style.effectiveLineStyle == "dotted" { path.setLineDash([1.5, 3], count: 2, phase: 0) }
                 if closed.indices.contains(index) && closed[index] { path.close() }
-                NSColor(hex: node.style.stroke).setStroke()
+                NSColor(hex: node.style.resolved(.stroke, theme: diagram.presentation.theme)).setStroke()
                 path.stroke()
             }
-            let autoContrast = exportBackground == nil && node.icon != nil && diagram.presentation.theme == "dark"
-                && ["#172238", "#0F172A"].contains(node.style.text.uppercased())
-            let color = autoContrast ? NSColor.white : NSColor(hex: node.style.text)
+            let color = NSColor(hex: node.style.resolved(.text, theme: diagram.presentation.theme))
             NodeLabelLayout(node: node, in: rect, scale: scale).draw(color: color)
             if selected && selectedNodeIDs.count == 1 {
                 for handle in nodeStretchFrames(for: node.id) {

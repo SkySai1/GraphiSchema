@@ -164,7 +164,7 @@ def test_svg_and_png_include_collection_vectors_and_night_theme():
     root = ElementTree.fromstring(svg)
     icons = [element for element in root.iter() if element.get("data-icon")]
     assert len(icons) == 2
-    assert len([e for e in icons[0] if e.tag.endswith("path")]) == len(icon_library()[project.nodes[0].icon]["paths"])
+    assert len([e for e in icons[0] if e.get("data-node-stroke")]) == len(icon_library()[project.nodes[0].icon]["paths"])
     assert '#21172F' in svg and 'fill="#FFFFFF"' in svg
     assert "<image" not in svg  # self-contained SVG, no file paths or external URLs
     if shutil.which("rsvg-convert"):
@@ -197,6 +197,7 @@ def test_explicit_figure_label_color_is_preserved_in_export(theme):
     project = icon_project()
     project.presentation.theme = theme
     project.nodes[0].style.text = "#FF9933"
+    project.nodes[0].style.text_mode = "custom"
     root = ElementTree.fromstring(render_svg(project)[0])
     group = next(e for e in root.iter() if e.get("data-node") == "shield")
     text = next(e for e in group if e.tag.endswith("text"))

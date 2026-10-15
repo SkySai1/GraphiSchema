@@ -24,18 +24,18 @@ enum NativeUISmokeTest {
     private static var restorePreferences: (() -> Void)?
     static func run() {
         _ = NSApplication.shared
-        let preferencesBackup = UserDefaults.standard.object(forKey: "GraphiSchema.ollama.preferences")
-        let navigationBackup = UserDefaults.standard.object(forKey: "GraphiSchema.inverseTrackpad")
-        let themeBackup = UserDefaults.standard.object(forKey: "GraphiSchema.themeMode")
-        let starterBackup = UserDefaults.standard.object(forKey: "GraphiSchema.loadStarterOnLaunch")
+        let preferencesBackup = SettingsStore.shared.object(forKey: "GraphiSchema.ollama.preferences")
+        let navigationBackup = SettingsStore.shared.object(forKey: "GraphiSchema.inverseTrackpad")
+        let themeBackup = SettingsStore.shared.object(forKey: "GraphiSchema.themeMode")
+        let starterBackup = SettingsStore.shared.object(forKey: "GraphiSchema.loadStarterOnLaunch")
         restorePreferences = {
-            UserDefaults.standard.set(preferencesBackup, forKey: "GraphiSchema.ollama.preferences")
-            UserDefaults.standard.set(navigationBackup, forKey: "GraphiSchema.inverseTrackpad")
-            UserDefaults.standard.set(themeBackup, forKey: "GraphiSchema.themeMode")
-            UserDefaults.standard.set(starterBackup, forKey: "GraphiSchema.loadStarterOnLaunch")
+            SettingsStore.shared.set(preferencesBackup, forKey: "GraphiSchema.ollama.preferences")
+            SettingsStore.shared.set(navigationBackup, forKey: "GraphiSchema.inverseTrackpad")
+            SettingsStore.shared.set(themeBackup, forKey: "GraphiSchema.themeMode")
+            SettingsStore.shared.set(starterBackup, forKey: "GraphiSchema.loadStarterOnLaunch")
         }
         defer { restorePreferences?(); restorePreferences = nil }
-        UserDefaults.standard.removeObject(forKey: "GraphiSchema.inverseTrackpad")
+        SettingsStore.shared.removeObject(forKey: "GraphiSchema.inverseTrackpad")
         let model = AppModel()
         guard !model.inverseTrackpad else { fail("Trackpad navigation must default to following finger movement.") }
         let candidates = [
@@ -317,10 +317,16 @@ enum NativeUISmokeTest {
         }
 
         let historyWindow = VersionHistoryWindowController(model: model, onRestore: {}, onShowDiff: { _ in })
-        historyWindow.update([
-            ProjectVersion(id: 2, projectId: "smoke", title: "Последняя версия", revision: "aabbccdd", createdAt: "2026-10-13T12:00:00Z"),
-            ProjectVersion(id: 1, projectId: "smoke", title: "Начальная версия", revision: "11223344", createdAt: "2026-10-13T11:00:00Z"),
-        ])
+        let ownVersions = [
+            ProjectVersion(id: 2, projectId: model.diagram!.project.id, title: "Последняя версия", revision: "aabbccdd", createdAt: "2026-10-13T12:00:00Z"),
+            ProjectVersion(id: 1, projectId: model.diagram!.project.id, title: "Начальная версия", revision: "11223344", createdAt: "2026-10-13T11:00:00Z"),
+        ]
+        historyWindow.update(ownVersions)
+        historyWindow.update([ProjectVersion(id: 99, projectId: "another_project", title: "Чужая история", revision: "foreign", createdAt: "2026-10-13T12:00:00Z")])
+        guard let historyRoot = historyWindow.window?.contentView,
+              let cleared = findView(identifier: "version-history-table", in: historyRoot) as? NSTableView,
+              cleared.numberOfRows == 0 else { fail("Foreign history must clear the previous snapshots and disable actions.") }
+        historyWindow.update(ownVersions)
         historyWindow.showWindow(nil)
         guard let historyContent = historyWindow.window?.contentView,
               let historyTable = findView(identifier: "version-history-table", in: historyContent) as? NSTableView,
@@ -332,7 +338,7 @@ enum NativeUISmokeTest {
         }
         historyWindow.close()
 
-        guard mainWindow.window?.title == "GraphiSchema",
+        guard mainWindow.window?.title.hasPrefix("GraphiSchema — ") == true,
               mainWindow.window?.contentView?.subviews.isEmpty == false,
               assistantWindow.window?.title == "GraphiSchema · Ollama",
               assistantWindow.window?.contentView?.subviews.isEmpty == false,
@@ -1175,8 +1181,10 @@ enum NativeUISmokeTest {
     }
 
     private static func checkPDFOptions(mainWindow: MainWindowController) {
-        guard let window = mainWindow.window,
-              let fileMenu = NSApp.mainMenu?.items.first(where: { $0.title == "Файл" })?.submenu,
+        guard let window = mainWindow.window else { fail("PDF regression requires an editor window.") }
+        window.makeKeyAndOrderFront(nil)
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
+        guard let fileMenu = NSApp.mainMenu?.items.first(where: { $0.title == "Файл" })?.submenu,
               let export = fileMenu.items.first(where: { $0.title == "Экспортировать PDF…" }),
               let action = export.action else { fail("PDF export menu action is missing.") }
         _ = NSApp.sendAction(action, to: export.target, from: export)
