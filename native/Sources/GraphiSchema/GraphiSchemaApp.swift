@@ -118,6 +118,7 @@ enum GraphiSchemaApp {
         let lifecycle = AppLifecycle()
         application.delegate = lifecycle
         application.setActivationPolicy(.regular)
+        AppIcon.install(on: application)
         application.run()
     }
 }

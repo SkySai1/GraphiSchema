@@ -63,6 +63,9 @@ cp "$ROOT/pyproject.toml" "$ROOT/uv.lock" "$ROOT/README.md" "$ROOT/requirements.
 cp "$ROOT/TODO.md" "$BUNDLED_PROJECT/"
 cp -R "$ROOT/docs" "$BUNDLED_PROJECT/docs"
 cp "$ROOT/LICENSE" "$RESOURCES/LICENSE"
+echo "GraphiSchema: сборка иконки приложения…"
+"$ROOT/scripts/build_app_icon.sh" "$RESOURCES/GraphiSchema.icns"
+cp "$ROOT/resources/app-icon/GraphiSchema.png" "$RESOURCES/GraphiSchema.png"
 
 cat > "$CONTENTS/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -75,6 +78,7 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
   <key>CFBundleVersion</key><string>0.1.0</string>
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
   <key>CFBundleExecutable</key><string>GraphiSchema</string>
+  <key>CFBundleIconFile</key><string>GraphiSchema.icns</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSPrincipalClass</key><string>NSApplication</string>

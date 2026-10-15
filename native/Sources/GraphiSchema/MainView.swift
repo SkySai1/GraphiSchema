@@ -196,13 +196,11 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
     }
 
     private func buildHeader() -> NSView {
-        let mark = NSTextField(labelWithString: "G")
-        mark.font = .systemFont(ofSize: 20, weight: .heavy)
-        mark.textColor = .white
-        mark.alignment = .center
-        mark.wantsLayer = true
-        mark.layer?.backgroundColor = NSColor(hex: "#3867E8").cgColor
-        mark.layer?.cornerRadius = 9
+        let mark = NSImageView()
+        mark.image = AppIcon.image
+        mark.imageScaling = .scaleProportionallyUpOrDown
+        mark.identifier = NSUserInterfaceItemIdentifier("app-icon")
+        mark.setAccessibilityLabel("GraphiSchema")
         mark.widthAnchor.constraint(equalToConstant: 38).isActive = true
         mark.heightAnchor.constraint(equalToConstant: 38).isActive = true
 
