@@ -117,6 +117,7 @@ def to_dot(project: DiagramProject) -> str:
             "weight": str(style.weight),
             "minlen": str(style.minlen),
             "gs_label_background_transparent": "true" if style.label_background_transparent else "false",
+            "fontsize": str(style.font_size),
         }
         for key, port in (("tailport", edge.source_port), ("headport", edge.target_port)):
             if port in {"n", "ne", "e", "se", "s", "sw", "w", "nw"}:

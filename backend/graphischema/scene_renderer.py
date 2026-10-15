@@ -93,11 +93,13 @@ def render_scene(project, layout, background=None):
         if edge.label:
             x, y = point(g["labelX"] or 0, g["labelY"] or 0)
             label_color, label_alpha = color(edge.style.text or text)
+            font_size = style.font_size
             if not style.label_background_transparent:
-                label_width = estimated_text_width(edge.label, 9) + 10
+                label_width = estimated_text_width(edge.label, font_size) + 10
+                label_height = max(16, font_size*1.25+4)
                 label_background = "#352C43" if dark else "#FFFFFF"
-                out.append(f'<rect data-edge-label-background="{edge.id}" x="{x-label_width/2:.4f}" y="{y-8:.4f}" width="{label_width:.4f}" height="16" rx="6" fill="{label_background}"/>')
-            out.append(f'<text data-edge-label="{edge.id}" x="{x:.4f}" y="{y+3:.4f}" text-anchor="middle" fill="{label_color}" fill-opacity="{label_alpha:.4f}" font-family="Arial,sans-serif" font-size="9" font-weight="500">{html.escape(edge.label)}</text>')
+                out.append(f'<rect data-edge-label-background="{edge.id}" x="{x-label_width/2:.4f}" y="{y-label_height/2:.4f}" width="{label_width:.4f}" height="{label_height:g}" rx="6" fill="{label_background}"/>')
+            out.append(f'<text data-edge-label="{edge.id}" x="{x:.4f}" y="{y+font_size/3:.4f}" text-anchor="middle" fill="{label_color}" fill-opacity="{label_alpha:.4f}" font-family="Arial,sans-serif" font-size="{font_size:g}" font-weight="500">{html.escape(edge.label)}</text>')
     # Keep equal-depth objects in their project order, while honoring the
     # editor's explicit paint order in both SVG and the native canvas.
     ordered_nodes = sorted(enumerate(project.nodes), key=lambda pair: (pair[1].z_index, pair[0]))

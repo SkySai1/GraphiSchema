@@ -133,6 +133,7 @@ final class BackendService: ObservableObject {
                 && payload["dot_sync"] == "three_way_v1"
                 && payload["canvas_geometry"] == "icon_ports_v1"
                 && payload["node_text"] == "fontsize_v1"
+                && payload["edge_text"] == "fontsize_v1"
                 && payload["label_wrap"] == "renderer_v1"
                 && payload["selection_colors"] == "rgba_v1"
                 && payload["edge_label_background"] == "project_defaults_v2"

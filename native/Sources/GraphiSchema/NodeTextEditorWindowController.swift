@@ -33,7 +33,7 @@ final class NodeTextEditorWindowController: NSWindowController, NSTextViewDelega
         values = Values(node)
         fontSizeField = NSTextField(string: String(format: "%.1f", node.style.effectiveFontSize))
         changed = onChange
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 390, height: 455),
+        let window = InspectorPanel(contentRect: NSRect(x: 0, y: 0, width: 390, height: 455),
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "Текст фигуры"
         window.identifier = NSUserInterfaceItemIdentifier("node-text-window")

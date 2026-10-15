@@ -59,11 +59,8 @@ final class ColorEditorWindowController: NSWindowController, ProjectThemedWindow
     init(parameter: DiagramColorParameter, model: AppModel) {
         self.parameter = parameter
         self.model = model
-        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 360, height: 540),
+        let panel = InspectorPanel(contentRect: NSRect(x: 0, y: 0, width: 360, height: 540),
                             styleMask: [.titled, .closable, .utilityWindow], backing: .buffered, defer: false)
-        panel.isReleasedWhenClosed = false
-        panel.hidesOnDeactivate = true
-        panel.isFloatingPanel = true
         panel.title = "Цвет · \(parameter.title)"
         panel.identifier = NSUserInterfaceItemIdentifier("color-window-\(parameter.rawValue)")
         super.init(window: panel)

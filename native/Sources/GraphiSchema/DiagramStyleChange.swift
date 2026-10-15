@@ -9,6 +9,10 @@ enum DiagramStyleChange: Equatable {
     case direction(String)
     case routing(String?)
     case labelBackgroundTransparent(Bool)
+    case fontSize(Double)
+    case labelAlignment(String)
+    case labelVerticalAlignment(String)
+    case labelWrap(Bool)
     case reverse
 
     var isValid: Bool {
@@ -18,7 +22,10 @@ enum DiagramStyleChange: Equatable {
         case .arrowhead(let value), .arrowtail(let value): return DiagramStyleOptions.arrows.contains { $0.value == value }
         case .direction(let value): return DiagramStyleOptions.directions.contains { $0.value == value }
         case .routing(let value): return DiagramStyleOptions.routes.contains { $0.value == (value ?? "") }
-        case .labelBackgroundTransparent, .reverse: return true
+        case .fontSize(let value): return value.isFinite && (1...144).contains(value)
+        case .labelAlignment(let value): return DiagramStyleOptions.textAlignment.contains { $0.value == value }
+        case .labelVerticalAlignment(let value): return DiagramStyleOptions.textVerticalAlignment.contains { $0.value == value }
+        case .labelBackgroundTransparent, .labelWrap, .reverse: return true
         }
     }
 }
@@ -29,6 +36,12 @@ struct DiagramStyleCommand {
 }
 
 enum DiagramStyleOptions {
+    static let textAlignment: [(value: String, title: String)] = [
+        ("left", "Влево"), ("center", "По центру"), ("right", "Вправо"),
+    ]
+    static let textVerticalAlignment: [(value: String, title: String)] = [
+        ("top", "Сверху"), ("middle", "Посередине"), ("bottom", "Снизу"),
+    ]
     static let nodeLines: [(value: String, title: String)] = [
         ("solid", "Сплошная"), ("dashed", "Пунктирная"), ("dotted", "Точечная"),
     ]

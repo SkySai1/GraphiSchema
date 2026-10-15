@@ -35,6 +35,7 @@ penwidth контейнера: 0.5–10 pt, JSON containers[].style.penwidth (п
 dir: forward, both, none. style: solid, dashed, dotted, bold. penwidth: 0.5–10.
 arrowhead/arrowtail: normal, vee, none, diamond, dot, box, crow, tee.
 fontcolor связи: JSON edges[].style.text, #RRGGBB или #RRGGBBAA. null сохраняет автоматический контраст по теме; явный цвет сохраняется при смене темы.
+fontsize связи: 1–144 пункта; JSON edges[].style.font_size, по умолчанию 9. Применяется на холсте и при экспорте SVG/PNG/PDF. Для группы можно задать один размер сразу всем выбранным связям.
 JSON edges[].style.label_background_transparent: false рисует непрозрачную плашку под подписью в цвете темы, true отключает плашку. Сам цвет текста задаётся отдельно через style.text. Старые файлы без этого поля сохраняют непрозрачную плашку.
 gs_label_background_transparent=true/false: расширение DOT для сохранения этой опции в GraphiSchema; фон подписи рисуют SVG/AppKit-рендереры приложения, сам Graphviz этот атрибут игнорирует.
 JSON presentation.default_edge_label_background_transparent: фон новых связей по умолчанию, true для нового проекта. Отсутствующее индивидуальное значение новой связи наследует настройку проекта. Существующие и явно заданные значения сохраняются. При add_edge не задавай индивидуальный фон без необходимости: будет использовано значение проекта.

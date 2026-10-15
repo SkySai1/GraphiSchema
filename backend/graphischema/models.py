@@ -155,6 +155,7 @@ class EdgeStyle(StrictModel):
     # preference in the editor, DOT conversion and modern canonical documents.
     label_background_transparent: bool = False
     penwidth: float = Field(default=1.5, ge=0.5, le=10)
+    font_size: float = Field(default=9.0, ge=1, le=144, allow_inf_nan=False)
     arrowhead: Literal["normal", "vee", "none", "diamond", "dot", "box", "crow", "tee"] = "normal"
     arrowtail: Literal["normal", "vee", "none", "diamond", "dot", "box", "crow", "tee"] = "none"
     constraint: bool = True

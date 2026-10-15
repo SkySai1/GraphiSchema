@@ -384,7 +384,6 @@ def _build_edges(project: DiagramProject, statements: list[EdgeStatement], defau
         attrs = statement.attrs
         _check_attrs(attrs, {"label", "color", "fontcolor", "style", "penwidth", "arrowhead", "arrowtail", "dir", "constraint", "weight", "minlen", "fontname", "fontsize", "headport", "tailport", "gs_source_port", "gs_target_port", "gs_routing", "gs_waypoints", "gs_label_background_transparent", "gs_color_mode", "gs_text_mode"}, f"связи {statement.source} -> {statement.target}")
         _require_value(attrs, "fontname", "Arial", "связи")
-        _require_value(attrs, "fontsize", "9", "связи")
         old_candidates = old_by_pair.get((statement.source, statement.target), [])
         label = attrs.get("label", "")
         old = next((item for item in old_candidates if item.id not in used and item.label == label), None)
@@ -428,6 +427,7 @@ def _build_edges(project: DiagramProject, statements: list[EdgeStatement], defau
                 "text": attrs.get("fontcolor", old.style.text if old else None),
                 "label_background_transparent": label_background == "true",
                 "penwidth": _number(attrs.get("penwidth", str(old.style.penwidth if old else 1.5)), "penwidth связи"),
+                "font_size": _number(attrs.get("fontsize", str(old.style.font_size if old else 9)), "fontsize связи"),
                 "arrowhead": attrs.get("arrowhead", old.style.arrowhead if old else "normal"),
                 "arrowtail": attrs.get("arrowtail", old.style.arrowtail if old else "none"),
                 "constraint": constraint == "true",

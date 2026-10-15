@@ -116,6 +116,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         Task { try? await model.saveNow() }
         historyWindowController?.close()
         branchManager?.close()
+        styleWindowController?.close()
         for editor in colorEditors.values { editor.close() }
         nodeTextEditorController?.close()
         elementTextEditorController?.close()
@@ -306,11 +307,11 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         workspace.onSetEdgeWaypoints = { [weak self] id, points, positions in
             self?.model.setEdgeWaypoints(id, points: points, positions: positions)
         }
-        workspace.onReattachEdge = { [weak self] id, source, nodeID in
-            self?.model.setEdgeEndpoint(id, source: source, nodeID: nodeID)
+        workspace.onReattachEdge = { [weak self] id, source, nodeID, port in
+            self?.model.setEdgeEndpoint(id, source: source, nodeID: nodeID, port: port)
         }
-        workspace.onCreateEdge = { [weak self] source, target in
-            self?.model.addEdge(from: source, to: target)
+        workspace.onCreateEdge = { [weak self] source, target, port in
+            self?.model.addEdge(from: source, to: target, targetPort: port)
         }
         workspace.onMoveContainer = { [weak self] id, x, y in
             self?.model.moveContainer(id, deltaX: x, deltaY: y)
@@ -495,6 +496,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         menuItems["theme-dark"]?.state = model.themeMode == "dark" ? .on : .off
         menuItems["inverse-trackpad"]?.state = model.inverseTrackpad ? .on : .off
         menuItems["alignment-guides"]?.state = model.alignmentGuides ? .on : .off
+        menuItems["view-grid"]?.state = workspace.isGridVisible ? .on : .off
         menuItems["style-selection"]?.isEnabled = hasSelectedElement && !model.isEditingLocked
         menuItems["style-project"]?.isEnabled = model.diagram != nil && !model.isEditingLocked
         for panel in [styleWindowController?.window, nodeTextEditorController?.window, elementTextEditorController?.window].compactMap({ $0 }) {
@@ -557,6 +559,11 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         view.addItem(menuItem("Показать/скрыть свойства и код", #selector(toggleCodePanelFromMenu(_:)), key: "2", modifiers: [.command, .option]))
         view.addItem(menuItem("Показать/скрыть чат", #selector(toggleChatFromMenu(_:)), key: "3", modifiers: [.command, .option]))
         view.addItem(.separator())
+        let grid = menuItem("Сетка", #selector(toggleGridFromMenu(_:)))
+        grid.identifier = NSUserInterfaceItemIdentifier("view-grid")
+        grid.state = workspace.isGridVisible ? .on : .off
+        menuItems["view-grid"] = grid
+        view.addItem(grid)
         view.addItem(menuItem("Оптимизировать все линии", #selector(optimizeRoutesFromMenu(_:))))
         viewRoot.submenu = view
         let alignment = menuItem("Помощь в выравнивании", #selector(toggleAlignmentFromMenu(_:)), key: "a", modifiers: [.command, .shift])
@@ -564,30 +571,27 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         alignment.state = model.alignmentGuides ? .on : .off
         view.addItem(alignment)
 
-        let styleRoot = NSMenuItem(title: "Оформление", action: nil, keyEquivalent: "")
-        let styleMenu = NSMenu()
+        let settingsRoot = NSMenuItem(title: "Настройки", action: nil, keyEquivalent: ""); main.addItem(settingsRoot)
+        let settings = NSMenu()
+        let projectStyle = menuItem("Настройки проекта…", #selector(showProjectStyleFromMenu(_:)))
+        projectStyle.identifier = NSUserInterfaceItemIdentifier("style-project")
+        menuItems["style-project"] = projectStyle
+        projectStyle.isEnabled = model.diagram != nil && !model.isEditingLocked
+        settings.addItem(projectStyle)
         let selectedStyle = menuItem("Выделенный объект…", #selector(showSelectedStyleFromMenu(_:)))
         selectedStyle.identifier = NSUserInterfaceItemIdentifier("style-selection")
         menuItems["style-selection"] = selectedStyle
         selectedStyle.isEnabled = hasSelectedElement && !model.isEditingLocked
-        styleMenu.addItem(selectedStyle)
-        let projectStyle = menuItem("Настройки проекта…", #selector(showProjectStyleFromMenu(_:)))
-        projectStyle.identifier = NSUserInterfaceItemIdentifier("style-project")
-        menuItems["style-project"] = projectStyle
-        styleMenu.addItem(projectStyle)
-        styleMenu.addItem(.separator())
+        settings.addItem(selectedStyle)
+        settings.addItem(.separator())
         for parameter in DiagramColorParameter.allCases {
             let item = menuItem("Цвет: \(parameter.title.lowercased())…", #selector(showColorFromMenu(_:)),
                                 key: parameter.shortcut, modifiers: [.command, .option])
             item.representedObject = parameter.rawValue
             item.identifier = NSUserInterfaceItemIdentifier("color-menu-\(parameter.rawValue)")
-            styleMenu.addItem(item)
+            settings.addItem(item)
         }
-        styleRoot.submenu = styleMenu
-        main.addItem(styleRoot)
-
-        let settingsRoot = NSMenuItem(title: "Настройки", action: nil, keyEquivalent: ""); main.addItem(settingsRoot)
-        let settings = NSMenu()
+        settings.addItem(.separator())
         settings.addItem(menuItem("Ollama и системный промпт…", #selector(showOllamaFromMenu(_:))))
         settings.addItem(menuItem("Переменные промпта…", #selector(showPromptVariablesFromMenu(_:))))
         let startup = menuItem("Загружать базовый шаблон при пустом проекте", #selector(toggleStarterOnLaunch(_:)))
@@ -704,6 +708,10 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
     @objc private func toggleSidebarFromMenu(_ sender: Any?) { toggleSidebar() }
     @objc private func toggleCodePanelFromMenu(_ sender: Any?) { toggleCodePanel() }
     @objc private func toggleChatFromMenu(_ sender: Any?) { workspace.setChatVisible(!workspace.isChatVisible) }
+    @objc private func toggleGridFromMenu(_ sender: Any?) {
+        workspace.toggleGrid()
+        menuItems["view-grid"]?.state = workspace.isGridVisible ? .on : .off
+    }
     @objc private func optimizeRoutesFromMenu(_ sender: Any?) { model.optimizeAllRoutes() }
     @objc private func showOllamaFromMenu(_ sender: Any?) { showOllamaAssistant() }
     @objc private func showPromptVariablesFromMenu(_ sender: Any?) { showOllamaAssistant(showVariables: true) }
@@ -814,7 +822,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
             return
         }
         let contentHeight = inspector.preferredWindowContentHeight
-        let window = NSWindow(
+        let window = InspectorPanel(
             contentRect: NSRect(x: 0, y: 0, width: inspector.preferredWindowContentWidth, height: contentHeight),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
@@ -2119,9 +2127,9 @@ private final class WorkspaceView: NSView {
     var onEditNodeText: ((String) -> Void)?
     var onEditElementText: ((DiagramSelection) -> Void)?
     var onResetSelectedRoutes: (() -> Void)?
-    var onCreateEdge: ((String, String) -> Void)?
+    var onCreateEdge: ((String, String, String) -> Void)?
     var onSetEdgeWaypoints: ((String, [RoutePoint], [LayoutNode]) -> Void)?
-    var onReattachEdge: ((String, Bool, String) -> Void)?
+    var onReattachEdge: ((String, Bool, String, String) -> Void)?
     var onMoveContainer: ((String, Double, Double) -> Void)?
     var onResizeContainer: ((String, Double) -> Void)?
     var onResizeEmptyContainer: ((String, Double, Double) -> Void)?
@@ -2233,6 +2241,9 @@ private final class WorkspaceView: NSView {
 
     func fitCanvasToContent() { canvasView.fitToContent() }
 
+    var isGridVisible: Bool { canvasView.isGridVisible }
+    func toggleGrid() { canvasView.isGridVisible.toggle() }
+
     private func updateLayoutControls(_ model: AppModel) {
         let enabled = model.diagram != nil && !model.isEditingLocked
         autoLayoutButton.isEnabled = enabled
@@ -2277,14 +2288,6 @@ private final class WorkspaceView: NSView {
         zoomIn.toolTip = "Увеличить масштаб"
         let fit = makeButton("Вписать", symbol: "arrow.up.left.and.arrow.down.right") { [weak self] _ in self?.canvasView.fitToContent() }
         fit.toolTip = "Вписать диаграмму в холст"
-        let grid = makeButton("Сетка", symbol: "circle.grid.3x3") { [weak self] sender in
-            guard let self else { return }
-            self.canvasView.isGridVisible.toggle()
-            (sender as? NSButton)?.contentTintColor = self.canvasView.isGridVisible
-                ? NSColor.controlAccentColor
-                : NSColor.secondaryLabelColor
-        }
-        grid.toolTip = "Показать или скрыть сетку"
         let sidebarToggle = makeButton("", symbol: "sidebar.left") { [weak self] _ in self?.onToggleSidebar?() }
         sidebarToggle.imagePosition = .imageOnly; sidebarToggle.toolTip = "Показать или скрыть левую панель"
         let codeToggle = makeButton("", symbol: "sidebar.right") { [weak self] _ in self?.onToggleCodePanel?() }
@@ -2330,8 +2333,8 @@ private final class WorkspaceView: NSView {
         canvasView.onEditElementText = { [weak self] target in self?.onEditElementText?(target) }
         canvasView.onResetSelectedRoutes = { [weak self] in self?.onResetSelectedRoutes?() }
         canvasView.onSetEdgeWaypoints = { [weak self] id, points, positions in self?.onSetEdgeWaypoints?(id, points, positions) }
-        canvasView.onReattachEdge = { [weak self] id, source, nodeID in self?.onReattachEdge?(id, source, nodeID) }
-        canvasView.onCreateEdge = { [weak self] source, target in self?.onCreateEdge?(source, target) }
+        canvasView.onReattachEdge = { [weak self] id, source, nodeID, port in self?.onReattachEdge?(id, source, nodeID, port) }
+        canvasView.onCreateEdge = { [weak self] source, target, port in self?.onCreateEdge?(source, target, port) }
         canvasView.onMoveContainer = { [weak self] id, x, y in self?.onMoveContainer?(id, x, y) }
         canvasView.onResizeContainer = { [weak self] id, padding in self?.onResizeContainer?(id, padding) }
         canvasView.onResizeEmptyContainer = { [weak self] id, width, height in self?.onResizeEmptyContainer?(id, width, height) }
@@ -2360,7 +2363,6 @@ private final class WorkspaceView: NSView {
         header.addArrangedSubview(zoomOut)
         header.addArrangedSubview(zoomIn)
         header.addArrangedSubview(fit)
-        header.addArrangedSubview(grid)
         header.addArrangedSubview(optimize)
         header.addArrangedSubview(sidebarToggle)
         header.addArrangedSubview(codeToggle)
@@ -2760,6 +2762,26 @@ private final class InspectorView: NSView {
                 addColor("Заливка", value: node.style.fill, parameter: .fill)
                 addColor("Граница", value: node.style.stroke, parameter: .stroke)
                 addColor("Текст", value: model.colorSelection(for: .text).color ?? node.style.text, parameter: .text)
+                let nodes = model.nodes.filter { ids.contains($0.id) }
+                addSection("ТЕКСТ ГРУППЫ")
+                addTextSize(values: nodes.map { $0.style.effectiveFontSize }, target: .nodes(ids), model: model)
+                let horizontal = Set(nodes.map(\.effectiveLabelAlignment))
+                addPopup("Выравнивание текста", value: horizontal.count == 1 ? node.effectiveLabelAlignment : "",
+                         choices: DiagramStyleOptions.textAlignment, mixed: horizontal.count > 1,
+                         tooltip: "Выравнивает подписи всех выбранных фигур влево, по центру или вправо. «Разные значения» означает смешанное выравнивание; выбор применит одно значение всей группе.") {
+                    model.setStyle(.labelAlignment($0), for: .nodes(ids))
+                }
+                let vertical = Set(nodes.map(\.effectiveLabelVerticalAlignment))
+                addPopup("Положение текста", value: vertical.count == 1 ? node.effectiveLabelVerticalAlignment : "",
+                         choices: DiagramStyleOptions.textVerticalAlignment, mixed: vertical.count > 1,
+                         tooltip: "Размещает текст сверху, посередине или снизу каждой выбранной фигуры. Изменяется положение подписей внутри фигур.") {
+                    model.setStyle(.labelVerticalAlignment($0), for: .nodes(ids))
+                }
+                let wrapping = Set(nodes.map(\.effectiveLabelWrap))
+                addCheckbox("Перенос строк", value: node.effectiveLabelWrap, mixed: wrapping.count > 1,
+                            tooltip: "Включает или выключает автоматический перенос слов по ширине каждой выбранной фигуры. Прочерк означает разные значения. При включении фиксируются текущие размеры фигур, чтобы текст переносился по их ширине.") {
+                    model.setStyle(.labelWrap($0), for: .nodes(ids))
+                }
             }
         case .node(let id):
             title.stringValue = "Компонент"
@@ -2807,17 +2829,14 @@ private final class InspectorView: NSView {
                 addColor("Заливка", value: node.style.fill, parameter: .fill)
                 addColor("Граница", value: node.style.stroke, parameter: .stroke)
                 addColor("Текст", value: model.colorSelection(for: .text).color ?? node.style.text, parameter: .text)
-                addText("Размер текста, pt", value: String(format: "%.1f", node.style.effectiveFontSize), tooltip: "Размер подписи в пунктах (1–144). Допустимые значения применяются сразу на холсте и при экспорте; сохраняются как Graphviz fontsize. Размер фигуры задаётся отдельно.", continuous: true) { value in
-                    guard let size = Double(value.replacingOccurrences(of: ",", with: ".")), size.isFinite, (1...144).contains(size) else { return }
-                    model.editNode(id) { $0.style.fontSize = size }
-                }
+                addTextSize(values: [node.style.effectiveFontSize], target: .node(id), model: model)
                 addPopup("Стиль контура", value: node.style.effectiveLineStyle, choices: DiagramStyleOptions.nodeLines,
                          tooltip: "Сплошная, пунктирная или точечная обводка фигуры, включая её внутренние линии. Длина штрихов и промежутки пропорциональны толщине контура, поэтому при утолщении они не сливаются. Сохраняется в Graphviz style и применяется при экспорте.") { value in
                     model.setStyle(.lineStyle(value), for: .node(id))
                 }
                 addStrokeWidth("Толщина контура, pt", value: node.style.penwidth, target: .node(id), model: model)
                 addCheckbox("Перенос строк", value: node.effectiveLabelWrap, tooltip: "Переносит слова по ширине фигуры сразу после включения. Длинное слово разбивается по символам. Ручные переводы строк работают и без этой опции. Если текст не помещается по высоте, увеличьте фигуру.") { value in
-                    model.editNode(id) { $0.labelWrap = value }
+                    model.setStyle(.labelWrap(value), for: .node(id))
                 }
                 addText("Ширина, in", value: String(format: "%.3f", node.width ?? model.layout?.nodes.first(where: { $0.id == id })?.width ?? 1), tooltip: "Ширина фигуры в дюймах (0.5–10), независимо от высоты. Соответствует Graphviz width с fixedsize=true.") { value in
                     guard let width = Double(value), width.isFinite, (0.5...10).contains(width) else { return }
@@ -2827,12 +2846,8 @@ private final class InspectorView: NSView {
                     guard let height = Double(value), height.isFinite, (0.5...10).contains(height) else { return }
                     model.editNode(id) { $0.height = height; $0.width = node.width ?? model.layout?.nodes.first(where: { $0.id == id })?.width ?? 1 }
                 }
-                addPopup("Выравнивание текста", value: node.effectiveLabelAlignment, choices: [
-                    ("left", "Влево"), ("center", "По центру"), ("right", "Вправо"),
-                ]) { value in model.editNode(id) { $0.labelAlignment = value } }
-                addPopup("Положение текста", value: node.effectiveLabelVerticalAlignment, choices: [
-                    ("top", "Сверху"), ("middle", "Посередине"), ("bottom", "Снизу"),
-                ]) { value in model.editNode(id) { $0.labelVerticalAlignment = value } }
+                addPopup("Выравнивание текста", value: node.effectiveLabelAlignment, choices: DiagramStyleOptions.textAlignment) { model.setStyle(.labelAlignment($0), for: .node(id)) }
+                addPopup("Положение текста", value: node.effectiveLabelVerticalAlignment, choices: DiagramStyleOptions.textVerticalAlignment) { model.setStyle(.labelVerticalAlignment($0), for: .node(id)) }
             }
         case .container(let id):
             title.stringValue = "Контейнер"
@@ -2871,6 +2886,8 @@ private final class InspectorView: NSView {
                 addPopup("Хвост", value: item.style.arrowtail, choices: DiagramStyleOptions.arrows) { model.setStyle(.arrowtail($0), for: .edges(ids)) }
                 addStrokeWidth("Толщина, pt", value: item.style.penwidth, target: .edges(ids), model: model)
                 addColor("Линия", value: model.colorSelection(for: .stroke).color ?? item.style.color, parameter: .stroke)
+                addSection("ТЕКСТ ГРУППЫ")
+                addTextSize(values: model.edges.filter { ids.contains($0.id) }.map { $0.style.effectiveFontSize }, target: .edges(ids), model: model)
                 addColor("Текст", value: model.colorSelection(for: .text).color ?? "#000000", parameter: .text)
                 let backgrounds = Set(model.edges.filter { ids.contains($0.id) }.map { $0.style.effectiveLabelBackgroundTransparent })
                 addCheckbox("Прозрачный фон подписи", value: item.style.effectiveLabelBackgroundTransparent, mixed: backgrounds.count > 1,
@@ -2888,6 +2905,7 @@ private final class InspectorView: NSView {
                     guard value.unicodeScalars.count <= 160 else { return }
                     model.editEdge(id) { $0.label = value }
                 }
+                addTextSize(values: [item.style.effectiveFontSize], target: .edge(id), model: model)
                 addCheckbox("Прозрачный фон подписи", value: item.style.effectiveLabelBackgroundTransparent,
                             tooltip: "Включён: подпись рисуется без фоновой плашки, видны линии и объекты под текстом. Выключен: непрозрачная плашка в цвете текущей темы улучшает читаемость. Применяется сразу на холсте и при экспорте; цвет текста задаётся отдельно.") { value in
                     model.setStyle(.labelBackgroundTransparent(value), for: .edge(id))
@@ -3037,10 +3055,21 @@ private final class InspectorView: NSView {
         }
     }
 
-    private func addText(_ label: String, value: String, tooltip: String? = nil, continuous: Bool = false, changed: @escaping (String) -> Void) {
+    private func addTextSize(values: [Double], target: DiagramSelection, model: AppModel) {
+        guard let first = values.first else { return }
+        let mixed = Set(values).count > 1
+        addText("Размер текста, pt", value: mixed ? "" : String(format: "%.1f", first), placeholder: mixed ? "Разные значения" : nil,
+                tooltip: "Размер подписей в пунктах (1–144). Допустимый ввод сразу применяется ко всем выбранным элементам. «Разные значения» означает разные размеры в группе. Размер сохраняется как Graphviz fontsize и учитывается при экспорте. ⌘Z отменяет групповую правку.", continuous: true) { value in
+            guard let size = Double(value.replacingOccurrences(of: ",", with: ".")) else { return }
+            model.setStyle(.fontSize(size), for: target)
+        }
+    }
+
+    private func addText(_ label: String, value: String, placeholder: String? = nil, tooltip: String? = nil, continuous: Bool = false, changed: @escaping (String) -> Void) {
         let field = NSTextField(string: value)
         field.identifier = NSUserInterfaceItemIdentifier("inspector-field-\(label)")
         field.font = .systemFont(ofSize: 11)
+        field.placeholderString = placeholder
         field.toolTip = tooltip
         field.cell?.sendsActionOnEndEditing = true
         addField(label, control: field, tooltip: tooltip, continuous: continuous) { sender in
@@ -3067,10 +3096,16 @@ private final class InspectorView: NSView {
         addField(label, control: field, action: nil)
     }
 
-    private func addPopup(_ label: String, value: String, choices: [(String, String)], tooltip: String? = nil, changed: @escaping (String) -> Void) {
+    private func addPopup(_ label: String, value: String, choices: [(String, String)], mixed: Bool = false, tooltip: String? = nil, changed: @escaping (String) -> Void) {
         let popup = NSPopUpButton()
         popup.identifier = NSUserInterfaceItemIdentifier("inspector-field-\(label)")
         popup.toolTip = tooltip
+        popup.autoenablesItems = false
+        if mixed {
+            popup.addItem(withTitle: "Разные значения")
+            popup.lastItem?.representedObject = ""
+            popup.lastItem?.isEnabled = false
+        }
         for (key, title) in choices {
             popup.addItem(withTitle: title)
             popup.lastItem?.representedObject = key

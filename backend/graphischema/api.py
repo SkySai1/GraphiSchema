@@ -111,6 +111,7 @@ def health() -> dict[str, str]:
         "dot_sync": "three_way_v1",
         "canvas_geometry": "icon_ports_v1",
         "node_text": "fontsize_v1",
+        "edge_text": "fontsize_v1",
         "label_wrap": "renderer_v1",
         "selection_colors": "rgba_v1",
         "edge_label_background": "project_defaults_v2",

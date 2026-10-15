@@ -308,13 +308,18 @@ final class AppModel: ObservableObject {
         changed()
     }
 
-    func setEdgeEndpoint(_ id: String, source: Bool, nodeID: String) {
+    func setEdgeEndpoint(_ id: String, source: Bool, nodeID: String, port: String = "auto") {
         guard !isEditingLocked, var current = diagram,
-              current.nodes.contains(where: { $0.id == nodeID }),
+              let node = current.nodes.first(where: { $0.id == nodeID }),
+              CanvasGeometry.portChoices(node).contains(where: { $0.0 == port }),
               let index = current.edges.firstIndex(where: { $0.id == id }) else { return }
-        if source { current.edges[index].source = nodeID; current.edges[index].sourcePort = "auto" }
-        else { current.edges[index].target = nodeID; current.edges[index].targetPort = "auto" }
-        current.edges[index].waypoints = []
+        let previousNodeID = source ? current.edges[index].source : current.edges[index].target
+        if source { current.edges[index].source = nodeID; current.edges[index].sourcePort = port }
+        else { current.edges[index].target = nodeID; current.edges[index].targetPort = port }
+        // Moving between ports on the same figure keeps the user's route.
+        // A different figure starts a fresh route to the new endpoint.
+        if previousNodeID != nodeID { current.edges[index].waypoints = [] }
+        guard current != diagram else { return }
         diagram = current
         selection = .edge(id)
         changed()
@@ -563,12 +568,27 @@ final class AppModel: ObservableObject {
             if case .node(let id) = target { ids = [id] }
             else if case .nodes(let selected) = target { ids = selected }
             else { return }
+            let positions = change == .labelWrap(true)
+                ? Dictionary(uniqueKeysWithValues: (layout?.nodes ?? []).map { ($0.id, $0) }) : [:]
             for index in current.nodes.indices where ids.contains(current.nodes[index].id) {
                 switch change {
                 case .lineStyle(let value):
                     guard DiagramStyleOptions.nodeLines.contains(where: { $0.value == value }) else { return }
                     if current.nodes[index].style.effectiveLineStyle != value { current.nodes[index].style.lineStyle = value }
                 case .penwidth(let value): current.nodes[index].style.penwidth = value
+                case .fontSize(let value):
+                    if current.nodes[index].style.effectiveFontSize != value { current.nodes[index].style.fontSize = value }
+                case .labelAlignment(let value):
+                    if current.nodes[index].effectiveLabelAlignment != value { current.nodes[index].labelAlignment = value }
+                case .labelVerticalAlignment(let value):
+                    if current.nodes[index].effectiveLabelVerticalAlignment != value { current.nodes[index].labelVerticalAlignment = value }
+                case .labelWrap(let value):
+                    if current.nodes[index].effectiveLabelWrap != value { current.nodes[index].labelWrap = value }
+                    if value && current.nodes[index].width == nil {
+                        let position = positions[current.nodes[index].id]
+                        current.nodes[index].width = min(10, max(0.5, position?.width ?? 1.6))
+                        current.nodes[index].height = min(10, max(0.5, position?.height ?? 0.62))
+                    }
                 default: return
                 }
             }
@@ -599,6 +619,9 @@ final class AppModel: ObservableObject {
                 }
             case .routing(let value): current.edges[index].routing = value
             case .labelBackgroundTransparent(let value): current.edges[index].style.labelBackgroundTransparent = value
+            case .fontSize(let value):
+                if current.edges[index].style.effectiveFontSize != value { current.edges[index].style.fontSize = value }
+            case .labelAlignment, .labelVerticalAlignment, .labelWrap: return
             case .reverse:
                 let old = current.edges[index]
                 current.edges[index].source = old.target
@@ -863,7 +886,7 @@ final class AppModel: ObservableObject {
         changed()
     }
 
-    func addEdge(from sourceID: String? = nil, to targetID: String? = nil) {
+    func addEdge(from sourceID: String? = nil, to targetID: String? = nil, targetPort: String = "auto") {
         guard !isEditingLocked else { return }
         guard var current = diagram else { return }
         let source: DiagramNode?
@@ -883,6 +906,7 @@ final class AppModel: ObservableObject {
             onAlert?(alertMessage ?? "Добавьте компоненты для связи.")
             return
         }
+        guard CanvasGeometry.portChoices(target).contains(where: { $0.0 == targetPort }) else { return }
         let id = makeID("edge")
         current.edges.append(DiagramEdge(
             id: id,
@@ -891,7 +915,9 @@ final class AppModel: ObservableObject {
             label: "Новая связь",
             direction: "forward",
             style: EdgeStyle(colorMode: "theme", textMode: "theme", lineStyle: "solid", color: "#64748B", penwidth: 1.5, arrowhead: "normal", arrowtail: "none", constraint: true, weight: 1, minlen: 1,
-                             labelBackgroundTransparent: current.presentation.effectiveDefaultEdgeLabelBackgroundTransparent)
+                             labelBackgroundTransparent: current.presentation.effectiveDefaultEdgeLabelBackgroundTransparent),
+            sourcePort: "auto",
+            targetPort: targetPort
         ))
         diagram = current
         selection = .edge(id)

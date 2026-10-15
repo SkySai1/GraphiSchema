@@ -12,7 +12,7 @@ final class ElementTextEditorWindowController: NSWindowController, NSTextViewDel
     private var lastApplied: String?
     init(model: AppModel, selection: DiagramSelection) {
         self.model = model; self.selection = selection; projectID = model.projectID
-        let window = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 380, height: 178), styleMask: [.titled, .closable, .utilityWindow], backing: .buffered, defer: false)
+        let window = InspectorPanel(contentRect: NSRect(x: 0, y: 0, width: 380, height: 178), styleMask: [.titled, .closable, .utilityWindow], backing: .buffered, defer: false)
         window.title = selection.edgeIDs.isEmpty ? "Текст контейнера" : "Текст связи"
         window.identifier = NSUserInterfaceItemIdentifier("element-text-window")
         super.init(window: window)

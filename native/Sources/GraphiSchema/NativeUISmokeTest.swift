@@ -148,7 +148,7 @@ enum NativeUISmokeTest {
         checkLongPressTextEditor(mainWindow: mainWindow, root: root, nodeID: "waf")
         guard NSApp.mainMenu?.items.contains(where: { $0.title == "Файл" }) == true,
               NSApp.mainMenu?.items.contains(where: { $0.title == "Настройки" }) == true,
-              NSApp.mainMenu?.items.first(where: { $0.title == "Оформление" })?.submenu?.items.contains(where: { $0.title == "Выделенный объект…" }) == true,
+              NSApp.mainMenu?.items.first(where: { $0.title == "Настройки" })?.submenu?.items.contains(where: { $0.title == "Выделенный объект…" }) == true,
               NSColor(hex: "#33669980").hexRGBA == "#33669980" else {
             fail("The macOS menu bar, system settings and RGBA color support must be available.")
         }
@@ -965,7 +965,7 @@ enum NativeUISmokeTest {
             canvas.update(diagram: project, layout: layout, selection: .node(source.id))
         }
         var connection: (String, String)?
-        canvas.onCreateEdge = { connection = ($0, $1) }
+        canvas.onCreateEdge = { source, target, _ in connection = (source, target) }
         let start = NSPoint(x: controls.connection.midX, y: controls.connection.midY)
         let end = canvas.screenPoint(for: NSPoint(x: 6, y: 2))
         canvas.mouseDown(with: event(.leftMouseDown, start)); canvas.mouseDragged(with: event(.leftMouseDragged, end))

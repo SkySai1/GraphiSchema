@@ -18,9 +18,9 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
     var onEditNodeText: ((String) -> Void)?
     var onEditElementText: ((DiagramSelection) -> Void)?
     var onResetSelectedRoutes: (() -> Void)?
-    var onCreateEdge: ((String, String) -> Void)?
+    var onCreateEdge: ((String, String, String) -> Void)?
     var onSetEdgeWaypoints: ((String, [RoutePoint], [LayoutNode]) -> Void)?
-    var onReattachEdge: ((String, Bool, String) -> Void)?
+    var onReattachEdge: ((String, Bool, String, String) -> Void)?
     var onMoveContainer: ((String, Double, Double) -> Void)?
     var onResizeContainer: ((String, Double) -> Void)?
     var onResizeEmptyContainer: ((String, Double, Double) -> Void)?
@@ -98,8 +98,21 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
     private var resizingEmptyContainerID: String?
     private var emptyContainerResizeStart: NSPoint?
     private var initialEmptyContainerSize: (width: Double, height: Double)?
-    private var endpointDrag: (id: String, source: Bool)?
+    private var endpointDrag: (id: String, source: Bool, origin: NSPoint)?
     private var endpointPointer: NSPoint?
+    private var didDragEndpoint = false
+
+    private struct ConnectionTarget {
+        let nodeID: String
+        let port: String
+    }
+    private struct AttachmentHandleCache {
+        let shape: String
+        let icon: String?
+        let rect: NSRect
+        let handles: [(port: String, center: NSPoint)]
+    }
+    private var attachmentHandleCache: [String: AttachmentHandleCache] = [:]
 
     private var draggingWaypoint: (id: String, index: Int)?
     private var waypointPreview: [String: [RoutePoint]] = [:]
@@ -123,6 +136,12 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
     override var acceptsFirstResponder: Bool { true }
 
     override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53, endpointDrag != nil || connectingFromNodeID != nil {
+            endpointDrag = nil; endpointPointer = nil; didDragEndpoint = false
+            connectingFromNodeID = nil; connectionPointer = nil
+            needsDisplay = true
+            return
+        }
         if event.keyCode == 51 || event.keyCode == 117 {
             deleteSelection(nil)
             return
@@ -162,6 +181,7 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
             return
         }
         let wasEmpty = diagramLayout == nil
+        let changedProject = self.diagram?.project.id != diagram?.project.id
         let previousSelection = self.selection
         let previousEdges = Dictionary(uniqueKeysWithValues: (self.diagram?.edges ?? []).map { ($0.id, $0) })
         let previousNodes = nodeByID
@@ -180,6 +200,8 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
         nodeByID = Dictionary(uniqueKeysWithValues: (diagram?.nodes ?? []).map { ($0.id, $0) })
         containerByID = Dictionary(uniqueKeysWithValues: (diagram?.containers ?? []).map { ($0.id, $0) })
         edgeByID = Dictionary(uniqueKeysWithValues: (diagram?.edges ?? []).map { ($0.id, $0) })
+        if changedProject { attachmentHandleCache.removeAll() }
+        else { attachmentHandleCache = attachmentHandleCache.filter { nodeByID[$0.key] != nil } }
         layoutNodeByID = Dictionary(uniqueKeysWithValues: (diagramLayout?.nodes ?? []).map { ($0.id, $0) })
         rebuildContainerGeometryIndex()
         let activeDragIDs = draggingNodeIDs
@@ -196,8 +218,12 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
             nodeDropBounds.removeAll()
             dropTargetContainerID = nil
         }
-        endpointDrag = nil
-        endpointPointer = nil
+        if changedProject || endpointDrag.map({ edgeByID[$0.id] == nil }) == true {
+            endpointDrag = nil; endpointPointer = nil; didDragEndpoint = false
+        }
+        if changedProject || connectingFromNodeID.map({ nodeByID[$0] == nil }) == true {
+            connectingFromNodeID = nil; connectionPointer = nil
+        }
         if wasEmpty, diagramLayout != nil { shouldFitOnLayout = true }
         needsDisplay = true
         let selectedEmptyContainer: Bool
@@ -447,11 +473,13 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
         } else {
             drawContainers(diagram: diagram, layout: layout)
             drawEdges(diagram: diagram, layout: layout)
-            drawConnectionPreview()
             drawNodes(diagram: diagram, layout: layout)
             drawArrowheads(diagram: diagram, layout: layout)
+            drawConnectionPreview()
+            drawEdgeEndpointHandles()
         }
         drawSelectionOverlay()
+        drawAttachmentOverlay()
     }
 
     override func scrollWheel(with event: NSEvent) {
@@ -532,10 +560,14 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
            let settings = diagram?.diagram {
             let points = displayedEdgePoints(edge, geometry: geometry, settings: settings)
             if let first = points.first, hypot(screenPoint(for: first).x-point.x, screenPoint(for: first).y-point.y) <= 11 {
-                endpointDrag = (id, true); endpointPointer = point; return
+                endpointDrag = (id, true, point); endpointPointer = point; didDragEndpoint = false
+                needsDisplay = true
+                return
             }
             if let last = points.last, hypot(screenPoint(for: last).x-point.x, screenPoint(for: last).y-point.y) <= 11 {
-                endpointDrag = (id, false); endpointPointer = point; return
+                endpointDrag = (id, false, point); endpointPointer = point; didDragEndpoint = false
+                needsDisplay = true
+                return
             }
         }
         if case .edge(let id) = selection, let edge = edgeByID[id], let geometry = diagramLayout?.edges.first(where: { $0.id == id }), let settings = diagram?.diagram {
@@ -604,6 +636,7 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
             if connector.contains(point) {
                 connectingFromNodeID = id
                 connectionPointer = point
+                needsDisplay = true
                 return
             }
             if let handle = nodeStretchFrames(for: id).first(where: { $0.frame.contains(point) }) {
@@ -1006,8 +1039,9 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
         if let origin = longPressOrigin, hypot(point.x - origin.x, point.y - origin.y) > 6 {
             cancelLongPress()
         }
-        if endpointDrag != nil {
+        if let drag = endpointDrag {
             endpointPointer = point
+            didDragEndpoint = didDragEndpoint || hypot(point.x-drag.origin.x, point.y-drag.origin.y) > 3
             needsDisplay = true
             return
         }
@@ -1156,10 +1190,11 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
         }
         if let drag = endpointDrag {
             let point = convert(event.locationInWindow, from: nil)
-            if let diagram, let layout = diagramLayout, let node = hitNode(at: point, diagram: diagram, layout: layout) {
-                onReattachEdge?(drag.id, drag.source, node.id)
-            }
-            endpointDrag = nil; endpointPointer = nil
+            let target = connectionTarget(at: point)
+            let moved = didDragEndpoint || hypot(point.x-drag.origin.x, point.y-drag.origin.y) > 3
+            // Finish the gesture before the model callback synchronously refreshes the canvas.
+            endpointDrag = nil; endpointPointer = nil; didDragEndpoint = false
+            if moved, let target { onReattachEdge?(drag.id, drag.source, target.nodeID, target.port) }
             needsDisplay = true
             return
         }
@@ -1173,12 +1208,10 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
         }
         if let sourceID = connectingFromNodeID {
             let point = convert(event.locationInWindow, from: nil)
-            if let diagram, let layout = diagramLayout,
-               let target = hitNode(at: point, diagram: diagram, layout: layout), target.id != sourceID {
-                onCreateEdge?(sourceID, target.id)
-            }
+            let target = connectionTarget(at: point, excluding: sourceID)
             connectingFromNodeID = nil
             connectionPointer = nil
+            if let target { onCreateEdge?(sourceID, target.nodeID, target.port) }
             needsDisplay = true
             return
         }
@@ -1665,11 +1698,6 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
                 lead.stroke()
             }
             if isSelected {
-                for (index, endpoint) in [points[0], points[points.count-1]].enumerated() {
-                    let marker = NSBezierPath(ovalIn: NSRect(x: endpoint.x-6, y: endpoint.y-6, width: 12, height: 12))
-                    (index == 0 ? NSColor.systemGreen : NSColor.systemOrange).setFill(); marker.fill()
-                    NSColor.white.setStroke(); marker.lineWidth = 1.5; marker.stroke()
-                }
                 let handles = (waypointPreview[edge.id] ?? edge.waypoints).map { NSPoint(x: $0.x, y: $0.y) }
                 let centers = handles.isEmpty ? [routeMidpoint(points.map { worldPoint(for: $0) })] : handles
                 for center in centers {
@@ -1679,29 +1707,24 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
                     NSColor.white.setStroke(); marker.lineWidth = 1; marker.stroke()
                 }
             }
-            if let drag = endpointDrag, drag.id == edge.id, let pointer = endpointPointer {
-                let fixed = drag.source ? points.last! : points[0]
-                let preview = NSBezierPath(); preview.lineWidth = 2; preview.move(to: fixed); preview.line(to: pointer)
-                NSColor.controlAccentColor.setStroke(); preview.stroke()
-                let target = NSBezierPath(ovalIn: NSRect(x: pointer.x-6, y: pointer.y-6, width: 12, height: 12))
-                NSColor.controlAccentColor.setFill(); target.fill()
-            }
             if !edge.label.isEmpty, let x = edgeLayout.labelX, let y = edgeLayout.labelY {
-                let followsPath = !edge.waypoints.isEmpty || waypointPreview[edge.id] != nil || edge.routing != nil
+                let followsPath = endpointDrag?.id == edge.id || !edge.waypoints.isEmpty || waypointPreview[edge.id] != nil || edge.routing != nil
                     || edge.sourcePort != "auto" || edge.targetPort != "auto" || nodeByID[edge.source]?.icon != nil || nodeByID[edge.target]?.icon != nil
                     || dragPreview[edge.source] != nil || dragPreview[edge.target] != nil || nodeSizePreview[edge.source] != nil || nodeSizePreview[edge.target] != nil
                 var labelPoint = NSPoint(x: x, y: y)
                 if followsPath { labelPoint = routeMidpoint(points.map { worldPoint(for: $0) }); labelPoint.y += 0.15 }
                 let center = screenPoint(for: labelPoint)
-                let textSize = (edge.label as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 9, weight: .medium)])
-                let rect = NSRect(x: center.x - textSize.width / 2 - 5, y: center.y - 8,
-                                  width: textSize.width + 10, height: 16)
+                let fontSize = CGFloat(edge.style.effectiveFontSize)
+                let textSize = (edge.label as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: fontSize, weight: .medium)])
+                let labelHeight = max(16, textSize.height + 4)
+                let rect = NSRect(x: center.x - textSize.width / 2 - 5, y: center.y - labelHeight / 2,
+                                  width: textSize.width + 10, height: labelHeight)
                 if !edge.style.effectiveLabelBackgroundTransparent {
                     let pill = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
                     NSColor(hex: diagram.presentation.theme == "dark" ? "#352C43" : "#FFFFFF").setFill()
                     pill.fill()
                 }
-                drawText(edge.label, in: rect, color: NSColor(hex: edge.style.resolved(.text, theme: diagram.presentation.theme)), size: 9, weight: .medium, alignment: .center)
+                drawText(edge.label, in: rect, color: NSColor(hex: edge.style.resolved(.text, theme: diagram.presentation.theme)), size: fontSize, weight: .medium, alignment: .center)
             }
         }
     }
@@ -1713,6 +1736,19 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
             let color = NSColor(hex: edge.style.resolved(.stroke, theme: diagram.presentation.theme))
             for marker in [drawing.head, drawing.tail].compactMap({ $0 }) {
                 drawArrow(marker, color: color, lineWidth: edgeLineWidth(edge))
+            }
+        }
+    }
+
+    private func drawEdgeEndpointHandles() {
+        for id in selection.edgeIDs {
+            let points = edgePoints(for: id)
+            guard let first = points.first, let last = points.last else { continue }
+            for (index, point) in [first, last].enumerated() {
+                let center = screenPoint(for: point)
+                let marker = NSBezierPath(ovalIn: NSRect(x: center.x-6, y: center.y-6, width: 12, height: 12))
+                (index == 0 ? NSColor.systemGreen : NSColor.systemOrange).setFill(); marker.fill()
+                NSColor.white.setStroke(); marker.lineWidth = 1.5; marker.stroke()
             }
         }
     }
@@ -1837,26 +1873,167 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
         path.stroke()
     }
 
-    private func drawConnectionPreview() {
+    private func connectionPreviewPoints() -> [NSPoint] {
         guard let sourceID = connectingFromNodeID, let pointer = connectionPointer,
-              let node = nodeByID[sourceID],
-              let position = layoutNodeByID[sourceID] else { return }
-        let size = nodeSizePreview[sourceID] ?? (node.width ?? position.width, node.height ?? position.height)
-        let rect = screenRect(center: NSPoint(x: position.x, y: position.y), width: size.width, height: size.height)
-        let start = Self.connectionControlCenter(for: rect)
+              let node = nodeByID[sourceID], let position = layoutNodeByID[sourceID],
+              let settings = diagram?.diagram else { return [] }
+        let source = previewPosition(position)
+        if let target = connectionTarget(at: pointer, excluding: sourceID),
+           let targetNode = nodeByID[target.nodeID], let targetPosition = layoutNodeByID[target.nodeID] {
+            let edge = DiagramEdge(id: "connection-preview", source: sourceID, target: target.nodeID,
+                label: "", direction: "forward",
+                style: EdgeStyle(lineStyle: "solid", color: "#64748B", penwidth: 1.5, arrowhead: "normal",
+                                 arrowtail: "none", constraint: true, weight: 1, minlen: 1),
+                sourcePort: "auto", targetPort: target.port)
+            return CanvasGeometry.edgePoints(edge, source: source, target: previewPosition(targetPosition),
+                sourceNode: node, targetNode: targetNode, settings: settings)
+        }
+        let end = worldPoint(for: pointer)
+        let start = CanvasGeometry.attachment(node, at: source, toward: end, port: "auto")
+        return CanvasGeometry.route(start, end, routing: settings.edgeRouting, horizontal: ["LR", "RL"].contains(settings.direction))
+    }
+
+    private func drawConnectionPreview() {
+        let points = connectionPreviewPoints().map { screenPoint(for: $0) }
+        guard points.count >= 2 else { return }
+        let drawing = ArrowGeometry.make(points, head: "normal", tail: "none", lineWidth: 2)
         let path = NSBezierPath()
         path.lineWidth = 2
-        let dash: [CGFloat] = [5, 4]
-        dash.withUnsafeBufferPointer { buffer in
-            path.setLineDash(buffer.baseAddress, count: buffer.count, phase: 0)
-        }
-        path.move(to: start)
-        path.line(to: pointer)
+        path.lineJoinStyle = .round
+        setDash([5, 4], on: path)
+        path.move(to: drawing.shaft[0])
+        appendEdgeSegments(drawing.shaft, to: path)
         NSColor.controlAccentColor.setStroke()
         path.stroke()
+        if let head = drawing.head { drawArrow(head, color: .controlAccentColor, lineWidth: 2) }
+    }
+
+    private func attachmentHitRadius(in rect: NSRect) -> CGFloat {
+        min(10, max(2, min(rect.width, rect.height)*0.16))
+    }
+
+    /// Screen-space handles use the same contour attachments as the saved route.
+    func attachmentHandles(for id: String) -> [(port: String, center: NSPoint)] {
+        guard let node = nodeByID[id], let position = layoutNodeByID[id], let rect = nodeScreenRect(for: id) else { return [] }
+        if let cached = attachmentHandleCache[id], cached.shape == node.shape, cached.icon == node.icon, cached.rect == rect {
+            return cached.handles
+        }
+        let ports = ["n", "e", "s", "w"] + CanvasGeometry.vertices(node).indices.map { "vertex:\($0)" }
+            + ["ne", "se", "sw", "nw"]
+        let minimumGap = min(4, attachmentHitRadius(in: rect)*0.5)
+        var handles: [(port: String, center: NSPoint)] = []
+        for port in ports {
+            let center = screenPoint(for: CanvasGeometry.attachment(node, at: previewPosition(position), toward: .zero, port: port))
+            if !handles.contains(where: { hypot($0.center.x-center.x, $0.center.y-center.y) < minimumGap }) {
+                handles.append((port, center))
+            }
+        }
+        attachmentHandleCache[id] = AttachmentHandleCache(shape: node.shape, icon: node.icon, rect: rect, handles: handles)
+        return handles
+    }
+
+    private func connectionTarget(at point: NSPoint, excluding excludedID: String? = nil) -> ConnectionTarget? {
+        guard let diagram else { return nil }
+        // The foremost visible figure wins, including when it covers a port of another figure.
+        for node in DiagramNodeStackOrder.sorted(diagram.nodes).reversed() {
+            guard let rect = nodeScreenRect(for: node.id) else { continue }
+            let radius = attachmentHitRadius(in: rect)
+            let tolerance = 3+CGFloat(node.style.penwidth)/2
+            let reach = max(radius, tolerance)
+            guard rect.insetBy(dx: -reach, dy: -reach).contains(point) else { continue }
+            let hitsBody = CanvasGeometry.contains(point, node: node, in: rect, tolerance: tolerance)
+                || (rect.contains(point) && NodeLabelLayout(node: node, in: rect, scale: scale).contains(point))
+            if node.id == excludedID {
+                if hitsBody { return nil }
+                continue
+            }
+            let nearest = attachmentHandles(for: node.id).min {
+                hypot($0.center.x-point.x, $0.center.y-point.y) < hypot($1.center.x-point.x, $1.center.y-point.y)
+            }
+            if let nearest, hypot(nearest.center.x-point.x, nearest.center.y-point.y) <= radius {
+                return ConnectionTarget(nodeID: node.id, port: nearest.port)
+            }
+            if hitsBody {
+                return ConnectionTarget(nodeID: node.id, port: "auto")
+            }
+        }
+        return nil
+    }
+
+    private func drawAttachmentOverlay() {
+        guard !isReadOnly, let diagram, let pointer = endpointPointer ?? connectionPointer,
+              endpointDrag != nil || connectingFromNodeID != nil else { return }
+        let target = connectionTarget(at: pointer, excluding: connectingFromNodeID)
+        let accent = NSColor.controlAccentColor
+        var foreground: [(node: DiagramNode, rect: NSRect)] = []
+        for node in DiagramNodeStackOrder.sorted(diagram.nodes).reversed() {
+            guard let rect = nodeScreenRect(for: node.id), rect.insetBy(dx: -12, dy: -12).intersects(bounds) else { continue }
+            defer { foreground.append((node, rect)) }
+            guard node.id != connectingFromNodeID else { continue }
+            if target?.nodeID == node.id {
+                let outline = NSBezierPath(); outline.lineWidth = 2; outline.lineJoinStyle = .round
+                for contour in CanvasGeometry.fillPaths(node) {
+                    let points = contour.map { NSPoint(x: rect.minX+$0.x*rect.width, y: rect.minY+$0.y*rect.height) }
+                    if let first = points.first { outline.move(to: first); appendEdgeSegments(points, to: outline); outline.close() }
+                }
+                accent.withAlphaComponent(0.65).setStroke(); outline.stroke()
+            }
+            for handle in attachmentHandles(for: node.id) {
+                if foreground.contains(where: { $0.rect.contains(handle.center)
+                    && CanvasGeometry.contains(handle.center, node: $0.node, in: $0.rect, tolerance: 0) }) { continue }
+                let active = target?.nodeID == node.id && target?.port == handle.port
+                let radius: CGFloat = active ? 6 : min(4, attachmentHitRadius(in: rect)*0.65)
+                let circle = NSBezierPath(ovalIn: NSRect(x: handle.center.x-radius, y: handle.center.y-radius, width: radius*2, height: radius*2))
+                (active ? accent : NSColor.controlBackgroundColor).setFill(); circle.fill()
+                accent.withAlphaComponent(active ? 1 : 0.8).setStroke(); circle.lineWidth = active ? 2 : 1.2; circle.stroke()
+            }
+        }
+        guard let target, let node = nodeByID[target.nodeID] else { return }
+        if target.port == "auto" {
+            let route: [NSPoint]
+            if let drag = endpointDrag {
+                let points = edgePoints(for: drag.id)
+                route = drag.source ? Array(points.prefix(1)) : Array(points.suffix(1))
+            } else { route = Array(connectionPreviewPoints().suffix(1)) }
+            if let point = route.first {
+                let center = screenPoint(for: point)
+                let circle = NSBezierPath(ovalIn: NSRect(x: center.x-6, y: center.y-6, width: 12, height: 12))
+                accent.setStroke(); circle.lineWidth = 2; circle.stroke()
+            }
+        }
+        let portTitle = CanvasGeometry.portChoices(node).first { $0.0 == target.port }?.1 ?? target.port
+        let text = "\(node.label.components(separatedBy: .newlines).first ?? node.id) · \(portTitle)"
+        let width = min(280, max(100, (text as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 10)]).width+16))
+        let rect = NSRect(x: max(4, min(pointer.x+14, bounds.maxX-width-4)),
+                          y: max(4, min(pointer.y+16, bounds.maxY-24)), width: width, height: 22)
+        NSColor.controlBackgroundColor.withAlphaComponent(0.96).setFill()
+        NSBezierPath(roundedRect: rect, xRadius: 5, yRadius: 5).fill()
+        drawText(text, in: rect.insetBy(dx: 6, dy: 0), color: .labelColor, size: 10, weight: .medium, alignment: .left)
     }
 
     private func displayedEdgePoints(_ edge: DiagramEdge, geometry: LayoutEdge, settings: DiagramSettings) -> [NSPoint] {
+        if let drag = endpointDrag, drag.id == edge.id, didDragEndpoint, let pointer = endpointPointer {
+            if let target = connectionTarget(at: pointer) {
+                var preview = edge
+                let previousID = drag.source ? edge.source : edge.target
+                if drag.source { preview.source = target.nodeID; preview.sourcePort = target.port }
+                else { preview.target = target.nodeID; preview.targetPort = target.port }
+                if previousID != target.nodeID { preview.waypoints = [] }
+                if let source = layoutNodeByID[preview.source], let target = layoutNodeByID[preview.target],
+                   let sourceNode = nodeByID[preview.source], let targetNode = nodeByID[preview.target] {
+                    return CanvasGeometry.edgePoints(preview, source: previewPosition(source), target: previewPosition(target),
+                        sourceNode: sourceNode, targetNode: targetNode, settings: settings)
+                }
+            }
+            let fixedID = drag.source ? edge.target : edge.source
+            if let position = layoutNodeByID[fixedID], let node = nodeByID[fixedID] {
+                let free = worldPoint(for: pointer)
+                let fixed = CanvasGeometry.attachment(node, at: previewPosition(position), toward: free,
+                    port: drag.source ? edge.targetPort : edge.sourcePort)
+                return CanvasGeometry.route(drag.source ? free : fixed, drag.source ? fixed : free,
+                    routing: edge.routing ?? settings.edgeRouting, horizontal: ["LR", "RL"].contains(settings.direction))
+            }
+        }
         guard let source = layoutNodeByID[edge.source], let target = layoutNodeByID[edge.target],
               let sourceNode = nodeByID[edge.source], let targetNode = nodeByID[edge.target] else { return [] }
         let hasPreview = dragPreview[edge.source] != nil || dragPreview[edge.target] != nil

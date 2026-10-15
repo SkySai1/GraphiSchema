@@ -195,9 +195,11 @@ struct DiagramEdge: Codable, Equatable, Identifiable {
     var waypoints: [RoutePoint] = []
 
     enum CodingKeys: String, CodingKey { case id, source, target, label, direction, style, sourcePort, targetPort, routing, waypoints }
-    init(id: String, source: String, target: String, label: String, direction: String, style: EdgeStyle) {
+    init(id: String, source: String, target: String, label: String, direction: String, style: EdgeStyle,
+         sourcePort: String = "auto", targetPort: String = "auto") {
         self.id = id; self.source = source; self.target = target; self.label = label
         self.direction = direction; self.style = style
+        self.sourcePort = sourcePort; self.targetPort = targetPort
     }
     init(from decoder: Decoder) throws {
         let v = try decoder.container(keyedBy: CodingKeys.self)
@@ -226,8 +228,10 @@ struct EdgeStyle: Codable, Equatable {
     var minlen: Int
     var text: String? = nil
     var labelBackgroundTransparent: Bool? = nil
+    var fontSize: Double? = nil
 
     var effectiveLabelBackgroundTransparent: Bool { labelBackgroundTransparent ?? false }
+    var effectiveFontSize: Double { fontSize ?? 9 }
 }
 
 struct PresentationSettings: Codable, Equatable {
