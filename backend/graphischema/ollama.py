@@ -48,6 +48,7 @@ class OllamaConnection(BaseModel):
 
 
 class OllamaTaskRequest(BaseModel):
+    current_diagram: DiagramProject | None = None
     model_config = ConfigDict(extra="forbid")
     settings: OllamaSettings
     prompt: str = Field(min_length=1, max_length=16000)
@@ -88,6 +89,14 @@ async def generate_project(request: OllamaTaskRequest, current: DiagramProject) 
     # A generation replaces the contents of the active workspace. Project
     # identity belongs to the repository, never to a model-generated payload.
     candidate.project.id = current.project.id
+    if "default_edge_label_background_transparent" not in candidate.presentation.model_fields_set:
+        candidate.presentation.default_edge_label_background_transparent = current.presentation.default_edge_label_background_transparent
+    previous_edges = {edge.id: edge for edge in current.edges}
+    for edge in candidate.edges:
+        if "label_background_transparent" not in edge.style.model_fields_set:
+            previous = previous_edges.get(edge.id)
+            edge.style.label_background_transparent = (previous.style.label_background_transparent if previous
+                                                     else candidate.presentation.default_edge_label_background_transparent)
     return candidate
 
 

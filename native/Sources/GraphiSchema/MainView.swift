@@ -15,6 +15,8 @@ private final class ThemeRootView: NSView {
 final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMenuItemValidation, NSWindowDelegate, ProjectThemedWindow {
     var projectModel: AppModel { model }
     var onOpenWorkspace: ((ProjectWorkspace, Bool) -> Void)?
+    var onOpenBlankCanvas: (() -> Void)?
+    private var ownsActiveWindow = false
     private let model: AppModel
     private let rootView = ThemeRootView()
     private let sidebar = SidebarView()
@@ -83,6 +85,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     func windowDidBecomeKey(_ notification: Notification) {
+        ownsActiveWindow = true
         installMainMenu()
         refreshHeader()
         Task { await model.reloadWorkspaceIfClean() }
@@ -96,7 +99,8 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
                      elementTextEditorController?.window, ollamaWindowController?.window]
             + colorEditors.values.map { $0.window }
         let context = (active.windowController as? ProjectThemedWindow)?.projectModel
-        guard context === model || owned.contains(where: { $0 === active }) else { return }
+        ownsActiveWindow = context === model || owned.contains(where: { $0 === active })
+        guard ownsActiveWindow else { return }
         installMainMenu()
         refreshHeader()
     }
@@ -318,6 +322,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
             self?.model.resizeContainer(id, width: width, height: height)
         }
         workspace.onOptimizeRoutes = { [weak self] in self?.model.optimizeAllRoutes() }
+        workspace.onLayoutEngineChange = { [weak self] value in self?.model.updateLayoutEngine(value) }
         workspace.onAutoLayout = { [weak self] in
             guard let self else { return }
             Task { @MainActor in
@@ -400,6 +405,17 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
             self.workspace.setInteractionState(model: self.model)
             self.codePanel.refresh(model: self.model)
         }
+        model.onProjectRemoval = { [weak self] in
+            guard let self else { return }
+            historyWindowController?.close(); historyWindowController = nil
+            branchManager?.close(); branchManager = nil
+            styleWindowController?.close(); styleWindowController = nil; styleInspector = nil
+            for controller in colorEditors.values { controller.close() }; colorEditors.removeAll()
+            nodeTextEditorController?.close(); nodeTextEditorController = nil
+            elementTextEditorController?.close(); elementTextEditorController = nil
+            ollamaWindowController?.close(); ollamaWindowController = nil
+            workspace.clearProjectChat()
+        }
         model.onPreviewChange = { [weak self] in
             guard let self else { return }
             self.refreshCanvas(force: true)
@@ -450,6 +466,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
     }
 
     private func refreshHeader() {
+        if ownsActiveWindow { model.rememberWorkspace() }
         if let project = model.diagram?.project {
             window?.title = "GraphiSchema — \(project.title) [\(model.branchName)]"
             if fileProjectID != project.id {
@@ -623,13 +640,14 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
     @objc private func openProjectFromMenu(_ sender: Any?) { openProjectFile() }
     @objc private func showProjectManagerFromMenu(_ sender: Any?) {
         if projectManager == nil {
-            projectManager = ProjectManagerWindowController(model: model) { [weak self] target, newWindow in
+            projectManager = ProjectManagerWindowController(model: model, onCreateBlank: onOpenBlankCanvas) { [weak self] target, newWindow in
                 self?.openManagedWorkspace(target, newWindow: newWindow)
             }
         }
         projectManager?.reloadAndShow()
     }
     @objc private func newProjectFromMenu(_ sender: Any?) {
+        if let onOpenBlankCanvas { onOpenBlankCanvas(); return }
         showProjectManagerFromMenu(sender)
         projectManager?.createProject()
     }
@@ -951,7 +969,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
     }
 
     func loadStarterTemplateIfNeeded() async {
-        guard model.loadStarterOnLaunch, model.nodes.isEmpty, model.containers.isEmpty, model.edges.isEmpty,
+        guard !model.isTransientProject, model.loadStarterOnLaunch, model.nodes.isEmpty, model.containers.isEmpty, model.edges.isEmpty,
               let data = starterTemplateData() else { return }
         do { try await model.applyTemplate(data) }
         catch { showAlert(error.localizedDescription) }
@@ -1214,9 +1232,10 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
             showOllamaAssistant()
             return
         }
+        let promptProjectID = model.diagram?.project.id
         workspace.setOllamaBusy(true)
         Task { @MainActor in
-            defer { self.workspace.setOllamaBusy(false) }
+            defer { if self.model.diagram?.project.id == promptProjectID { self.workspace.setOllamaBusy(false) } }
             do {
                 if mode == 2 {
                     let response = try await self.model.reviewWithOllama(prompt)
@@ -1230,6 +1249,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
                 }
                 self.refreshAll()
             } catch {
+                guard self.model.diagram?.project.id == promptProjectID else { return }
                 self.workspace.appendChatMessage(role: "Ассистент · ошибка", text: error.localizedDescription)
             }
         }
@@ -2108,6 +2128,7 @@ private final class WorkspaceView: NSView {
     var onDropPaletteItem: ((PaletteObject, Double, Double, String?) -> Void)?
     var onOptimizeRoutes: (() -> Void)?
     var onAutoLayout: (() -> Void)?
+    var onLayoutEngineChange: ((String) -> Void)?
     var onToggleSidebar: (() -> Void)?
     var onToggleCodePanel: (() -> Void)?
     var onToggleChat: (() -> Void)?
@@ -2129,6 +2150,7 @@ private final class WorkspaceView: NSView {
     private let layoutLabel = NSTextField(labelWithString: "")
     private var styleButton = NSButton(title: "Стиль", target: nil, action: nil)
     private var autoLayoutButton = NSButton(title: "Автокомпоновка", target: nil, action: nil)
+    private let enginePopup = NSPopUpButton()
     private var applyProposalButton = NSButton(title: "Применить", target: nil, action: nil)
     private var cancelProposalButton = NSButton(title: "Отмена", target: nil, action: nil)
     private var actions: [ControlAction] = []
@@ -2162,8 +2184,7 @@ private final class WorkspaceView: NSView {
         applyProposalButton.isEnabled = hasProposal
         cancelProposalButton.isEnabled = hasProposal
         styleButton.isEnabled = !model.isEditingLocked
-        autoLayoutButton.isEnabled = model.diagram != nil && !model.isEditingLocked
-        autoLayoutButton.title = model.isAutoLayoutRunning ? "Компоновка…" : "Автокомпоновка"
+        updateLayoutControls(model)
         if let proposal {
             footer.stringValue = "Предложение · \(proposal.changes.entries.count) изменений · проверьте и примените или отмените"
             footer.toolTip = proposal.changes.entries.joined(separator: "\n")
@@ -2184,8 +2205,7 @@ private final class WorkspaceView: NSView {
         canvasView.inverseTrackpad = model.inverseTrackpad
         canvasView.alignmentGuides = model.alignmentGuides
         styleButton.isEnabled = !model.isEditingLocked
-        autoLayoutButton.isEnabled = model.diagram != nil && !model.isEditingLocked
-        autoLayoutButton.title = model.isAutoLayoutRunning ? "Компоновка…" : "Автокомпоновка"
+        updateLayoutControls(model)
         if model.activeProposal == nil {
             if model.jsonDraftIsDirty {
                 footer.stringValue = "JSON не применён · проверьте код и нажмите «Применить JSON»"
@@ -2203,6 +2223,7 @@ private final class WorkspaceView: NSView {
     }
 
     func appendChatMessage(role: String, text: String) { chatPanel.appendMessage(role: role, text: text) }
+    func clearProjectChat() { chatPanel.clearProjectContent() }
     func setOllamaBusy(_ busy: Bool) { chatPanel.setBusy(busy) }
     func setChatVisible(_ visible: Bool) {
         isChatVisible = visible
@@ -2211,6 +2232,23 @@ private final class WorkspaceView: NSView {
     }
 
     func fitCanvasToContent() { canvasView.fitToContent() }
+
+    private func updateLayoutControls(_ model: AppModel) {
+        let enabled = model.diagram != nil && !model.isEditingLocked
+        autoLayoutButton.isEnabled = enabled
+        autoLayoutButton.title = model.isAutoLayoutRunning ? "Компоновка…" : "Автокомпоновка"
+        enginePopup.isEnabled = enabled
+        let engine = model.diagram?.diagram.layoutEngine ?? "dot"
+        if let item = enginePopup.itemArray.first(where: { ($0.representedObject as? String) == engine }) { enginePopup.select(item) }
+        enginePopup.toolTip = model.diagram?.diagram.layoutMode == "manual"
+            ? "Движок для следующей автокомпоновки. Сейчас позиции заданы вручную: выберите движок и нажмите «Автокомпоновка», чтобы разместить объекты автоматически."
+            : "Движок Graphviz для автоматического размещения объектов. Настройка общая со свойствами проекта; изменение сохраняется и отменяется через ⌘Z."
+    }
+
+    @objc private func layoutEngineChanged(_ sender: NSPopUpButton) {
+        guard sender.isEnabled, let engine = sender.selectedItem?.representedObject as? String else { return }
+        onLayoutEngineChange?(engine)
+    }
 
     private func updateCanvasStatus(_ model: AppModel) {
         footer.stringValue = "Ревизия \(model.revision.isEmpty ? "—" : model.revision) · узлы: движение/размер · синий маркер: связь · ⌥ панорама"
@@ -2259,6 +2297,18 @@ private final class WorkspaceView: NSView {
         autoLayoutButton = makeButton("Автокомпоновка", symbol: "rectangle.3.group") { [weak self] _ in self?.onAutoLayout?() }
         autoLayoutButton.identifier = NSUserInterfaceItemIdentifier("canvas-auto-layout")
         autoLayoutButton.toolTip = "Размещает объекты выбранным движком Graphviz, переключает проект в автоматический режим и пересчитывает связи без ручных точек маршрута. Изменение можно отменить через ⌘Z."
+        enginePopup.identifier = NSUserInterfaceItemIdentifier("canvas-layout-engine")
+        enginePopup.setAccessibilityLabel("Движок Graphviz")
+        enginePopup.translatesAutoresizingMaskIntoConstraints = false
+        enginePopup.font = .systemFont(ofSize: 11)
+        enginePopup.controlSize = .small
+        enginePopup.autoenablesItems = false
+        for choice in GraphvizEngineOptions.choices {
+            enginePopup.addItem(withTitle: choice.title)
+            enginePopup.lastItem?.representedObject = choice.value
+        }
+        enginePopup.widthAnchor.constraint(equalToConstant: 190).isActive = true
+        enginePopup.target = self; enginePopup.action = #selector(layoutEngineChanged(_:))
         applyProposalButton = makeButton("Применить", symbol: "checkmark.circle.fill") { [weak self] _ in self?.onApplyProposal?() }
         cancelProposalButton = makeButton("Отменить", symbol: "xmark") { [weak self] _ in self?.onCancelProposal?() }
         [applyProposalButton, cancelProposalButton].forEach { $0.controlSize = .small; $0.isHidden = true }
@@ -2302,6 +2352,8 @@ private final class WorkspaceView: NSView {
         layoutLabel.font = .monospacedSystemFont(ofSize: 9, weight: .medium)
         layoutLabel.textColor = .controlAccentColor
         header.addArrangedSubview(styleButton)
+        header.addArrangedSubview(makeLabel("Движок", size: 10, weight: .medium, color: .secondaryLabelColor))
+        header.addArrangedSubview(enginePopup)
         header.addArrangedSubview(autoLayoutButton)
         header.addArrangedSubview(applyProposalButton)
         header.addArrangedSubview(cancelProposalButton)
@@ -2688,13 +2740,13 @@ private final class InspectorView: NSView {
             ], tooltip: "Задаёт направление ранжирования компонентов: слева направо, сверху вниз или в обратную сторону.") { value in model.updateDirection(value) }
             addEdgeRouting(model: model, label: "Маршрут связей")
             addColor("Фон холста", value: model.diagram?.presentation.canvasBackground ?? "#FFFFFF", parameter: .fill)
+            addCheckbox("Прозрачный фон новых связей", value: model.diagram?.presentation.effectiveDefaultEdgeLabelBackgroundTransparent ?? true,
+                        tooltip: "Фон подписей новых связей по умолчанию. Включён: прозрачный; выключен: непрозрачная плашка в цвете темы. Новый проект начинает с прозрачного фона. Уже созданные связи сохраняют своё оформление; для их изменения используйте групповое выделение.") { model.updateEdgeLabelBackgroundDefault($0) }
             addPopup("Тема", value: model.themeMode, choices: [("system", "Системная"), ("light", "Светлая"), ("dark", "Тёмная")]) { model.updateThemeMode($0) }
             addPopup("Тачпад", value: model.inverseTrackpad ? "inverse" : "follow", choices: [("follow", "За пальцами"), ("inverse", "Против пальцев")], tooltip: "Задаёт, движется ли холст вслед за пальцами по обеим осям или в обратную сторону.") { model.inverseTrackpad = $0 == "inverse" }
             addSection("КОМПОНОВКА")
-            addPopup("Движок Graphviz", value: model.diagram?.diagram.layoutEngine ?? "dot", choices: [
-                ("dot", "dot · иерархия"), ("neato", "neato · свободная сеть"), ("fdp", "fdp · силовая компоновка"),
-                ("sfdp", "sfdp · большая сеть"), ("twopi", "twopi · радиальная"), ("circo", "circo · кольцевая"),
-            ], tooltip: model.diagram?.diagram.layoutMode == "manual"
+            addPopup("Движок Graphviz", value: model.diagram?.diagram.layoutEngine ?? "dot", choices: GraphvizEngineOptions.choices,
+                     tooltip: model.diagram?.diagram.layoutMode == "manual"
                 ? "При ручном размещении Graphviz neato -n2 сохраняет координаты узлов и маршрутизирует связи. Этот движок применяется после возврата в автоматический режим."
                 : "Выбранный Graphviz-движок размещает узлы и прокладывает связи.") { model.updateLayoutEngine($0) }
             addPopup("Режим", value: model.diagram?.diagram.layoutMode ?? "auto", choices: [
@@ -2760,7 +2812,7 @@ private final class InspectorView: NSView {
                     model.editNode(id) { $0.style.fontSize = size }
                 }
                 addPopup("Стиль контура", value: node.style.effectiveLineStyle, choices: DiagramStyleOptions.nodeLines,
-                         tooltip: "Сплошная, пунктирная или точечная обводка фигуры, включая её внутренние линии. Сохраняется в Graphviz style и применяется при экспорте.") { value in
+                         tooltip: "Сплошная, пунктирная или точечная обводка фигуры, включая её внутренние линии. Длина штрихов и промежутки пропорциональны толщине контура, поэтому при утолщении они не сливаются. Сохраняется в Graphviz style и применяется при экспорте.") { value in
                     model.setStyle(.lineStyle(value), for: .node(id))
                 }
                 addStrokeWidth("Толщина контура, pt", value: node.style.penwidth, target: .node(id), model: model)
@@ -2820,6 +2872,11 @@ private final class InspectorView: NSView {
                 addStrokeWidth("Толщина, pt", value: item.style.penwidth, target: .edges(ids), model: model)
                 addColor("Линия", value: model.colorSelection(for: .stroke).color ?? item.style.color, parameter: .stroke)
                 addColor("Текст", value: model.colorSelection(for: .text).color ?? "#000000", parameter: .text)
+                let backgrounds = Set(model.edges.filter { ids.contains($0.id) }.map { $0.style.effectiveLabelBackgroundTransparent })
+                addCheckbox("Прозрачный фон подписи", value: item.style.effectiveLabelBackgroundTransparent, mixed: backgrounds.count > 1,
+                            tooltip: "Задаёт фон подписей всех выделенных связей одной операцией. Включён: прозрачный, выключен: непрозрачная плашка в цвете темы. Прочерк означает разные значения в группе. Изменение применяется сразу, сохраняется и отменяется через ⌘Z.") { value in
+                    model.setStyle(.labelBackgroundTransparent(value), for: .edges(ids))
+                }
                 addFullWidth(makeButton("Сбросить маршруты", symbol: "arrow.counterclockwise") { _ in model.resetSelectedEdgeRoutes() })
                 addFullWidth(makeButton("Поменять начало и конец", symbol: "arrow.left.arrow.right") { _ in model.setStyle(.reverse, for: .edges(ids)) })
             }
@@ -2833,7 +2890,7 @@ private final class InspectorView: NSView {
                 }
                 addCheckbox("Прозрачный фон подписи", value: item.style.effectiveLabelBackgroundTransparent,
                             tooltip: "Включён: подпись рисуется без фоновой плашки, видны линии и объекты под текстом. Выключен: непрозрачная плашка в цвете текущей темы улучшает читаемость. Применяется сразу на холсте и при экспорте; цвет текста задаётся отдельно.") { value in
-                    model.editEdge(id) { $0.style.labelBackgroundTransparent = value }
+                    model.setStyle(.labelBackgroundTransparent(value), for: .edge(id))
                 }
                 let nodes = model.nodes.map { ($0.id, $0.label) }
                 addPopup("Источник", value: item.source, choices: nodes) { value in model.editEdge(id) { $0.source = value; $0.sourcePort = "auto" } }
@@ -2992,10 +3049,11 @@ private final class InspectorView: NSView {
         }
     }
 
-    private func addCheckbox(_ label: String, value: Bool, tooltip: String, changed: @escaping (Bool) -> Void) {
+    private func addCheckbox(_ label: String, value: Bool, mixed: Bool = false, tooltip: String, changed: @escaping (Bool) -> Void) {
         let checkbox = NSButton(checkboxWithTitle: "Включён", target: nil, action: nil)
         checkbox.identifier = NSUserInterfaceItemIdentifier("inspector-field-\(label)")
-        checkbox.state = value ? .on : .off
+        checkbox.allowsMixedState = mixed
+        checkbox.state = mixed ? .mixed : value ? .on : .off
         addField(label, control: checkbox, tooltip: tooltip) { sender in changed((sender as? NSButton)?.state == .on) }
     }
 

@@ -9,6 +9,9 @@ final class AppModel: ObservableObject {
     private(set) var branchID: String?
     private(set) var branchName = "main"
     private(set) var headVersionID: Int?
+    private(set) var isTransientProject = false
+    private var transientBaseline: DiagramProject?
+    private let startsWithBlankCanvas: Bool
     var workspace: ProjectWorkspace? {
         guard let projectID, let branchID else { return nil }
         return ProjectWorkspace(projectId: projectID, branchId: branchID)
@@ -29,6 +32,8 @@ final class AppModel: ObservableObject {
     var onModelChange: (() -> Void)?
     var onPreviewChange: (() -> Void)?
     var onAlert: ((String) -> Void)?
+    var onProjectRemoval: (() -> Void)?
+    private var projectRemovalObserver: NSObjectProtocol?
 
     let backend: BackendService
     private let session: URLSession
@@ -77,9 +82,15 @@ final class AppModel: ObservableObject {
         set { SettingsStore.shared.set(newValue, forKey: "GraphiSchema.loadStarterOnLaunch"); onModelChange?() }
     }
 
-    init(backend: BackendService? = nil, session: URLSession = .shared, workspace: ProjectWorkspace? = nil) {
+    var startupWindowMode: StartupWindowMode {
+        get { StartupPreferences.mode() }
+        set { SettingsStore.shared.set(newValue.rawValue, forKey: StartupPreferences.modeKey); onModelChange?() }
+    }
+
+    init(backend: BackendService? = nil, session: URLSession = .shared, workspace: ProjectWorkspace? = nil, blankCanvas: Bool = false) {
         self.backend = backend ?? BackendService()
         self.session = session
+        startsWithBlankCanvas = blankCanvas && workspace == nil
         projectID = workspace?.projectId
         branchID = workspace?.branchId
         if let data = SettingsStore.shared.data(forKey: "GraphiSchema.ollama.preferences"),
@@ -90,15 +101,47 @@ final class AppModel: ObservableObject {
                 ollamaPreferences.systemPrompt += "\n\n{{ graphviz_attributes }}"
             }
         }
+        projectRemovalObserver = NotificationCenter.default.addObserver(forName: ProjectRemoval.notification, object: nil, queue: .main) { [weak self] note in
+            guard let projectID = note.userInfo?["projectId"] as? String else { return }
+            Task { @MainActor [weak self] in await self?.discardRemovedProject(projectID) }
+        }
     }
 
-    func bootstrap() async {
+    deinit {
+        if let projectRemovalObserver { NotificationCenter.default.removeObserver(projectRemovalObserver) }
+    }
+
+    func discardRemovedProject(_ removedID: String) async {
+        guard projectID == removedID || diagram?.project.id == removedID else { return }
+        saveTask?.cancel(); saveTask = nil; saveQueued = false
+        isSwitchingWorkspace = true
+        defer { isSwitchingWorkspace = false; onModelChange?() }
+        projectID = nil; branchID = nil; headVersionID = nil; branchName = "main"
+        issues = []; alertMessage = nil
+        diagram = nil; layout = nil; revision = ""; selection = .project
+        jsonDraft = ""; jsonDraftIsDirty = false; lastSerializedJSON = ""
+        cachedJSONProject = nil; cachedPrettyJSON = ""
+        dotSource = ""; lastSerializedDOT = ""; dotSourceBaseDiagram = nil
+        dotPreview = nil; ollamaProposal = nil; dotPreviewSource = nil
+        proposalBaseRevision = nil; proposalBaseDiagram = nil
+        transientBaseline = nil; isTransientProject = false
+        history = HistoryState(canUndo: false, canRedo: false)
+        onProjectRemoval?(); onModelChange?()
+        do { try await bootstrapBlankCanvas() }
+        catch { status = "Проект удалён · не удалось открыть пустой холст"; alertMessage = error.localizedDescription }
+    }
+
+    func bootstrap(fallbackToBlank: Bool = false) async {
         await backend.start()
         guard backend.isReady else {
             status = backend.status
             return
         }
         do {
+            if startsWithBlankCanvas {
+                try await bootstrapBlankCanvas()
+                return
+            }
             let envelope: DiagramResponse = try await request("api/diagram")
             adoptWorkspace(envelope)
             diagram = envelope.diagram
@@ -111,11 +154,33 @@ final class AppModel: ObservableObject {
             await refreshLayout()
             await refreshHistoryState()
             onModelChange?()
+        } catch ClientError.notFound where fallbackToBlank {
+            do { try await bootstrapBlankCanvas() }
+            catch { status = "Ошибка загрузки"; alertMessage = error.localizedDescription; onAlert?(error.localizedDescription) }
         } catch {
             status = "Ошибка загрузки"
             alertMessage = error.localizedDescription
             onAlert?(error.localizedDescription)
         }
+    }
+
+    private func bootstrapBlankCanvas() async throws {
+        let preview: ProjectPreviewResponse = try await request("api/projects/draft")
+        projectID = nil; branchID = nil; headVersionID = nil; branchName = "main"
+        isTransientProject = true
+        diagram = preview.diagram
+        let initialTheme = effectiveTheme(for: themeMode)
+        diagram?.presentation.theme = initialTheme
+        diagram?.presentation.background = initialTheme == "dark" ? "#21172F" : "#FFFFFF"
+        transientBaseline = diagram
+        lastSerializedJSON = prettyJSON(diagram)
+        jsonDraft = lastSerializedJSON; jsonDraftIsDirty = false
+        layout = preview.layout; dotSource = preview.dot; lastSerializedDOT = preview.dot; dotSourceBaseDiagram = diagram
+        history = HistoryState(canUndo: false, canRedo: false)
+        status = "Пустой холст · проект появится после первого изменения"
+        alertMessage = nil
+        await refreshLayout()
+        onModelChange?()
     }
 
     func updateTitle(_ value: String) {
@@ -135,8 +200,7 @@ final class AppModel: ObservableObject {
     }
 
     func updateLayoutEngine(_ value: String) {
-        let allowed = ["dot", "neato", "fdp", "sfdp", "twopi", "circo"]
-        guard !isEditingLocked, allowed.contains(value), var current = diagram,
+        guard !isEditingLocked, GraphvizEngineOptions.choices.contains(where: { $0.value == value }), var current = diagram,
               current.diagram.layoutEngine != value else { return }
         current.diagram.layoutEngine = value
         diagram = current
@@ -147,6 +211,14 @@ final class AppModel: ObservableObject {
         guard !isEditingLocked, ["straight", "angled", "orthogonal", "curved"].contains(value) else { return }
         guard var current = diagram, current.diagram.edgeRouting != value else { return }
         current.diagram.edgeRouting = value
+        diagram = current
+        changed()
+    }
+
+    func updateEdgeLabelBackgroundDefault(_ transparent: Bool) {
+        guard !isEditingLocked, var current = diagram,
+              current.presentation.effectiveDefaultEdgeLabelBackgroundTransparent != transparent else { return }
+        current.presentation.defaultEdgeLabelBackgroundTransparent = transparent
         diagram = current
         changed()
     }
@@ -179,6 +251,15 @@ final class AppModel: ObservableObject {
     func updateSystemTheme() {
         guard themeMode == "system" else { return }
         let effective = effectiveTheme(for: "system")
+        if isTransientProject, prettyJSON(diagram) == lastSerializedJSON {
+            diagram?.presentation.theme = effective
+            diagram?.presentation.background = effective == "dark" ? "#21172F" : "#FFFFFF"
+            transientBaseline = diagram
+            lastSerializedJSON = prettyJSON(diagram)
+            jsonDraft = lastSerializedJSON
+            onModelChange?()
+            return
+        }
         updateTheme(effective)
         AppTheme.apply(dark: effective == "dark", mode: "system")
         onModelChange?()
@@ -517,6 +598,7 @@ final class AppModel: ObservableObject {
                     current.edges[index].style.arrowtail = current.edges[index].style.arrowhead
                 }
             case .routing(let value): current.edges[index].routing = value
+            case .labelBackgroundTransparent(let value): current.edges[index].style.labelBackgroundTransparent = value
             case .reverse:
                 let old = current.edges[index]
                 current.edges[index].source = old.target
@@ -808,7 +890,8 @@ final class AppModel: ObservableObject {
             target: target.id,
             label: "Новая связь",
             direction: "forward",
-            style: EdgeStyle(colorMode: "theme", textMode: "theme", lineStyle: "solid", color: "#64748B", penwidth: 1.5, arrowhead: "normal", arrowtail: "none", constraint: true, weight: 1, minlen: 1)
+            style: EdgeStyle(colorMode: "theme", textMode: "theme", lineStyle: "solid", color: "#64748B", penwidth: 1.5, arrowhead: "normal", arrowtail: "none", constraint: true, weight: 1, minlen: 1,
+                             labelBackgroundTransparent: current.presentation.effectiveDefaultEdgeLabelBackgroundTransparent)
         ))
         diagram = current
         selection = .edge(id)
@@ -870,7 +953,7 @@ final class AppModel: ObservableObject {
         }
         guard let snapshot = diagram else { return }
         guard prettyJSON(snapshot) != lastSerializedJSON else {
-            status = "Сохранено"
+            status = isTransientProject ? "Пустой холст · проект появится после первого изменения" : "Сохранено"
             onModelChange?()
             return
         }
@@ -902,6 +985,12 @@ final class AppModel: ObservableObject {
                 saveQueued = true
             }
         } catch {
+            if snapshot.project.id != diagram?.project.id { return }
+            if case ClientError.notFound = error {
+                ProjectRemoval.post(snapshot.project.id)
+                await discardRemovedProject(snapshot.project.id)
+                return
+            }
             status = "Ошибка сохранения"
             alertMessage = error.localizedDescription
             onModelChange?()
@@ -985,7 +1074,7 @@ final class AppModel: ObservableObject {
         let response: DOTPreviewResponse = try await request(
             "api/dot/preview",
             method: "POST",
-            body: try encode(DOTPreviewRequest(dot: source, baseDiagram: dotSourceBaseDiagram ?? baseDiagram)),
+            body: try encode(DOTPreviewRequest(dot: source, baseDiagram: dotSourceBaseDiagram ?? baseDiagram, currentDiagram: isTransientProject ? diagram : nil)),
             ifMatch: baseRevision
         )
         guard source == dotSource, baseRevision == revision, baseDiagram == diagram else { throw ClientError.staleProposal }
@@ -1018,7 +1107,7 @@ final class AppModel: ObservableObject {
         try await flushPendingSave()
         let baseDiagram = diagram
         let baseRevision = revision
-        let body = try encode(OllamaTaskRequest(settings: ollamaPreferences, prompt: prompt))
+        let body = try encode(OllamaTaskRequest(settings: ollamaPreferences, prompt: prompt, currentDiagram: isTransientProject ? diagram : nil))
         let path = editing ? "api/ollama/edit" : "api/ollama/generate"
         let proposal: DiagramProposal = try await request(path, method: "POST", body: body, ifMatch: baseRevision, timeout: ollamaPreferences.timeout + 5)
         guard baseRevision == revision, baseDiagram == diagram else { throw ClientError.staleProposal }
@@ -1040,7 +1129,7 @@ final class AppModel: ObservableObject {
         try await flushPendingSave()
         let baseDiagram = diagram
         let baseRevision = revision
-        let body = try encode(OllamaTaskRequest(settings: ollamaPreferences, prompt: prompt))
+        let body = try encode(OllamaTaskRequest(settings: ollamaPreferences, prompt: prompt, currentDiagram: isTransientProject ? diagram : nil))
         let report: OllamaReviewResponse = try await request("api/ollama/review", method: "POST", body: body, ifMatch: baseRevision, timeout: ollamaPreferences.timeout + 5)
         guard baseRevision == revision, baseDiagram == diagram else { throw ClientError.staleProposal }
         return report
@@ -1168,6 +1257,11 @@ final class AppModel: ObservableObject {
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)
         applyWorkspaceHeaders(&request)
         request.timeoutInterval = 30
+        if isTransientProject, let diagram {
+            request.httpMethod = "POST"
+            request.httpBody = try encode(diagram)
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
         let (data, response) = try await session.data(for: request)
         try check(response: response, data: data)
         guard requestedWorkspace == workspace else { throw ClientError.workspaceChanged }
@@ -1176,6 +1270,7 @@ final class AppModel: ObservableObject {
     }
 
     func fetchVersions() async throws -> [ProjectVersion] {
+        if isTransientProject { return [] }
         guard let workspace else { throw ClientError.backendUnavailable }
         let response: VersionsResponse = try await request("api/versions")
         guard self.workspace == workspace, response.versions.allSatisfy({ $0.projectId == workspace.projectId }) else { throw ClientError.workspaceChanged }
@@ -1192,8 +1287,12 @@ final class AppModel: ObservableObject {
         branchID = envelope.branchId ?? branchID
         branchName = envelope.branchName ?? branchName
         headVersionID = envelope.headVersionId
+        if envelope.branchId != nil { isTransientProject = false; transientBaseline = nil }
+    }
+
+    func rememberWorkspace() {
         if let workspace, let data = try? JSONEncoder().encode(workspace) {
-            SettingsStore.shared.set(data, forKey: "GraphiSchema.lastWorkspace")
+            SettingsStore.shared.set(data, forKey: StartupPreferences.lastWorkspaceKey)
         }
     }
 
@@ -1207,7 +1306,7 @@ final class AppModel: ObservableObject {
         projectID = target.projectId
         branchID = target.branchId
         do {
-            let envelope: DiagramResponse = try await request("api/diagram")
+            let envelope: DiagramResponse = try await request("api/diagram", workspaceOverride: target)
             adoptWorkspace(envelope)
             diagram = envelope.diagram
             revision = envelope.revision
@@ -1236,14 +1335,36 @@ final class AppModel: ObservableObject {
                   !isEditingLocked, prettyJSON(diagram) == lastSerializedJSON else { return }
             try await openWorkspace(workspace)
         } catch ClientError.workspaceChanged { return }
+        catch ClientError.notFound {
+            ProjectRemoval.post(workspace.projectId)
+            await discardRemovedProject(workspace.projectId)
+        }
         catch { onAlert?(error.localizedDescription) }
     }
 
-    func fetchProjects() async throws -> [ProjectSummary] {
-        let response: ProjectsResponse = try await request("api/projects")
+    func fetchProjects(trashed: Bool = false) async throws -> [ProjectSummary] {
+        let response: ProjectsResponse = try await request(trashed ? "api/projects/trash" : "api/projects")
         return response.projects
     }
+
+    func moveProjectToTrash(_ projectID: String) async throws -> ProjectTrashResponse {
+        let response: ProjectTrashResponse = try await request("api/projects/\(projectID)/trash", method: "POST")
+        ProjectRemoval.post(projectID)
+        await discardRemovedProject(projectID)
+        return response
+    }
+
+    func restoreTrashedProject(_ projectID: String) async throws {
+        let _: ProjectMutationResponse = try await request("api/projects/\(projectID)/restore", method: "POST")
+    }
+
+    func permanentlyDeleteProject(_ projectID: String) async throws {
+        let _: ProjectMutationResponse = try await request("api/projects/\(projectID)/permanent", method: "DELETE")
+        ProjectRemoval.post(projectID)
+        await discardRemovedProject(projectID)
+    }
     func fetchBranches(projectID: String? = nil) async throws -> [BranchSummary] {
+        if isTransientProject && projectID == nil { return [] }
         guard let expectedProject = projectID ?? self.projectID else { throw ClientError.backendUnavailable }
         let path = projectID.map { "api/projects/\($0)/branches" } ?? "api/branches"
         let response: BranchesResponse = try await request(path)
@@ -1255,6 +1376,7 @@ final class AppModel: ObservableObject {
     }
     func forkProject(title: String, fromVersionID: Int? = nil) async throws -> ProjectWorkspace {
         try await saveNow()
+        guard !isTransientProject else { throw ClientError.unsavedCanvas }
         return try await request("api/projects/fork", method: "POST", body: encode(CreateProjectRequest(title: title, versionId: fromVersionID)))
     }
     func forkWorkspace(_ target: ProjectWorkspace, title: String) async throws -> ProjectWorkspace {
@@ -1263,9 +1385,13 @@ final class AppModel: ObservableObject {
     func createBranch(name: String, fromVersionID: Int? = nil) async throws -> ProjectWorkspace {
         guard !isEditingLocked else { throw ClientError.pendingChanges }
         try await saveNow()
+        guard !isTransientProject else { throw ClientError.unsavedCanvas }
         return try await request("api/branches", method: "POST", body: encode(CreateBranchRequest(name: name, fromVersionId: fromVersionID)))
     }
     func fetchCommitTree() async throws -> CommitTree {
+        if isTransientProject, let diagram {
+            return CommitTree(projectId: diagram.project.id, activeBranchId: "", commits: [], branches: [])
+        }
         guard let workspace else { throw ClientError.backendUnavailable }
         let result: CommitTree = try await request("api/commits/tree")
         guard self.workspace == workspace else { throw ClientError.workspaceChanged }
@@ -1278,6 +1404,7 @@ final class AppModel: ObservableObject {
     func commit(message: String) async throws {
         guard !isEditingLocked else { throw ClientError.pendingChanges }
         try await saveNow()
+        guard !isTransientProject else { throw ClientError.unsavedCanvas }
         let response: DiagramResponse = try await request("api/commits", method: "POST", body: encode(CommitRequest(message: message)), ifMatch: revision)
         adoptWorkspace(response)
         await refreshHistoryState()
@@ -1389,6 +1516,13 @@ final class AppModel: ObservableObject {
 
     private func persist(_ project: DiagramProject, includeCurrentEdits: Bool = false) async throws -> DiagramResponse {
         let data = try encode(project)
+        if isTransientProject, let baseline = transientBaseline {
+            if project == baseline { return DiagramResponse(diagram: project, revision: revision) }
+            let response: DiagramResponse = try await request("api/projects/register", method: "POST",
+                                                             body: encode(RegisterProjectRequest(diagram: project, baseDiagram: baseline)))
+            adoptWorkspace(response)
+            return response
+        }
         do {
             let response: DiagramResponse = try await request("api/diagram", method: "PUT", body: data, ifMatch: revision)
             adoptWorkspace(response)
@@ -1411,6 +1545,10 @@ final class AppModel: ObservableObject {
 
     private func flushPendingSave() async throws {
         saveTask?.cancel()
+        if isTransientProject, prettyJSON(diagram) == lastSerializedJSON {
+            await refreshLayout()
+            return
+        }
         while isSaving {
             try await Task.sleep(for: .milliseconds(40))
         }
@@ -1436,6 +1574,17 @@ final class AppModel: ObservableObject {
 
     private func refreshLayout() async {
         let current = diagram, currentRevision = revision
+        if isTransientProject, let current {
+            do {
+                let preview: ProjectPreviewResponse = try await request("api/projects/preview", method: "POST", body: encode(current))
+                guard isTransientProject, diagram == current else { return }
+                layout = preview.layout
+                if !dotDraftIsDirty { dotSource = preview.dot; lastSerializedDOT = preview.dot; dotSourceBaseDiagram = current }
+                revision = preview.revision
+                onPreviewChange?()
+            } catch { onAlert?(error.localizedDescription) }
+            return
+        }
         do {
             let updated: DiagramLayout = try await request("api/layout")
             guard current == diagram, currentRevision == revision else { return }
@@ -1452,6 +1601,7 @@ final class AppModel: ObservableObject {
 
     private func refreshDOTSource() async throws {
         guard !dotDraftIsDirty else { return }
+        if isTransientProject { await refreshLayout(); return }
         let source = dotSource, current = diagram, currentRevision = revision
         let generated = try await requestText("api/dot", ifMatch: currentRevision)
         guard source == dotSource, !dotDraftIsDirty, current == diagram, currentRevision == revision else { return }
@@ -1461,6 +1611,7 @@ final class AppModel: ObservableObject {
     }
 
     private func refreshHistoryState() async {
+        if isTransientProject { history = HistoryState(canUndo: false, canRedo: false); return }
         let workspace = self.workspace
         do {
             let state: HistoryState = try await request("api/history")
@@ -1481,6 +1632,10 @@ final class AppModel: ObservableObject {
         workspaceOverride: ProjectWorkspace? = nil
     ) async throws -> T {
         guard let baseURL = backend.baseURL else { throw ClientError.backendUnavailable }
+        let storedPaths = ["api/diagram", "api/layout", "api/history", "api/undo", "api/redo", "api/branches", "api/commits", "api/projects/fork"]
+        if isTransientProject, workspaceOverride == nil, storedPaths.contains(path) || path.hasPrefix("api/versions/") {
+            throw ClientError.unsavedCanvas
+        }
         let requestedWorkspace = workspace
         var request = URLRequest(url: baseURL.appending(path: path), cachePolicy: .reloadIgnoringLocalCacheData)
         applyWorkspaceHeaders(&request)
@@ -1497,7 +1652,9 @@ final class AppModel: ObservableObject {
         if let ifMatch { request.setValue(ifMatch, forHTTPHeaderField: "If-Match") }
         let (data, response) = try await session.data(for: request)
         try check(response: response, data: data)
-        guard workspaceOverride != nil || requestedWorkspace == workspace else { throw ClientError.workspaceChanged }
+        let projectManagementRequest = path == "api/projects" || path == "api/projects/trash" || path == "api/storage"
+            || (path.hasPrefix("api/projects/") && ["/trash", "/restore", "/permanent"].contains { path.hasSuffix($0) })
+        guard projectManagementRequest || workspaceOverride != nil || requestedWorkspace == workspace else { throw ClientError.workspaceChanged }
         let decoded = try decode(T.self, from: data)
         if let target = workspaceOverride ?? requestedWorkspace, let envelope = decoded as? DiagramResponse,
            path != "api/projects/import", path != "api/projects/open" {
@@ -1524,7 +1681,9 @@ final class AppModel: ObservableObject {
         guard let response = response as? HTTPURLResponse else { throw ClientError.invalidResponse }
         guard (200..<300).contains(response.statusCode) else {
             let detail = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["detail"]
-            throw ClientError.server(String(describing: detail ?? String(data: data, encoding: .utf8) ?? "HTTP \(response.statusCode)"))
+            let message = String(describing: detail ?? String(data: data, encoding: .utf8) ?? "HTTP \(response.statusCode)")
+            if response.statusCode == 404 || response.statusCode == 410 { throw ClientError.notFound(message) }
+            throw ClientError.server(message)
         }
     }
 
@@ -1645,6 +1804,8 @@ private enum JSONMergeResult {
 }
 
 enum ClientError: LocalizedError {
+    case notFound(String)
+    case unsavedCanvas
     case backendUnavailable
     case invalidJSON
     case invalidResponse
@@ -1655,6 +1816,8 @@ enum ClientError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
+        case .notFound(let message): message
+        case .unsavedCanvas: "Сначала измените холст: проект и его история будут созданы при первом изменении."
         case .backendUnavailable: "Локальный backend недоступен."
         case .invalidJSON: "Не удалось прочитать JSON."
         case .invalidResponse: "Backend вернул некорректный ответ."

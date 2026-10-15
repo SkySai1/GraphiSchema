@@ -8,6 +8,7 @@ enum DiagramStyleChange: Equatable {
     case arrowtail(String)
     case direction(String)
     case routing(String?)
+    case labelBackgroundTransparent(Bool)
     case reverse
 
     var isValid: Bool {
@@ -17,7 +18,7 @@ enum DiagramStyleChange: Equatable {
         case .arrowhead(let value), .arrowtail(let value): return DiagramStyleOptions.arrows.contains { $0.value == value }
         case .direction(let value): return DiagramStyleOptions.directions.contains { $0.value == value }
         case .routing(let value): return DiagramStyleOptions.routes.contains { $0.value == (value ?? "") }
-        case .reverse: return true
+        case .labelBackgroundTransparent, .reverse: return true
         }
     }
 }

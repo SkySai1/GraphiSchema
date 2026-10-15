@@ -11,14 +11,19 @@ final class AppLifecycle: NSObject, NSApplicationDelegate {
         SettingsStore.shared.onError = { message in
             let alert = NSAlert(); alert.messageText = message; alert.runModal()
         }
-        let saved = SettingsStore.shared.data(forKey: "GraphiSchema.lastWorkspace").flatMap { try? JSONDecoder().decode(ProjectWorkspace.self, from: $0) }
-        openProjectWindow(saved)
+        openStartupWindow()
     }
 
-    func openProjectWindow(_ target: ProjectWorkspace? = nil) {
-        let model = AppModel(backend: backend, workspace: target)
+    private func openStartupWindow() {
+        let target = StartupPreferences.workspaceToRestore()
+        openProjectWindow(target, blankCanvas: target == nil, fallbackToBlank: true)
+    }
+
+    func openProjectWindow(_ target: ProjectWorkspace? = nil, blankCanvas: Bool = false, fallbackToBlank: Bool = false) {
+        let model = AppModel(backend: backend, workspace: target, blankCanvas: blankCanvas)
         let controller = MainWindowController(model: model)
         editors.append((model, controller))
+        controller.onOpenBlankCanvas = { [weak self] in self?.openProjectWindow(blankCanvas: true) }
         controller.onOpenWorkspace = { [weak self, weak controller, weak model] workspace, newWindow in
             guard let self else { return }
             if newWindow { self.openProjectWindow(workspace) }
@@ -32,7 +37,7 @@ final class AppLifecycle: NSObject, NSApplicationDelegate {
         controller.showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
         Task {
-            await model.bootstrap()
+            await model.bootstrap(fallbackToBlank: fallbackToBlank)
             controller.refreshAll()
             await controller.loadStarterTemplateIfNeeded()
             if ProcessInfo.processInfo.arguments.contains("--startup-smoke-test") {
@@ -84,7 +89,7 @@ final class AppLifecycle: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag { openProjectWindow() }
+        if !flag { openStartupWindow() }
         return true
     }
 }

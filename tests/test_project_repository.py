@@ -255,6 +255,7 @@ def test_new_instances_retain_branch_heads_commit_parentage_and_timestamps(isola
 
 def test_unicode_branch_names_and_explicit_invalid_commit_ids():
     with TestClient(api.app) as client:
+        client.get('/api/diagram').raise_for_status()
         assert client.post('/api/branches',json={'name':'Эксперимент'}).status_code==200
         assert client.post('/api/branches',json={'name':'эксперимент'}).status_code==422
         for invalid in (0,-1):

@@ -22,10 +22,13 @@ enum NativeProjectRegressionTests {
                 stage("smooth routes"); try checkSmoothRoutes(starter)
                 stage("54 rasterized fills"); try checkEveryFigureFill(starter)
                 stage("canvas selection and long press"); try await checkCanvasSelectionAndLongPress(starter)
+                stage("startup and transient canvases"); try await checkStartupAndTransientProjects(backend)
                 stage("real projects and windows"); try await checkProjectsAndWindows(backend)
+                stage("project trash and permanent removal"); try await checkProjectTrash(backend)
+                stage("relative border spacing"); checks += try await NativeBorderRegressionTests.run(starter, backend: backend)
                 windows.forEach { $0.close() }
                 backend.stop()
-                print("Native project regressions passed: \(checks) checks; isolated settings, real API, projects, branches, windows, palettes, edge groups, guides, 54 figure fills, smooth ports and long press.")
+                print("Native project regressions passed: \(checks) checks; isolated settings, startup, real API, projects, branches, trash, permanent removal, windows, palettes, edge groups, guides, 54 figure fills, smooth ports and long press.")
                 exit(0)
             } catch {
                 windows.forEach { $0.close() }; backend.stop()
@@ -60,6 +63,18 @@ enum NativeProjectRegressionTests {
         try expect(!BackendService.matchesDataDirectory(directory.appendingPathComponent("other").path,expected:repository), "A compatible backend with another repository must not be reused.")
         try expect(!BackendService.matchesDataDirectory(nil,expected:repository), "A backend without an explicit repository path must not be reused.")
         try expect(SettingsStore.shared.directory.path.contains("graphischema-settings-"), "Native tests must isolate real settings.")
+        try expect(StartupPreferences.mode(in: first) == .lastProject && StartupPreferences.workspaceToRestore(in: first) == nil,
+                   "Default startup restores the last project, falling back to a blank canvas when absent.")
+        let saved = ProjectWorkspace(projectId: "project_saved", branchId: "branch_saved")
+        first.set(try JSONEncoder().encode(saved), forKey: StartupPreferences.lastWorkspaceKey)
+        try expect(StartupPreferences.workspaceToRestore(in: second) == saved, "Last project and its branch must survive settings reload.")
+        second.set(StartupWindowMode.emptyCanvas.rawValue, forKey: StartupPreferences.modeKey)
+        try expect(StartupPreferences.mode(in: first) == .emptyCanvas && StartupPreferences.workspaceToRestore(in: first) == nil,
+                   "Empty startup must ignore the remembered project without deleting it.")
+        first.set(StartupWindowMode.lastProject.rawValue, forKey: StartupPreferences.modeKey)
+        try expect(StartupPreferences.workspaceToRestore(in: second) == saved, "Switching startup back must restore the previous project.")
+        first.set("unknown", forKey: StartupPreferences.modeKey)
+        try expect(StartupPreferences.mode(in: second) == .lastProject, "Invalid startup settings must use the safe default.")
     }
     private static func checkAlignment() throws {
         for scale in [CGFloat(12),72,160,300] {
@@ -300,6 +315,199 @@ enum NativeProjectRegressionTests {
         let models=[a,b,branch,owner];for model in models {try await model.saveNow()}
     }
 
+    private static func waitFor(_ message: String, _ condition: () -> Bool) async throws {
+        for _ in 0..<120 {
+            if condition() { try expect(true, message); return }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        try expect(false, message)
+    }
+
+    private static func checkProjectTrash(_ backend: BackendService) async throws {
+        let owner = AppModel(backend: backend, blankCanvas: true); await owner.bootstrap()
+        let parentWorkspace = try await owner.createProject(title: "Trash parent", template: true)
+        let parent = AppModel(backend: backend, workspace: parentWorkspace); await parent.bootstrap()
+        let forkWorkspace = try await parent.forkProject(title: "Trash fork")
+        let fork = AppModel(backend: backend, workspace: forkWorkspace), twin = AppModel(backend: backend, workspace: forkWorkspace)
+        await fork.bootstrap(); await twin.bootstrap()
+        fork.updateTitle("Trash fork edited"); try await fork.saveNow()
+        _ = try await fork.createBranch(name: "retained experiment")
+        let before = try await fork.fetchCommitTree(), parentBefore = try await parent.fetchCommitTree()
+        let storageBefore = try await owner.fetchStorageInfo()
+        let forkWindow = MainWindowController(model: fork), twinWindow = MainWindowController(model: twin)
+        windows += [forkWindow, twinWindow]; forkWindow.showWindow(nil); twinWindow.showWindow(nil)
+        let manager = ProjectManagerWindowController(model: fork) { _,_ in }
+        windows.append(manager); manager.reloadAndShow()
+        guard let root = manager.window?.contentView,
+              let mode: NSSegmentedControl = find("project-manager-mode", root),
+              let table: NSTableView = find("project-manager-table", root),
+              let search: NSSearchField = find("project-manager-search", root),
+              let trash: NSButton = find("project-manager-trash", root),
+              let restore: NSButton = find("project-manager-restore", root),
+              let purge: NSButton = find("project-manager-purge", root),
+              let open: NSButton = find("project-manager-open", root) else { throw Failure(message: "Project trash controls missing") }
+        func click(_ button: NSButton) throws {
+            try expect(button.isEnabled && !button.isHidden, "Trash action must be available: \(button.title)")
+            guard let action = button.action else { throw Failure(message: "No action for \(button.title)") }
+            NSApp.sendAction(action, to: button.target, from: button)
+        }
+        func switchMode(_ index: Int) {
+            mode.selectedSegment = index
+            if let action = mode.action { NSApp.sendAction(action, to: mode.target, from: mode) }
+        }
+        func filterFork() {
+            search.stringValue = "Trash fork"
+            manager.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: search))
+        }
+        try await waitFor("Manager must load active projects before trash", { table.numberOfRows == storageBefore.projectCount })
+        filterFork()
+        try await waitFor("Manager selects the fork to delete", { table.numberOfRows == 1 && trash.isEnabled })
+        let themeKey = "GraphiSchema.themeMode.\(forkWorkspace.projectId)", fileKey = "GraphiSchema.projectFile.\(forkWorkspace.projectId)"
+        SettingsStore.shared.set("dark", forKey: themeKey); SettingsStore.shared.set("/tmp/independent-export.json", forKey: fileKey)
+        fork.rememberWorkspace()
+        // A pending autosave in another window must not resurrect a trashed project.
+        twin.updateTitle("Pending edit must not resurrect the fork")
+        try click(trash)
+        try await waitFor("Both windows must discard a removed project and show independent transient canvases", {
+            fork.isTransientProject && twin.isTransientProject && fork.workspace == nil && twin.workspace == nil && table.numberOfRows == 0
+        })
+        try expect(fork.diagram?.project.id != twin.diagram?.project.id && fork.nodes.isEmpty && twin.nodes.isEmpty,
+                   "Removed windows need distinct empty drafts and no retained project entities")
+        try expect(!fork.history.canUndo && !twin.history.canUndo && !fork.jsonDraftIsDirty && !twin.jsonDraftIsDirty,
+                   "Removal must clear history controls and editor drafts")
+        try await fork.saveNow(); try await twin.saveNow()
+        let trashItems = try await owner.fetchProjects(trashed: true)
+        try expect(trashItems.count == 1 && trashItems[0].id == forkWorkspace.projectId && trashItems[0].branchCount == 2,
+                   "Trash must retain the fork and every branch")
+        let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let deletedAt = trashItems[0].deletedAt.flatMap(formatter.date(from:)), purgeAfter = trashItems[0].purgeAfter.flatMap(formatter.date(from:))
+        try expect(deletedAt != nil && purgeAfter != nil && abs(purgeAfter!.timeIntervalSince(deletedAt!)-864000)<0.01,
+                   "The UI receives an exact ten-day retention deadline")
+        let inTrashStorage = try await owner.fetchStorageInfo()
+        try expect(inTrashStorage.projectCount == storageBefore.projectCount-1 && inTrashStorage.trashedProjectCount == 1 && inTrashStorage.versionCount == storageBefore.versionCount,
+                   "Trash hides projects without deleting versions or registering reset canvases")
+        switchMode(1)
+        try await waitFor("Trash mode must load the deleted fork and enable restore", { table.numberOfRows == 1 && restore.isEnabled })
+        try expect(!open.isEnabled && trash.isHidden && !restore.isHidden && !purge.isHidden,
+                   "Trash must offer restore/permanent deletion, without opening or editing")
+        try expect(table.tableColumns.first { $0.identifier.rawValue == "date" }?.title == "Удаление после (UTC)",
+                   "Trash must display the expiry date explicitly")
+        try await snapshot("project-trash", manager)
+        try click(restore)
+        try await waitFor("Restore must return to the active project list", { mode.selectedSegment == 0 && !trash.isHidden && trash.isEnabled })
+        try await fork.openWorkspace(forkWorkspace)
+        let restored = try await fork.fetchCommitTree()
+        try expect(restored.commits.map(\.id) == before.commits.map(\.id) && restored.branches.map(\.headVersionId) == before.branches.map(\.headVersionId),
+                   "Restoration must preserve commit IDs and all branch heads exactly")
+        try expect(fork.diagram?.project.title == "Trash fork edited" && twin.isTransientProject,
+                   "Restore requires explicit reopening and cannot apply another window's pending edit")
+        filterFork()
+        try await waitFor("Restored fork must be selectable for another deletion", { table.numberOfRows == 1 && trash.isEnabled })
+        try click(trash)
+        try await waitFor("Second trash operation must finish", { table.numberOfRows == 0 && fork.isTransientProject })
+        switchMode(1)
+        try await waitFor("Permanent deletion must be available in trash", { table.numberOfRows == 1 && purge.isEnabled })
+        try click(purge)
+        try await waitFor("Permanent deletion must require explicit confirmation", { manager.pendingPermanentDeleteAlert != nil })
+        if let alert = manager.pendingPermanentDeleteAlert { manager.window?.endSheet(alert.window, returnCode: .alertSecondButtonReturn) }
+        try await waitFor("Cancel must leave the trash item intact", { manager.pendingPermanentDeleteAlert == nil && table.numberOfRows == 1 })
+        try expect((try await owner.fetchProjects(trashed: true)).count == 1, "Cancel cannot delete project data")
+        try click(purge)
+        try await waitFor("Deletion confirmation must reopen", { manager.pendingPermanentDeleteAlert != nil })
+        if let alert = manager.pendingPermanentDeleteAlert { manager.window?.endSheet(alert.window, returnCode: .alertFirstButtonReturn) }
+        try await waitFor("Confirmed permanent deletion must remove the item", { table.numberOfRows == 0 && manager.pendingPermanentDeleteAlert == nil })
+        let finalStorage = try await owner.fetchStorageInfo(), finalTrash = try await owner.fetchProjects(trashed: true)
+        try expect(finalTrash.isEmpty && finalStorage.trashedProjectCount == 0 && finalStorage.projectCount == storageBefore.projectCount-1 && finalStorage.versionCount == storageBefore.versionCount-before.commits.count,
+                   "Permanent deletion must remove every own snapshot, leaving other projects intact")
+        try expect(SettingsStore.shared.object(forKey: themeKey) == nil && SettingsStore.shared.object(forKey: fileKey) == nil,
+                   "Permanent deletion must clear project settings and file associations")
+        try expect(StartupPreferences.workspaceToRestore()?.projectId != forkWorkspace.projectId,
+                   "Deleted project cannot remain the startup workspace")
+        let parentAfter = try await parent.fetchCommitTree()
+        try expect(parentAfter.commits.map(\.id) == parentBefore.commits.map(\.id) && parentAfter.branches.map(\.headVersionId) == parentBefore.branches.map(\.headVersionId),
+                   "Deleting a fork must preserve the parent's entire history")
+        do { try await owner.openWorkspace(forkWorkspace); throw Failure(message: "Purged project unexpectedly opened") }
+        catch is Failure { throw Failure(message: "Purged project unexpectedly opened") } catch {}
+        manager.close(); forkWindow.close(); twinWindow.close()
+    }
+
+    private static func checkStartupAndTransientProjects(_ backend: BackendService) async throws {
+        let empty = AppModel(backend: backend, blankCanvas: true)
+        await empty.bootstrap()
+        try expect(empty.alertMessage == nil && empty.isTransientProject && empty.workspace == nil, "Blank startup must remain an unregistered draft.")
+        guard let initial = empty.diagram else { throw Failure(message: "Blank startup must load canonical JSON") }
+        try expect(initial.nodes.isEmpty && initial.containers.isEmpty && initial.edges.isEmpty && empty.layout != nil && !empty.dotSource.isEmpty,
+                   "A transient canvas still needs JSON, DOT and geometry.")
+        try expect(initial.project.title.range(of: "^Unnamed-[a-z0-9]+$", options: .regularExpression) != nil,
+                   "Default project names need Unnamed and a random identifier.")
+        let database = SettingsStore.shared.directory.appendingPathComponent("projects/graphischema.sqlite3")
+        try expect(!FileManager.default.fileExists(atPath: database.path), "Cold blank startup must not even initialize the project database.")
+        let previousStarter = empty.loadStarterOnLaunch
+        empty.loadStarterOnLaunch = true
+        let editor = MainWindowController(model: empty); windows.append(editor); editor.refreshAll()
+        await editor.loadStarterTemplateIfNeeded()
+        empty.loadStarterOnLaunch = previousStarter
+        try expect(empty.diagram == initial, "Automatic starter templates must not populate or register an empty startup window.")
+        await empty.selectTab(.dot)
+        try await empty.previewDOTDraft()
+        await empty.validate()
+        try await empty.saveNow()
+        try expect(empty.isTransientProject && empty.dotPreview == nil && empty.alertMessage == nil, "Read-only checks and saving an untouched canvas must remain stateless.")
+        let projectsBefore = try await empty.fetchProjects()
+        let storageBefore = try await empty.fetchStorageInfo()
+        let versionsBefore = try await empty.fetchVersions()
+        try expect(projectsBefore.isEmpty && storageBefore.projectCount == 0 && storageBefore.versionCount == 0 && versionsBefore.isEmpty,
+                   "Opening the manager/settings/history must not create a placeholder project.")
+        let settings = ApplicationSettingsWindowController(model: empty); windows.append(settings); settings.reloadAndShow()
+        let popup: NSPopUpButton? = settings.window?.contentView.flatMap { find("settings-startup-window", $0) }
+        try expect(popup?.itemArray.count == 2, "Application settings must expose exactly the two startup choices.")
+        if let popup, let item = popup.itemArray.first(where: { $0.representedObject as? String == StartupWindowMode.emptyCanvas.rawValue }), let action = popup.action {
+            popup.select(item); NSApp.sendAction(action, to: popup.target, from: popup)
+        }
+        try expect(empty.startupWindowMode == .emptyCanvas && empty.isTransientProject, "Changing startup preference must not change or register the canvas.")
+        empty.startupWindowMode = .lastProject
+        let savedMarker = ProjectWorkspace(projectId: "project_remembered", branchId: "branch_remembered")
+        SettingsStore.shared.set(try JSONEncoder().encode(savedMarker), forKey: StartupPreferences.lastWorkspaceKey)
+        empty.rememberWorkspace()
+        try expect(StartupPreferences.workspaceToRestore() == savedMarker, "An empty window must not replace the last real project.")
+        var creations = 0
+        let manager = ProjectManagerWindowController(model: empty, onCreateBlank: { creations += 1 }) { _,_ in }
+        windows.append(manager); manager.createProject()
+        let projectsAfterNew = try await empty.fetchProjects()
+        try expect(creations == 1 && projectsAfterNew.isEmpty, "New canvas actions must defer database registration.")
+        empty.addNode(kind: "server", at: (x: 2, y: 3))
+        try await empty.saveNow()
+        try expect(!empty.isTransientProject && empty.workspace != nil && empty.diagram?.project.id == initial.project.id,
+                   "First mutation must atomically register the same draft ID.")
+        try expect(empty.diagram?.project.title == initial.project.title && empty.nodes.count == 1, "Registration must retain the generated name and first object.")
+        let firstVersions = try await empty.fetchVersions()
+        try expect(firstVersions.count == 1 && firstVersions[0].projectNumber == 1 && empty.history.canUndo,
+                   "First mutation must create one root commit with undo support, without an empty initial commit.")
+        empty.rememberWorkspace(); let remembered = StartupPreferences.workspaceToRestore()
+        try await empty.undo(); try expect(empty.nodes.isEmpty && !empty.isTransientProject, "Undo of the first change keeps the registered project.")
+        try await empty.redo(); try expect(empty.nodes.count == 1, "Redo must recover the first object.")
+        let another = AppModel(backend: backend, blankCanvas: true); await another.bootstrap()
+        another.rememberWorkspace()
+        try expect(another.isTransientProject && another.diagram?.project.id != initial.project.id && another.diagram?.project.title != initial.project.title,
+                   "Every empty window needs its own temporary ID and generated name.")
+        let projectsAfterBlank = try await another.fetchProjects()
+        try expect(StartupPreferences.workspaceToRestore() == remembered && projectsAfterBlank.count == 1,
+                   "Another blank window must preserve the previous real project and repository size.")
+        let anotherID = another.diagram?.project.id
+        try await another.openWorkspace(empty.workspace!)
+        let projectsAfterOpen = try await another.fetchProjects()
+        try expect(!another.isTransientProject && another.projectID == empty.projectID && projectsAfterOpen.count == 1,
+                   "Opening an existing project must discard the untouched draft without registering it.")
+        try expect(!(try await another.fetchProjects()).contains { $0.id == anotherID }, "Discarded transient IDs must stay out of the project manager.")
+        let missing = AppModel(backend: backend, workspace: ProjectWorkspace(projectId: "project_missing", branchId: "branch_missing"))
+        await missing.bootstrap(fallbackToBlank: true)
+        try expect(missing.isTransientProject && missing.workspace == nil && missing.alertMessage == nil,
+                   "A missing last project must fall back to an unregistered blank canvas.")
+        let finalStorage = try await missing.fetchStorageInfo()
+        try expect(finalStorage.projectCount == 1, "Fallback startup must not register a second project.")
+        editor.close(); settings.close()
+    }
+
     private static func menuItem(_ title: String) throws -> NSMenuItem {
         guard let item = NSApp.mainMenu?.items.compactMap(\.submenu).flatMap(\.items).first(where: { $0.title == title }) else {
             throw Failure(message: "Missing menu command: \(title); key=\(NSApp.keyWindow?.title ?? "nil"); menu=\(NSApp.mainMenu?.items.map(\.title) ?? [])")
@@ -341,6 +549,11 @@ enum NativeProjectRegressionTests {
         activateProjectWindow(aBranches)
         try expect(try menuItem("Ветки и коммиты…").target === aWindow,
                    "Reactivating A's branch window must route macOS commands to A, even after editing B.")
+        let rememberedA = StartupPreferences.workspaceToRestore()
+        try expect(rememberedA == a.workspace, "The last project must follow the active editor or its auxiliary windows.")
+        try await b.commit(message: "Background save must not change startup")
+        try expect(StartupPreferences.workspaceToRestore() == rememberedA,
+                   "Saving an inactive project must not replace the user's last active project.")
         let graphA: CommitGraphView? = aBranches.contentView.flatMap { find("commit-tree", $0) }
         let graphB: CommitGraphView? = bBranches.contentView.flatMap { find("commit-tree", $0) }
         try expect(graphA?.commits.isEmpty == false && graphA!.commits.allSatisfy { $0.projectId == a.projectID }, "A's branch window must contain only A's commits.")

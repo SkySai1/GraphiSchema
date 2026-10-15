@@ -1,0 +1,15 @@
+[
+  {"style":"solid", "width":0.5, "pattern":[]},
+  {"style":"solid", "width":1.5, "pattern":[]},
+  {"style":"solid", "width":10, "pattern":[]},
+  {"style":"dashed", "width":0.5, "pattern":[2,1.3333333333333333]},
+  {"style":"dashed", "width":1.5, "pattern":[6,4]},
+  {"style":"dashed", "width":2, "pattern":[8,5.333333333333333]},
+  {"style":"dashed", "width":4, "pattern":[16,10.666666666666666]},
+  {"style":"dashed", "width":10, "pattern":[40,26.666666666666668]},
+  {"style":"dotted", "width":0.5, "pattern":[0.5,1]},
+  {"style":"dotted", "width":1.5, "pattern":[1.5,3]},
+  {"style":"dotted", "width":2, "pattern":[2,4]},
+  {"style":"dotted", "width":4, "pattern":[4,8]},
+  {"style":"dotted", "width":10, "pattern":[10,20]}
+]

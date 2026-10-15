@@ -7,6 +7,16 @@ from .text_layout import elide_text, estimated_text_width, label_lines
 from .container_layout import FONT_SIZE, LABEL_HEIGHT, LABEL_INSET_X, LABEL_INSET_TOP, container_rects
 
 
+def _node_border_dash(style):
+    # Match NodeStyle.borderDashPattern in AppKit. Keep the old 1.5 pt appearance;
+    # scaling the gaps too prevents round caps from joining at large pen widths.
+    base = {"dashed": (6, 4), "dotted": (1.5, 3)}.get(style.line_style)
+    if base is None:
+        return ""
+    lengths = " ".join(f"{length*style.penwidth/1.5:.12g}" for length in base)
+    return f' stroke-dasharray="{lengths}"'
+
+
 def render_scene(project, layout, background=None):
     from .colors import resolved_project
     project = resolved_project(project)
@@ -102,7 +112,7 @@ def render_scene(project, layout, background=None):
         fill_data = " ".join(data([point(n["x"]+(x-.5)*n["width"], n["y"]+(y-.5)*n["height"]) for x,y in path], True) for path in fills)
         if fill_data:
             out.append(f'<path data-node-fill="{node.id}" d="{fill_data}" fill="{fill}" fill-opacity="{fill_alpha:.4f}" fill-rule="nonzero" stroke="none"/>')
-        dash = {"dashed": ' stroke-dasharray="6 4"', "dotted": ' stroke-dasharray="1.5 3"'}.get(node.style.line_style, "")
+        dash = _node_border_dash(node.style)
         for path, close in zip(paths, closed):
             points = [point(n["x"]+(x-.5)*n["width"], n["y"]+(y-.5)*n["height"]) for x, y in path]
             out.append(f'<path data-node-stroke="{node.id}" d="{data(points, close)}" fill="none" stroke="{stroke}" stroke-opacity="{stroke_alpha:.4f}" stroke-width="{node.style.penwidth}" stroke-linecap="round" stroke-linejoin="round"{dash}/>')

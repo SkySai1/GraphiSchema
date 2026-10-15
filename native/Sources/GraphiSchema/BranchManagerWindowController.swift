@@ -39,7 +39,7 @@ final class BranchManagerWindowController: NSWindowController, NSWindowDelegate,
         tree = nil; selectedCommit = nil; branches.removeAllItems(); graph.clear()
         actions.forEach { $0.isEnabled = false }
         preview.showPlaceholder("Выберите коммит", detail: "Загрузка истории текущего проекта…", isLoading: true)
-        window?.title = "Ветки и коммиты — \(model.diagram?.project.title ?? "") [\(model.projectID ?? "")]"
+        window?.title = "Ветки и коммиты — \(model.diagram?.project.title ?? "") [\(model.diagram?.project.id ?? "")]"
         let workspace = model.workspace
         loadTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -52,8 +52,10 @@ final class BranchManagerWindowController: NSWindowController, NSWindowDelegate,
                 if let index = result.branches.firstIndex(where: { $0.id == self.model.branchID }) { branches.selectItem(at: index) }
                 graph.update(result)
                 sizeGraph()
-                actions.forEach { $0.isEnabled = true }
-                status.stringValue = "Проект: \(model.diagram?.project.title ?? result.projectId) · ветка: \(model.branchName). Выбор коммита открывает просмотр."
+                actions.forEach { $0.isEnabled = !result.commits.isEmpty && !result.branches.isEmpty }
+                status.stringValue = model.isTransientProject
+                    ? "Пустой холст: проект, ветки и история появятся после первого изменения."
+                    : "Проект: \(model.diagram?.project.title ?? result.projectId) · ветка: \(model.branchName). Выбор коммита открывает просмотр."
                 let selected = result.commits.first { $0.id == self.selectedCommit?.id } ?? result.commits.first { $0.id == self.model.headVersionID } ?? result.commits.first
                 if let selected { graph.select(selected.id); selectCommit(selected) }
             } catch { if !Task.isCancelled { status.stringValue = error.localizedDescription } }

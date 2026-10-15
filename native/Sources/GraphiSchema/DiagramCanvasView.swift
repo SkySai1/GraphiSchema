@@ -839,6 +839,9 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
                 styleSubmenu("Стиль линии", choices: DiagramStyleOptions.edgeLines, current: edges.map { $0.style.lineStyle }, change: DiagramStyleChange.lineStyle),
                 styleSubmenu("Маршрут", choices: DiagramStyleOptions.routes, current: edges.map { $0.routing ?? "" }, change: { .routing($0.isEmpty ? nil : $0) }),
                 widthSubmenu("Толщина линии", current: edges.map { $0.style.penwidth }),
+                styleSubmenu("Фон подписи", choices: [("transparent", "Прозрачный"), ("opaque", "Непрозрачный")],
+                             current: edges.map { $0.style.effectiveLabelBackgroundTransparent ? "transparent" : "opaque" },
+                             change: { .labelBackgroundTransparent($0 == "transparent") }),
                 styleSubmenu("Наконечник у цели", choices: DiagramStyleOptions.arrows, current: edges.map { $0.style.arrowhead }, change: DiagramStyleChange.arrowhead),
                 styleSubmenu("Наконечник у источника", choices: DiagramStyleOptions.arrows, current: edges.map { $0.style.arrowtail }, change: DiagramStyleChange.arrowtail),
                 direction,
@@ -1736,8 +1739,7 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
                 path.move(to: first); appendEdgeSegments(points, to: path)
                 path.lineJoinStyle = .round; path.lineCapStyle = .round
                 path.lineWidth = CGFloat(node.style.penwidth)
-                if node.style.effectiveLineStyle == "dashed" { path.setLineDash([6, 4], count: 2, phase: 0) }
-                if node.style.effectiveLineStyle == "dotted" { path.setLineDash([1.5, 3], count: 2, phase: 0) }
+                setDash(node.style.borderDashPattern, on: path)
                 if closed.indices.contains(index) && closed[index] { path.close() }
                 NSColor(hex: node.style.resolved(.stroke, theme: diagram.presentation.theme)).setStroke()
                 path.stroke()

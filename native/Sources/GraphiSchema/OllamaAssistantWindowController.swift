@@ -33,6 +33,11 @@ final class OllamaAssistantWindowController: NSWindowController, ProjectThemedWi
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
+    override func close() {
+        variablesWindow?.close(); variablesWindow = nil
+        super.close()
+    }
+
     private func buildInterface() {
         let root = NSView()
         let form = NSStackView()

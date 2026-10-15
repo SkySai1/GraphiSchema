@@ -71,6 +71,7 @@ def to_dot(project: DiagramProject) -> str:
         f"rankdir={quote(project.diagram.direction)}",
         f"splines={quote({'straight': 'line', 'angled': 'polyline', 'orthogonal': 'ortho', 'curved': 'curved'}[project.diagram.edge_routing])}",
         f"bgcolor={quote(project.presentation.background)}",
+        "gs_default_edge_label_background_transparent=" + ("true" if project.presentation.default_edge_label_background_transparent else "false"),
         f"nodesep={project.diagram.node_spacing}",
         f"ranksep={project.diagram.rank_spacing}",
         "compound=true",

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager, suppress
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +31,7 @@ from .ollama import (
     review_project,
 )
 from .rendering import LayoutError as RenderError, render_png, render_svg
-from .storage import ProjectStore, RevisionConflict, VersionNotFound, ProjectNotFound, REQUEST_SCOPE
+from .storage import ProjectStore, RevisionConflict, VersionNotFound, ProjectNotFound, ProjectInTrash, REQUEST_SCOPE
 from .paths import data_directory
 from .validation import validate_diagram
 from .prompt_templates import DEFAULT_VARIABLES, PromptPreviewRequest, PromptTemplateError, render_system_prompt
@@ -38,7 +41,33 @@ ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = data_directory()
 STORE = ProjectStore(DATA_DIR, ROOT / "examples" / "starter.json")
 CONTROLLER = ApplicationController(STORE)
-app = FastAPI(title="GraphiSchema", version="0.1.0", description="Локальный редактор архитектурных диаграмм")
+TRASH_SWEEP_INTERVAL_SECONDS = 60
+
+
+async def cleanup_project_trash():
+    try:
+        await asyncio.to_thread(CONTROLLER.cleanup_expired_projects)
+    except Exception:
+        logging.getLogger(__name__).exception("Не удалось очистить просроченную корзину проектов")
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    await cleanup_project_trash()
+    async def sweep():
+        while True:
+            await asyncio.sleep(TRASH_SWEEP_INTERVAL_SECONDS)
+            await cleanup_project_trash()
+    task = asyncio.create_task(sweep())
+    try:
+        yield
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+
+app = FastAPI(title="GraphiSchema", version="0.1.0", description="Локальный редактор архитектурных диаграмм", lifespan=lifespan)
 
 @app.middleware("http")
 async def workspace_scope(request: Request, call_next):
@@ -63,6 +92,7 @@ class DOTPreviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     dot: str = Field(min_length=1, max_length=MAX_DOT_BYTES)
     base_diagram: DiagramProject | None = None
+    current_diagram: DiagramProject | None = None
 
 
 @app.get("/", include_in_schema=False)
@@ -83,11 +113,11 @@ def health() -> dict[str, str]:
         "node_text": "fontsize_v1",
         "label_wrap": "renderer_v1",
         "selection_colors": "rgba_v1",
-        "edge_label_background": "toggle_v1",
+        "edge_label_background": "project_defaults_v2",
         "outline_styles": "nodes_clusters_v1",
         "version_preview": "snapshot_layout_v1",
         "container_headers": "fixed_11pt_v1",
-        "workspaces": "projects_branches_v2",
+        "workspaces": "projects_branches_v4",
         "prompt_templates": "jinja_v1",
         "storage_scope": storage_scope,
         "data_directory": str(STORE.data_dir.resolve()),
@@ -118,9 +148,74 @@ class CommitRequest(BaseModel):
     message: str = Field(min_length=1, max_length=500)
 
 
+class RegisterProjectRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    diagram: DiagramProject
+    base_diagram: DiagramProject
+
+
+def _project_preview(project: DiagramProject):
+    try:
+        layout = compute_layout(project)
+    except GeometryError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"diagram": project.model_dump(mode="json"), "revision": STORE.revision(project), "layout": layout, "dot": to_dot(project)}
+
+
+@app.get("/api/projects/draft")
+def new_project_draft():
+    return _project_preview(STORE.new_draft())
+
+
+@app.post("/api/projects/preview")
+def preview_project(project: DiagramProject):
+    return _project_preview(project)
+
+
+@app.post("/api/projects/register")
+def register_project(request: RegisterProjectRequest):
+    if REQUEST_SCOPE.get() != (None, None):
+        raise HTTPException(status_code=422, detail="Сохранение первого изменения не должно менять открытый проект.")
+    if request.diagram == request.base_diagram:
+        raise HTTPException(status_code=422, detail="Пустой холст без изменений не требует регистрации.")
+    try:
+        workspace = CONTROLLER.register_project(request.diagram, request.base_diagram)
+    except RevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    token = REQUEST_SCOPE.set((workspace["projectId"], workspace["branchId"]))
+    try:
+        return _diagram_envelope(STORE.load())
+    finally:
+        REQUEST_SCOPE.reset(token)
+
+
 @app.get("/api/projects")
 def projects():
     return {"projects": STORE.list_projects()}
+
+
+@app.get("/api/projects/trash")
+def project_trash():
+    CONTROLLER.cleanup_expired_projects()
+    return {"projects": STORE.list_projects(trashed=True)}
+
+
+@app.post("/api/projects/{project_id}/trash")
+def trash_project(project_id: str):
+    return CONTROLLER.trash_project(project_id)
+
+
+@app.post("/api/projects/{project_id}/restore")
+def restore_project(project_id: str):
+    return CONTROLLER.restore_project(project_id)
+
+
+@app.delete("/api/projects/{project_id}/permanent")
+def purge_project(project_id: str):
+    try:
+        return CONTROLLER.purge_project(project_id)
+    except RevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.post("/api/projects")
@@ -231,7 +326,7 @@ def get_dot(if_match: str | None = Header(default=None, alias="If-Match")) -> Re
 @app.post("/api/dot/preview")
 def preview_dot(request: DOTPreviewRequest, if_match: str | None = Header(default=None, alias="If-Match")) -> dict[str, Any]:
     try:
-        current = _checked_project(if_match)
+        current = _checked_project(if_match, request.current_diagram)
         base = request.base_diagram or current
         if base.project.id != current.project.id:
             raise DOTEditError("Черновик DOT относится к другому проекту. Откройте DOT текущей диаграммы.")
@@ -275,7 +370,7 @@ async def ollama_check(request: OllamaConnection) -> dict[str, Any]:
 
 @app.post("/api/ollama/generate")
 async def ollama_generate(request: OllamaTaskRequest, if_match: str | None = Header(default=None, alias="If-Match")) -> dict[str, Any]:
-    current = _checked_project(if_match)
+    current = _checked_project(if_match, request.current_diagram)
     try:
         candidate = await generate_project(request, current)
         layout = compute_layout(candidate)
@@ -293,7 +388,7 @@ async def ollama_generate(request: OllamaTaskRequest, if_match: str | None = Hea
 
 @app.post("/api/ollama/edit")
 async def ollama_edit(request: OllamaTaskRequest, if_match: str | None = Header(default=None, alias="If-Match")) -> dict[str, Any]:
-    current = _checked_project(if_match)
+    current = _checked_project(if_match, request.current_diagram)
     try:
         operations = await edit_operations(request, current)
         candidate, changes = apply_operations(current, operations)
@@ -312,7 +407,7 @@ async def ollama_edit(request: OllamaTaskRequest, if_match: str | None = Header(
 
 @app.post("/api/ollama/review")
 async def ollama_review(request: OllamaReviewRequest, if_match: str | None = Header(default=None, alias="If-Match")) -> dict[str, Any]:
-    current = _checked_project(if_match)
+    current = _checked_project(if_match, request.current_diagram)
     try:
         report = await review_project(request, current)
     except OllamaError as exc:
@@ -342,8 +437,19 @@ def export_png(
     scale: float = Query(default=1.0, ge=0.5, le=4.0),
     background: str = Query(default="#FFFFFF", max_length=11),
 ) -> Response:
+    return _export_project_png(STORE.load(), scale, background)
+
+
+@app.post("/api/export.png", response_class=Response)
+def export_transient_png(project: DiagramProject,
+                         scale: float = Query(default=1.0, ge=0.5, le=4.0),
+                         background: str = Query(default="#FFFFFF", max_length=11)) -> Response:
+    return _export_project_png(project, scale, background)
+
+
+def _export_project_png(project, scale, background):
     try:
-        payload, engine = render_png(STORE.load(), scale=scale, background=background)
+        payload, engine = render_png(project, scale=scale, background=background)
     except RenderError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return Response(
@@ -451,8 +557,15 @@ async def missing_workspace_handler(_request: Any, exc: Exception) -> JSONRespon
     return JSONResponse(status_code=404, content={"detail": str(exc)})
 
 
-def _checked_project(expected_revision: str | None) -> DiagramProject:
-    project = STORE.load()
+@app.exception_handler(ProjectInTrash)
+async def trashed_workspace_handler(_request: Any, exc: Exception) -> JSONResponse:
+    return JSONResponse(status_code=410, content={"detail": str(exc)})
+
+
+def _checked_project(expected_revision: str | None, transient: DiagramProject | None = None) -> DiagramProject:
+    if transient is not None and REQUEST_SCOPE.get() != (None, None):
+        raise HTTPException(status_code=422, detail="Несохранённый холст не может подменять открытый проект.")
+    project = transient if transient is not None else STORE.load()
     if expected_revision is not None and expected_revision != STORE.revision(project):
         raise HTTPException(status_code=409, detail="Проект изменился до выполнения запроса. Обновите предпросмотр и повторите.")
     return project

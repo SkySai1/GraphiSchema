@@ -8,13 +8,11 @@ import sqlite3
 from .legacy_storage import (ProjectStore as LegacyProjectStore, RevisionConflict, VersionNotFound,
                              _serialize, _timestamp, _changed_fields, _element_diff)
 from .models import DiagramProject
+from .project_trash import ProjectTrashMixin, ProjectNotFound, ProjectInTrash
 
 REQUEST_SCOPE: ContextVar[tuple[str | None, str | None]] = ContextVar("graphischema_workspace", default=(None, None))
 
-class ProjectNotFound(ValueError):
-    pass
-
-class ProjectStore(LegacyProjectStore):
+class ProjectStore(ProjectTrashMixin, LegacyProjectStore):
     def __init__(self, data_dir: Path, starter_file: Path):
         super().__init__(data_dir, starter_file)
         self._repository_ready = False
@@ -24,7 +22,7 @@ class ProjectStore(LegacyProjectStore):
         from .paths import migrate_legacy_database
         if not self.database_file.exists():
             migrate_legacy_database(self.database_file)
-        with super()._database() as connection:
+        with super()._database(seed_default=False) as connection:
             if not self._repository_ready:
                 self._migrate_repository(connection)
                 self._repository_ready = True
@@ -38,6 +36,11 @@ class ProjectStore(LegacyProjectStore):
             project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,name TEXT NOT NULL COLLATE NOCASE,
             head_version_id INTEGER NOT NULL,base_version_id INTEGER,created_at TEXT NOT NULL,UNIQUE(project_id,name))""")
         connection.execute("CREATE TABLE IF NOT EXISTS workspace_state(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
+        project_columns = {row["name"] for row in connection.execute("PRAGMA table_info(projects)")}
+        for name in ("deleted_at", "purge_after"):
+            if name not in project_columns:
+                connection.execute(f"ALTER TABLE projects ADD COLUMN {name} TEXT")
+        connection.execute("CREATE INDEX IF NOT EXISTS projects_trash_expiry ON projects(purge_after) WHERE deleted_at IS NOT NULL")
         columns = {row["name"] for row in connection.execute("PRAGMA table_info(versions)")}
         for name, declaration in (("branch_id", "TEXT"), ("parent_id", "INTEGER"),
                                   ("project_number", "INTEGER"),
@@ -63,8 +66,10 @@ class ProjectStore(LegacyProjectStore):
                     connection.execute("UPDATE versions SET branch_id=?,parent_id=?,message=? WHERE id=?",
                                        (branch_id, previous, "Начальный снимок" if previous is None else "Мигрированный снимок", row["id"]))
                 previous = row["id"]
+        if grouped:
+            connection.execute("INSERT OR REPLACE INTO workspace_state(key,value) VALUES('initialized','1')")
         current = connection.execute("SELECT project_id,revision FROM current_project WHERE slot=1").fetchone()
-        if connection.execute("SELECT 1 FROM workspace_state WHERE key='project_id'").fetchone() is None:
+        if current is not None and connection.execute("SELECT 1 FROM workspace_state WHERE key='project_id'").fetchone() is None:
             main = connection.execute("SELECT id FROM branches WHERE project_id=? AND name='main'", (current["project_id"],)).fetchone()
             snapshot = connection.execute("SELECT id FROM versions WHERE project_id=? AND revision=? ORDER BY id DESC LIMIT 1",
                                           (current["project_id"], current["revision"])).fetchone()
@@ -110,6 +115,7 @@ class ProjectStore(LegacyProjectStore):
             branch = connection.execute("SELECT * FROM branches WHERE id=?", (branch_id,)).fetchone()
             if branch is None or (project_id and branch["project_id"] != project_id):
                 raise ProjectNotFound("Ветка не принадлежит выбранному проекту или не найдена.")
+            self._require_active_project(connection, branch["project_id"])
             return branch
         if not project_id:
             state = dict(connection.execute("SELECT key,value FROM workspace_state").fetchall())
@@ -117,7 +123,9 @@ class ProjectStore(LegacyProjectStore):
             if branch_id:
                 branch = connection.execute("SELECT * FROM branches WHERE id=? AND project_id=?", (branch_id, project_id)).fetchone()
                 if branch:
+                    self._require_active_project(connection, branch["project_id"])
                     return branch
+        self._require_active_project(connection, project_id)
         branch = connection.execute("SELECT * FROM branches WHERE project_id=? ORDER BY (name='main') DESC,created_at,id LIMIT 1", (project_id,)).fetchone()
         if branch is None:
             raise ProjectNotFound("Проект не найден.")
@@ -129,6 +137,15 @@ class ProjectStore(LegacyProjectStore):
 
     def load(self):
         with self._lock, self._database() as connection:
+            # Compatibility for unscoped API clients. Native blank windows use
+            # stateless previews and never request this legacy default.
+            if REQUEST_SCOPE.get() == (None, None) and connection.execute("SELECT 1 FROM projects LIMIT 1").fetchone() is None:
+                if connection.execute("SELECT 1 FROM workspace_state WHERE key='initialized'").fetchone():
+                    raise ProjectNotFound("Нет активного проекта. Откройте пустой холст или восстановите проект из корзины.")
+                connection.execute("BEGIN IMMEDIATE")
+                project = DiagramProject.model_validate_json(self.starter_file.read_text(encoding="utf-8"))
+                self._create_project(connection, project)
+                connection.commit()
             branch = self._scope(connection)
             row = connection.execute("SELECT snapshot FROM versions WHERE id=? AND project_id=?", (branch["head_version_id"], branch["project_id"])).fetchone()
             if row is None:
@@ -150,7 +167,7 @@ class ProjectStore(LegacyProjectStore):
             if requested_project and requested_project != project.project.id:
                 raise ValueError("ID схемы не совпадает с ID открытого проекта.")
             if connection.execute("SELECT 1 FROM projects WHERE id=?", (project.project.id,)).fetchone() is None:
-                if requested_branch:
+                if requested_project or requested_branch:
                     raise ProjectNotFound("Нельзя сохранять другой проект в открытой ветке.")
                 self._create_project(connection, project)
                 connection.commit()
@@ -177,9 +194,38 @@ class ProjectStore(LegacyProjectStore):
                            (project.project.id, project.project.title, now, now, origin_project_id, origin_version_id))
         version_id, _, _ = self._insert_version(connection, project, branch_id, None, message, source)
         connection.execute("INSERT INTO branches(id,project_id,name,head_version_id,created_at) VALUES(?,?,?,?,?)", (branch_id, project.project.id, "main", version_id, now))
-        if REQUEST_SCOPE.get() == (None, None):
+        connection.execute("INSERT OR IGNORE INTO current_project(slot,project_id,snapshot,revision,updated_at) VALUES(1,?,?,?,?)",
+                           (project.project.id, _serialize(project), self.revision(project), now))
+        connection.execute("INSERT OR REPLACE INTO workspace_state(key,value) VALUES('initialized','1')")
+        if REQUEST_SCOPE.get() == (None, None) or connection.execute("SELECT 1 FROM workspace_state WHERE key='project_id'").fetchone() is None:
             self._set_default(connection, project.project.id, branch_id)
         return {"projectId": project.project.id, "branchId": branch_id}
+
+    @staticmethod
+    def new_draft():
+        project = DiagramProject()
+        identifier = uuid4().hex
+        project.project.id = "project_"+identifier
+        project.project.title = "Unnamed-"+identifier[:12]
+        return project
+
+    def register_project(self, project):
+        """Atomically persist the first edited snapshot; identical retries are safe."""
+        with self._lock, self._database() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute("""SELECT b.id,v.revision FROM branches b JOIN versions v ON v.id=b.head_version_id
+                WHERE b.project_id=? AND b.name='main'""", (project.project.id,)).fetchone()
+            if existing:
+                self._require_active_project(connection, project.project.id)
+                if existing["revision"] != self.revision(project):
+                    raise RevisionConflict("Проект с таким ID уже существует. Откройте его перед сохранением изменений.")
+                workspace = {"projectId": project.project.id, "branchId": existing["id"]}
+                created = False
+            else:
+                workspace = self._create_project(connection, project, message="Первое изменение", source="create")
+                created = True
+            connection.commit()
+            return workspace, created
 
     def create_project(self, title, template=None, *, origin_project_id=None, origin_version_id=None):
         project = template.model_copy(deep=True) if template else DiagramProject()
@@ -210,6 +256,7 @@ class ProjectStore(LegacyProjectStore):
             if connection.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone() is None:
                 workspace = self._create_project(connection, project, source="import", message="Открытие JSON")
             else:
+                self._require_active_project(connection, project_id)
                 branch = connection.execute("""SELECT b.* FROM branches b JOIN versions v ON v.id=b.head_version_id
                     WHERE b.project_id=? AND v.revision=? ORDER BY (b.name='main') DESC,b.created_at,b.id LIMIT 1""",
                     (project_id, self.revision(project))).fetchone()
@@ -225,16 +272,18 @@ class ProjectStore(LegacyProjectStore):
             connection.commit()
             return workspace
 
-    def list_projects(self):
+    def list_projects(self, *, trashed=False):
         with self._lock, self._database() as connection:
             rows = connection.execute("""SELECT p.*,COUNT(b.id) AS branch_count FROM projects p LEFT JOIN branches b ON b.project_id=p.id
-                GROUP BY p.id ORDER BY p.updated_at DESC,p.id""").fetchall()
+                WHERE (p.deleted_at IS NOT NULL)=? GROUP BY p.id ORDER BY p.updated_at DESC,p.id""", (trashed,)).fetchall()
             return [{"id": r["id"], "title": r["title"], "createdAt": r["created_at"], "updatedAt": r["updated_at"],
-                     "branchCount": r["branch_count"], "originProjectId": r["origin_project_id"], "originVersionId": r["origin_version_id"]} for r in rows]
+                     "branchCount": r["branch_count"], "originProjectId": r["origin_project_id"], "originVersionId": r["origin_version_id"],
+                     "deletedAt": r["deleted_at"], "purgeAfter": r["purge_after"]} for r in rows]
 
     def list_branches(self, project_id=None):
         with self._lock, self._database() as connection:
             project_id = project_id or self._scope(connection)["project_id"]
+            self._require_active_project(connection, project_id)
             rows = connection.execute("""SELECT b.*,v.revision,v.project_number FROM branches b JOIN versions v ON v.id=b.head_version_id AND v.project_id=b.project_id
                 WHERE b.project_id=? ORDER BY (b.name='main') DESC,b.created_at,b.id""", (project_id,)).fetchall()
             return [{"id": r["id"], "projectId": r["project_id"], "name": r["name"], "headVersionId": r["head_version_id"],
@@ -327,7 +376,8 @@ class ProjectStore(LegacyProjectStore):
 
     def storage_info(self):
         with self._lock, self._database() as connection:
-            projects = connection.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
+            projects = connection.execute("SELECT COUNT(*) FROM projects WHERE deleted_at IS NULL").fetchone()[0]
+            trashed = connection.execute("SELECT COUNT(*) FROM projects WHERE deleted_at IS NOT NULL").fetchone()[0]
             versions = connection.execute("SELECT COUNT(*) FROM versions").fetchone()[0]
         sizes = {}
         for suffix in ("", "-wal", "-shm"):
@@ -336,4 +386,4 @@ class ProjectStore(LegacyProjectStore):
             except FileNotFoundError:
                 sizes[suffix] = 0
         return {"databasePath": str(self.database_file), "databaseBytes": sizes[""], "walBytes": sizes["-wal"], "shmBytes": sizes["-shm"],
-                "totalBytes": sum(sizes.values()), "projectCount": projects, "versionCount": versions}
+                "totalBytes": sum(sizes.values()), "projectCount": projects, "trashedProjectCount": trashed, "versionCount": versions}

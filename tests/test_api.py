@@ -22,7 +22,7 @@ def test_health_and_local_editor_routes(monkeypatch) -> None:
         assert health["edge_routing"] == "graphviz_v1"
         assert health["dot_sync"] == "three_way_v1"
         assert health["storage_scope"] == "config"
-        assert health["workspaces"] == "projects_branches_v2"
+        assert health["workspaces"] == "projects_branches_v4"
         assert health["data_directory"] == str(api.STORE.data_dir.resolve())
         assert client.get("/").json()["client"] == "native macOS AppKit"
     monkeypatch.setenv("GRAPHI_SCHEMA_DATA_DIR", "/tmp/graphischema-test-projects")

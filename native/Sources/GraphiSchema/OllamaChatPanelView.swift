@@ -51,6 +51,13 @@ final class OllamaChatPanelView: NSView, NSTextViewDelegate {
         updateInputState()
     }
 
+    func clearProjectContent() {
+        transcript.string = ""
+        promptTextView.string = ""
+        isBusy = false
+        updateInputState()
+    }
+
     func appendMessage(role: String, text: String) {
         guard !text.isEmpty else { return }
         if !transcript.string.isEmpty { transcript.textStorage?.append(NSAttributedString(string: "\n\n")) }

@@ -1,5 +1,12 @@
 import AppKit
 
+enum GraphvizEngineOptions {
+    static let choices: [(value: String, title: String)] = [
+        ("dot", "dot · иерархия"), ("neato", "neato · свободная сеть"), ("fdp", "fdp · силовая компоновка"),
+        ("sfdp", "sfdp · большая сеть"), ("twopi", "twopi · радиальная"), ("circo", "circo · кольцевая"),
+    ]
+}
+
 struct DiagramProject: Codable, Equatable {
     var schemaVersion: String
     var project: ProjectInfo
@@ -161,6 +168,18 @@ struct NodeStyle: Codable, Equatable {
 
     var effectiveFontSize: Double { fontSize ?? 10 }
     var effectiveLineStyle: String { lineStyle ?? "solid" }
+
+    /// Preserve the original pattern at 1.5 pt and scale both lengths with the pen.
+    /// With round caps the visible gap is pattern[1] - penwidth, always positive.
+    var borderDashPattern: [CGFloat] {
+        let base: [CGFloat]
+        switch effectiveLineStyle {
+        case "dashed": base = [6, 4]
+        case "dotted": base = [1.5, 3]
+        default: return []
+        }
+        return base.map { $0 * CGFloat(penwidth) / 1.5 }
+    }
 }
 
 struct DiagramEdge: Codable, Equatable, Identifiable {
@@ -215,7 +234,9 @@ struct PresentationSettings: Codable, Equatable {
     var theme: String
     var background: String
     var savedColors: [String]? = nil
+    var defaultEdgeLabelBackgroundTransparent: Bool? = nil
 
+    var effectiveDefaultEdgeLabelBackgroundTransparent: Bool { defaultEdgeLabelBackgroundTransparent ?? true }
     var canvasBackground: String { theme == "dark" && background.uppercased() == "#FFFFFF" ? "#21172F" : background }
 }
 
@@ -227,9 +248,22 @@ struct DiagramResponse: Decodable {
     var headVersionId: Int? = nil
 }
 
+struct ProjectPreviewResponse: Decodable {
+    var diagram: DiagramProject
+    var revision: String
+    var layout: DiagramLayout
+    var dot: String
+}
+
+struct RegisterProjectRequest: Encodable {
+    var diagram: DiagramProject
+    var baseDiagram: DiagramProject
+}
+
 struct DOTPreviewRequest: Encodable {
     var dot: String
     var baseDiagram: DiagramProject? = nil
+    var currentDiagram: DiagramProject? = nil
 }
 
 struct DiagramProposal: Decodable {
@@ -283,6 +317,7 @@ struct OllamaConnectionRequest: Encodable {
 struct OllamaTaskRequest: Encodable {
     var settings: OllamaPreferences
     var prompt: String
+    var currentDiagram: DiagramProject? = nil
 }
 
 struct OllamaModelsResponse: Decodable {
@@ -387,7 +422,11 @@ struct ProjectSummary: Decodable, Identifiable {
     var branchCount: Int
     var originProjectId: String?
     var originVersionId: Int?
+    var deletedAt: String? = nil
+    var purgeAfter: String? = nil
 }
+struct ProjectMutationResponse: Decodable { var projectId: String }
+struct ProjectTrashResponse: Decodable { var projectId: String; var deletedAt: String; var purgeAfter: String }
 struct ProjectsResponse: Decodable { var projects: [ProjectSummary] }
 struct BranchSummary: Decodable, Identifiable {
     var id: String
@@ -418,6 +457,7 @@ struct StorageInfo: Decodable {
     var totalBytes: Int64
     var projectCount: Int
     var versionCount: Int
+    var trashedProjectCount: Int? = nil
 }
 
 struct VersionPreview: Decodable {

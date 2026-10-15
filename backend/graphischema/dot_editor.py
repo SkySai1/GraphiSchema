@@ -201,7 +201,10 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
     parser = _Parser(source)
     node_statements, container_statements, edge_statements = parser.parse()
     graph_attrs = parser.graph_attrs
-    _check_attrs(graph_attrs, {"rankdir", "splines", "bgcolor", "nodesep", "ranksep", "compound", "pad", "notranslate"}, "графа")
+    _check_attrs(graph_attrs, {"rankdir", "splines", "bgcolor", "nodesep", "ranksep", "compound", "pad", "notranslate", "gs_default_edge_label_background_transparent"}, "графа")
+    default_label_background = graph_attrs.get("gs_default_edge_label_background_transparent", "true" if project.presentation.default_edge_label_background_transparent else "false")
+    if default_label_background not in {"true", "false"}:
+        raise DOTEditError("gs_default_edge_label_background_transparent должен быть true или false.")
     if graph_attrs.get("compound", "true").lower() != "true":
         raise DOTEditError("compound=false нельзя сохранить в канонической модели")
     if graph_attrs.get("pad", "0.25") != "0.25":
@@ -315,7 +318,7 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
         if missing:
             raise DOTEditError("Для ручной компоновки задайте pos всем новым узлам или включите ручной режим на холсте: " + ", ".join(missing))
 
-    edges = _build_edges(project, edge_statements)
+    edges = _build_edges(project, edge_statements, default_label_background == "true")
     unchanged_node_order = tuple(node_statements) == tuple(generated_nodes)
     unchanged_container_order = tuple(container_statements) == tuple(generated_containers)
     if unchanged_node_order:
@@ -342,6 +345,7 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
     if "ranksep" in graph_attrs:
         candidate_data["diagram"]["rank_spacing"] = _number(graph_attrs["ranksep"], "ranksep")
     candidate_data["presentation"]["background"] = graph_attrs.get("bgcolor", project.presentation.background)
+    candidate_data["presentation"]["default_edge_label_background_transparent"] = default_label_background == "true"
     if explicit_positions:
         candidate_data["diagram"]["layout_mode"] = "manual"
     if graph_attrs.get("notranslate", "false").lower() == "true" and not explicit_positions:
@@ -370,7 +374,7 @@ def _color_modes(attrs, old, parameters):
     return result
 
 
-def _build_edges(project: DiagramProject, statements: list[EdgeStatement]) -> list[dict[str, object]]:
+def _build_edges(project: DiagramProject, statements: list[EdgeStatement], default_label_background: bool) -> list[dict[str, object]]:
     old_by_pair: dict[tuple[str, str], list] = {}
     for edge in project.edges:
         old_by_pair.setdefault((edge.source, edge.target), []).append(edge)
@@ -397,7 +401,8 @@ def _build_edges(project: DiagramProject, statements: list[EdgeStatement]) -> li
         constraint = attrs.get("constraint", str(old.style.constraint if old else True)).lower()
         if constraint not in {"true", "false"}:
             raise DOTEditError(f"constraint должен быть true или false, получено {constraint!r}")
-        label_background = attrs.get("gs_label_background_transparent", "true" if old and old.style.label_background_transparent else "false")
+        previous_background = old.style.label_background_transparent if old else default_label_background
+        label_background = attrs.get("gs_label_background_transparent", "true" if previous_background else "false")
         if label_background not in {"true", "false"}:
             raise DOTEditError("gs_label_background_transparent должен быть true или false.")
         if ("headport" in attrs and "gs_target_port" in attrs) or ("tailport" in attrs and "gs_source_port" in attrs):

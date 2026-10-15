@@ -151,6 +151,8 @@ class EdgeStyle(StrictModel):
     line_style: Literal["solid", "dashed", "dotted", "bold"] = "solid"
     color: Color = "#64748B"
     text: Color | None = None
+    # Legacy files defaulted to an opaque label. New edges inherit the project's
+    # preference in the editor, DOT conversion and modern canonical documents.
     label_background_transparent: bool = False
     penwidth: float = Field(default=1.5, ge=0.5, le=10)
     arrowhead: Literal["normal", "vee", "none", "diamond", "dot", "box", "crow", "tee"] = "normal"
@@ -199,6 +201,7 @@ class DiagramEdge(StrictModel):
 
 class PresentationSettings(StrictModel):
     saved_colors: list[Color] = Field(default_factory=list, max_length=64)
+    default_edge_label_background_transparent: bool = True
 
     @field_validator("saved_colors")
     @classmethod
@@ -225,6 +228,13 @@ class DiagramProject(StrictModel):
 
     @model_validator(mode="after")
     def validate_graph(self) -> DiagramProject:
+        # Modern documents inherit the project preference only for omitted edge
+        # values. Legacy snapshots without this preference keep their old opaque
+        # labels; serialization then records that value explicitly.
+        if "default_edge_label_background_transparent" in self.presentation.model_fields_set:
+            for edge in self.edges:
+                if "label_background_transparent" not in edge.style.model_fields_set:
+                    edge.style.label_background_transparent = self.presentation.default_edge_label_background_transparent
         all_items = [*self.containers, *self.nodes, *self.edges]
         ids = [item.id for item in all_items]
         if len(ids) != len(set(ids)):

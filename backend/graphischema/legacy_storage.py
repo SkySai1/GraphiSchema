@@ -131,7 +131,7 @@ class ProjectStore:
             }
 
     @contextmanager
-    def _database(self) -> Iterator[sqlite3.Connection]:
+    def _database(self, *, seed_default: bool = True) -> Iterator[sqlite3.Connection]:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(self.database_file, timeout=10, isolation_level=None)
         connection.row_factory = sqlite3.Row
@@ -167,7 +167,8 @@ class ProjectStore:
             )
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute("SELECT 1 FROM current_project WHERE slot = 1").fetchone()
-            if row is None:
+            repository_exists = connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='projects'").fetchone() is not None
+            if row is None and (seed_default or (self.project_file.exists() and not repository_exists)):
                 source = self.project_file if self.project_file.exists() else self.starter_file
                 initial = DiagramProject.model_validate_json(source.read_text(encoding="utf-8"))
                 revision = self.revision(initial)

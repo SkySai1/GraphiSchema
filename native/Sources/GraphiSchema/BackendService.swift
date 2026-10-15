@@ -135,11 +135,11 @@ final class BackendService: ObservableObject {
                 && payload["node_text"] == "fontsize_v1"
                 && payload["label_wrap"] == "renderer_v1"
                 && payload["selection_colors"] == "rgba_v1"
-                && payload["edge_label_background"] == "toggle_v1"
+                && payload["edge_label_background"] == "project_defaults_v2"
                 && payload["outline_styles"] == "nodes_clusters_v1"
                 && payload["version_preview"] == "snapshot_layout_v1"
                 && payload["container_headers"] == "fixed_11pt_v1"
-                && payload["workspaces"] == "projects_branches_v2"
+                && payload["workspaces"] == "projects_branches_v4"
                 && payload["prompt_templates"] == "jinja_v1"
                 && payload["storage_scope"] == "config"
                 && Self.matchesDataDirectory(payload["data_directory"], expected: expectedDataDirectory ?? SettingsStore.shared.directory.appendingPathComponent("projects"))
