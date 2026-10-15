@@ -4,6 +4,7 @@ The native equivalent is DiagramContainerLayout.swift. Layout coordinates are
 in inches; title metrics are in points and do not depend on content padding.
 """
 from collections import defaultdict
+from .geometry import node_bounds
 
 FONT_SIZE = 11
 HEADER_HEIGHT = 28
@@ -27,8 +28,7 @@ def container_rects(project, layout):
     for node in project.nodes:
         if node.container_id in containers and node.id in positions:
             point = positions[node.id]
-            members[node.container_id].append((point["x"]-point["width"]/2, point["y"]-point["height"]/2,
-                                                point["x"]+point["width"]/2, point["y"]+point["height"]/2))
+            members[node.container_id].append(node_bounds(node, point))
     result = {}
 
     def envelope(container_id):

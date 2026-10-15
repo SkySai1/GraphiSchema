@@ -78,7 +78,7 @@ async def generate_project(request: OllamaTaskRequest, current: DiagramProject) 
     system = _system_prompt(request.settings, "Верни полный проект в JSON по схеме GraphiSchema.")
     user = (
         "Создай архитектурную диаграмму по запросу. Поля верхнего уровня: schema_version, project, diagram, "
-        "containers, nodes, edges, presentation. У каждого элемента есть стабильный ID.\n"
+        "containers, nodes, edges, edge_types, presentation. У каждого элемента есть стабильный ID.\n"
         f"Запрос:\n{request.prompt}\n\nТекущий проект для контекста:\n{current.model_dump_json()}"
     )
     output = await _chat_json(request.settings, system, user, DiagramProject.model_json_schema())
@@ -104,7 +104,7 @@ async def edit_operations(request: OllamaTaskRequest, current: DiagramProject) -
     system = _system_prompt(
         request.settings,
         "Верни только объект {\"operations\":[...]}. Допустимые op: add_node, update_node, delete_node, "
-        "add_container, update_container, delete_container, add_edge, update_edge, delete_edge, "
+        "add_container, update_container, delete_container, add_edge, update_edge, delete_edge, add_edge_type, update_edge_type, delete_edge_type, "
         "update_diagram, update_presentation. Для update передавай changes только с полями канонической модели. "
         "Не возвращай полный проект."
     )
@@ -163,9 +163,10 @@ def apply_operations(project: DiagramProject, operations: list[dict[str, Any]]) 
         raise OllamaError("За один запрос разрешено не более 100 операций.")
     data = project.model_dump(mode="json")
     collections = {
-        "node": ("nodes", {"label", "description", "kind", "shape", "icon", "container_id", "style", "x", "y", "width", "height"}),
+        "node": ("nodes", {"label", "description", "kind", "shape", "icon", "container_id", "style", "x", "y", "width", "height", "rotation", "z_index", "label_alignment", "label_vertical_alignment", "label_wrap"}),
         "container": ("containers", {"label", "parent_id", "style", "padding"}),
-        "edge": ("edges", {"source", "target", "label", "direction", "style", "source_port", "target_port", "routing", "waypoints"}),
+        "edge": ("edges", {"source", "target", "label", "direction", "style", "source_port", "target_port", "routing", "waypoints", "z_index", "type_id"}),
+        "edge_type": ("edge_types", {"name", "description", "style", "direction", "routing"}),
     }
     for index, operation in enumerate(operations):
         if not isinstance(operation, dict) or not isinstance(operation.get("op"), str):
@@ -208,6 +209,8 @@ def apply_operations(project: DiagramProject, operations: list[dict[str, Any]]) 
         if not isinstance(changes, dict) or not changes or set(changes) - allowed_fields:
             raise OllamaError(f"Операция {op} содержит недопустимые поля.")
         target = matches[0]
+        if kind == "edge" and "type_id" not in changes and {"style","direction","routing"} & changes.keys():
+            target["type_id"] = None
         for key, value in changes.items():
             if key == "style" and isinstance(value, dict) and isinstance(target.get("style"), dict):
                 target["style"].update(value)
@@ -217,6 +220,20 @@ def apply_operations(project: DiagramProject, operations: list[dict[str, Any]]) 
             else:
                 target[key] = value
 
+    from .models import PresentationSettings
+    try:
+        data["presentation"] = PresentationSettings.model_validate(data["presentation"]).model_dump(mode="json")
+    except ValidationError as exc:
+        raise OllamaError("Операции не применены: " + _validation_message(exc)) from exc
+    node_ids = {item["id"] for item in data["nodes"]}
+    type_ids = {item["id"] for item in data["edge_types"]}
+    deleted_nodes = {item.id for item in project.nodes}-node_ids
+    deleted_types = {item.id for item in project.edge_types}-type_ids
+    for edge in data["edges"]:
+        if edge.get("type_id") in deleted_types:
+            edge["type_id"] = None
+    data["presentation"]["legend_entries"] = [entry for entry in data["presentation"]["legend_entries"]
+        if entry.get("node_id") not in deleted_nodes and entry.get("edge_type_id") not in deleted_types]
     try:
         candidate = DiagramProject.model_validate(data)
     except ValidationError as exc:

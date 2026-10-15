@@ -102,9 +102,28 @@ enum CanvasGeometry {
         NSPoint(x: position.x+(point.x-0.5)*position.width, y: position.y+(point.y-0.5)*position.height)
     }
 
+    static func rotated(_ point: NSPoint, around center: NSPoint, degrees: Double) -> NSPoint {
+        let angle = degrees * .pi / 180, x = point.x-center.x, y = point.y-center.y
+        return NSPoint(x: center.x+x*cos(angle)-y*sin(angle), y: center.y+x*sin(angle)+y*cos(angle))
+    }
+
+    static func world(_ point: NSPoint, node: DiagramNode, in position: LayoutNode) -> NSPoint {
+        rotated(world(point, in: position), around: .init(x: position.x, y: position.y), degrees: node.effectiveRotation)
+    }
+
+    static func visualBounds(_ rect: NSRect, rotation: Double) -> NSRect {
+        let center = NSPoint(x: rect.midX, y: rect.midY)
+        let points = [NSPoint(x: rect.minX,y: rect.minY), NSPoint(x: rect.maxX,y: rect.minY),
+                      NSPoint(x: rect.maxX,y: rect.maxY), NSPoint(x: rect.minX,y: rect.maxY)]
+            .map { rotated($0, around: center, degrees: rotation) }
+        let xs = points.map(\.x), ys = points.map(\.y)
+        return NSRect(x: xs.min()!, y: ys.min()!, width: xs.max()!-xs.min()!, height: ys.max()!-ys.min()!)
+    }
+
     /// Hit the same filled contours and strokes that the canvas paints. All
     /// coordinates and tolerance are screen points, independent of canvas zoom.
     static func contains(_ point: NSPoint, node: DiagramNode, in rect: NSRect, tolerance: CGFloat) -> Bool {
+        let point = rotated(point, around: .init(x: rect.midX, y: rect.midY), degrees: -node.effectiveRotation)
         guard rect.insetBy(dx: -tolerance, dy: -tolerance).contains(point) else { return false }
         for contour in fillPaths(node) {
             let path = NSBezierPath()
@@ -153,12 +172,13 @@ enum CanvasGeometry {
 
     static func attachment(_ node: DiagramNode, at position: LayoutNode, toward: NSPoint, port: String) -> NSPoint {
         if port.hasPrefix("vertex:"), let index = Int(port.dropFirst(7)), vertices(node).indices.contains(index) {
-            return world(vertices(node)[index], in: position)
+            return world(vertices(node)[index], node: node, in: position)
         }
-        let contours = paths(node).map { $0.map { world($0, in: position) } }
+        let contours = paths(node).map { $0.map { world($0, node: node, in: position) } }
         let directions: [String: NSPoint] = ["n": .init(x: 0, y: 1), "ne": .init(x: 1, y: 1), "e": .init(x: 1, y: 0), "se": .init(x: 1, y: -1), "s": .init(x: 0, y: -1), "sw": .init(x: -1, y: -1), "w": .init(x: -1, y: 0), "nw": .init(x: -1, y: 1)]
         var aim = toward
-        if let d = directions[port] {
+        if let direction = directions[port] {
+            let d = rotated(direction, around: .zero, degrees: node.effectiveRotation)
             var intersections: [(CGFloat, NSPoint)] = []
             for contour in contours {
                 for (a, b) in zip(contour, contour.dropFirst()) {
@@ -219,18 +239,17 @@ enum CanvasGeometry {
         if routing == "curved", !bends.isEmpty || edge.sourcePort != "auto" || edge.targetPort != "auto" {
             result = smoothRoute([start] + bends + [end], source: edge.sourcePort == "auto" ? nil : source,
                                  target: edge.targetPort == "auto" ? nil : target)
-        } else if edge.sourcePort != "auto" || edge.targetPort != "auto" {
-            let leadLength = min(0.25, hypot(end.x-start.x, end.y-start.y)/3)
-            let anchors = [portLead(start, at: source, port: edge.sourcePort, routing: routing, length: leadLength)] + bends
-                + [portLead(end, at: target, port: edge.targetPort, routing: routing, length: leadLength)]
-            result = [start, anchors[0]] + zip(anchors, anchors.dropFirst()).flatMap { a, b in
-                bends.isEmpty || routing == "orthogonal" ? Array(route(a, b, routing: routing, horizontal: horizontal).dropFirst()) : [b]
-            } + [end]
-        } else if !bends.isEmpty {
+        } else if routing == "orthogonal" {
             let anchors = [start] + bends + [end]
-            result = [start] + zip(anchors, anchors.dropFirst()).flatMap { a, b in
-                routing == "orthogonal" ? Array(route(a, b, routing: routing, horizontal: horizontal).dropFirst()) : [b]
+            result = [start] + (0..<anchors.count-1).flatMap { index in
+                Array(orthogonalRoute(anchors[index], anchors[index+1],
+                    source: index == 0 && edge.sourcePort != "auto" ? source : nil,
+                    target: index == anchors.count-2 && edge.targetPort != "auto" ? target : nil).dropFirst())
             }
+        } else if !bends.isEmpty {
+            result = [start] + bends + [end]
+        } else if edge.sourcePort != "auto" || edge.targetPort != "auto" {
+            result = route(start, end, routing: routing, horizontal: horizontal)
         } else if let proposed, proposed.count > 2, routing == "angled", edge.routing == nil,
                   edge.sourcePort == "auto", edge.targetPort == "auto" {
             start = attachment(sourceNode, at: source, toward: proposed[1], port: "auto")
@@ -281,14 +300,47 @@ enum CanvasGeometry {
         }
     }
 
-    private static func portLead(_ point: NSPoint, at position: LayoutNode, port: String, routing: String, length: CGFloat) -> NSPoint {
-        guard port != "auto" else { return point }
-        var dx = point.x-position.x, dy = point.y-position.y
-        if routing == "orthogonal" {
-            if abs(dx) >= abs(dy) { dy = 0 } else { dx = 0 }
+    static func orthogonalRoute(_ a: NSPoint, _ b: NSPoint, source: LayoutNode? = nil, target: LayoutNode? = nil) -> [NSPoint] {
+        var xs = [(a.x+b.x)/2,a.x,b.x], ys = [(a.y+b.y)/2,a.y,b.y]
+        for object in [source,target].compactMap({ $0 }) {
+            xs += [object.x-object.width/2-0.08,object.x+object.width/2+0.08]
+            ys += [object.y-object.height/2-0.08,object.y+object.height/2+0.08]
         }
-        let norm = hypot(dx, dy)
-        return norm > 1e-9 ? NSPoint(x: point.x+length*dx/norm, y: point.y+length*dy/norm) : point
+        var candidates: [[NSPoint]] = [[a,.init(x: a.x,y: b.y),b],[a,.init(x: b.x,y: a.y),b]]
+        for x in xs { candidates.append([a,.init(x: x,y: a.y),.init(x: x,y: b.y),b]) }
+        for y in ys { candidates.append([a,.init(x: a.x,y: y),.init(x: b.x,y: y),b]) }
+        for x in xs { for y in ys {
+            candidates.append([a,.init(x: x,y: a.y),.init(x: x,y: y),.init(x: b.x,y: y),b])
+            candidates.append([a,.init(x: a.x,y: y),.init(x: x,y: y),.init(x: x,y: b.y),b])
+        } }
+        func compact(_ points: [NSPoint]) -> [NSPoint] {
+            var result: [NSPoint] = []
+            for p in deduplicate(points) {
+                while result.count > 1 {
+                    let u = result[result.count-2], v = result.last!
+                    let cross = (v.x-u.x)*(p.y-v.y)-(v.y-u.y)*(p.x-v.x)
+                    let dot = (v.x-u.x)*(p.x-v.x)+(v.y-u.y)*(p.y-v.y)
+                    if abs(cross)>1e-9 || dot<=0 { break }
+                    result.removeLast()
+                }
+                result.append(p)
+            }
+            return result
+        }
+        func score(_ points: [NSPoint]) -> Double {
+            guard points.count>1 else { return 0 }
+            var cost = zip(points,points.dropFirst()).reduce(0.0) { $0+hypot($1.1.x-$1.0.x,$1.1.y-$1.0.y) } + 0.12*Double(points.count)
+            for (end,peer,object) in [(points[0],points[1],source),(points.last!,points[points.count-2],target)] {
+                if let object, (end.x-object.x)*(peer.x-end.x)+(end.y-object.y)*(peer.y-end.y)<=1e-8 { cost += 10000 }
+            }
+            for object in [source,target].compactMap({ $0 }) {
+                let rect = NSRect(x: object.x-object.width/2+1e-5,y: object.y-object.height/2+1e-5,
+                                  width: object.width-2e-5,height: object.height-2e-5)
+                for (u,v) in zip(points,points.dropFirst()) where segmentIntersectsRect(u,v,rect) { cost += 10000 }
+            }
+            return cost
+        }
+        return candidates.map(compact).min { score($0)<score($1) } ?? [a,b]
     }
 
     private static func sourceToTarget(_ points: [NSPoint], source: LayoutNode, target: LayoutNode) -> [NSPoint] {

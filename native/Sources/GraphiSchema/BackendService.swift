@@ -128,6 +128,7 @@ final class BackendService: ObservableObject {
             else { return false }
             return payload["app"] == "GraphiSchema"
                 && payload["status"] == "ok"
+                && payload["diagram_features"] == "rotation_types_legend_bridges_v1"
                 && payload["revision_merge"] == "three_way_v1"
                 && payload["edge_routing"] == "graphviz_v1"
                 && payload["dot_sync"] == "three_way_v1"

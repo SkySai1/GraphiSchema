@@ -75,7 +75,7 @@ struct DiagramPDFScene {
         }
         func frame(_ key: String) -> NSRect {
             if key.hasPrefix("n:"), let node = positions[String(key.dropFirst(2))] {
-                return NSRect(x: node.x-node.width/2, y: node.y-node.height/2, width: node.width, height: node.height)
+                return CanvasGeometry.visualBounds(NSRect(x: node.x-node.width/2, y: node.y-node.height/2, width: node.width, height: node.height),rotation: project.nodes.first { $0.id == node.id }?.effectiveRotation ?? 0)
             }
             return containerFrames[String(key.dropFirst(2))] ?? .zero
         }
@@ -174,7 +174,7 @@ struct DiagramPDFScene {
                 points: route.map { LayoutPoint(x: $0.x,y: $0.y) }, label: edge.label, labelX: center.x, labelY: center.y+0.15, normalized: true))
             project.edges[index] = edge
         }
-        var reserved = positions.values.map { NSRect(x: $0.x-$0.width/2-0.025, y: $0.y-$0.height/2-0.025, width: $0.width+0.05,height: $0.height+0.05) }
+        var reserved = positions.values.map { node in CanvasGeometry.visualBounds(NSRect(x: node.x-node.width/2-0.025, y: node.y-node.height/2-0.025, width: node.width+0.05,height: node.height+0.05),rotation: nodeByID[node.id]?.effectiveRotation ?? 0) }
         reserved += containerFrames.values.map { NSRect(x: $0.minX, y: $0.maxY-settings.containerHeaderHeight/72,
                                                        width: $0.width,height: settings.containerHeaderHeight/72) }
         var style = DiagramPDFCanvasStyle(containerFontSize: settings.containerFontSize, arrowSize: settings.arrowSize,

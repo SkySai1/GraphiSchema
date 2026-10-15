@@ -23,9 +23,18 @@ struct DiagramPDFRenderResult {
     let remainingOverlaps: Int
 }
 
-enum PDFLegendRow {
+indirect enum PDFLegendRow {
     case node(DiagramNode, Int)
     case edge(DiagramEdge, Int)
+    case custom(PDFLegendRow, String)
+
+    var symbol: PDFLegendRow { if case .custom(let row,_) = self { return row.symbol }; return self }
+    var customDescription: String? { if case .custom(_,let value) = self { return value }; return nil }
+    func height(width: CGFloat) -> CGFloat {
+        guard let value = customDescription else { return 30 }
+        let bounds = (value as NSString).boundingRect(with: NSSize(width: max(30,width-42),height: .greatestFiniteMagnitude),options: [.usesLineFragmentOrigin,.usesFontLeading],attributes: [.font:NSFont.systemFont(ofSize: 9)])
+        return max(30,ceil(bounds.height)+12)
+    }
 }
 
 @MainActor
@@ -40,11 +49,28 @@ enum DiagramPDFRenderer {
               pageSize.height-settings.margin*2-settings.headerHeight-settings.footerHeight >= 140 else { throw DiagramPDFError.pageTooSmall }
         let rows = settings.includeLegend ? legendRows(scene.project) : []
         let side = !rows.isEmpty && !settings.legendOnSeparatePage
-        let capacity = max(1, Int((pageSize.height-settings.margin*2-settings.headerHeight-settings.footerHeight-28)/30))
-        var batches: [[PDFLegendRow]] = []
-        if !rows.isEmpty {
-            for start in stride(from: 0, to: rows.count, by: capacity) { batches.append(Array(rows[start..<min(rows.count,start+capacity)])) }
+        let available = pageSize.height-settings.margin*2-settings.headerHeight-settings.footerHeight-28
+        let legendWidth = side ? min(190,(pageSize.width-settings.margin*2)*0.3) : pageSize.width-settings.margin*2
+        var batches: [[PDFLegendRow]] = [], batch: [PDFLegendRow] = [], used: CGFloat = 0
+        // Split long manual descriptions across pages; never clip or omit rows.
+        let preparedRows = rows.flatMap { row -> [PDFLegendRow] in
+            guard row.height(width: legendWidth)>available,let value = row.customDescription else { return [row] }
+            var fragments: [PDFLegendRow] = [], text = ""
+            for character in value {
+                let candidate = text+String(character)
+                if PDFLegendRow.custom(row.symbol,candidate).height(width: legendWidth)>available && !text.isEmpty {
+                    fragments.append(.custom(row.symbol,text)); text = String(character)
+                } else { text = candidate }
+            }
+            if !text.isEmpty { fragments.append(.custom(row.symbol,text)) }
+            return fragments
         }
+        for row in preparedRows {
+            let height = row.height(width: legendWidth)
+            if !batch.isEmpty && used+height>available { batches.append(batch); batch = []; used = 0 }
+            batch.append(row); used += height
+        }
+        if !batch.isEmpty { batches.append(batch) }
         let firstRows = side ? (batches.first ?? []) : []
         let later = side ? Array(batches.dropFirst()) : batches
         let count = 1+later.count
@@ -78,6 +104,18 @@ enum DiagramPDFRenderer {
     }
 
     static func legendRows(_ project: DiagramProject) -> [PDFLegendRow] {
+        if project.presentation.effectiveLegendMode == "manual" {
+            return project.presentation.effectiveLegendEntries.compactMap { entry in
+                if entry.kind == "edge_type",let definition = project.effectiveEdgeTypes.first(where: { $0.id == entry.edgeTypeId }) {
+                    var edge = DiagramEdge(id: definition.id,source: "legend_source",target: "legend_target",label: definition.name,direction: definition.direction,style: definition.style)
+                    edge.routing = definition.routing
+                    return .custom(.edge(edge,1),entry.description ?? definition.description)
+                }
+                let node = project.nodes.first { $0.id == entry.nodeId } ?? DiagramNode(id: entry.id,label: "",description: "",kind: "",shape: entry.shape,containerId: nil,style: NodeStyle(fillMode: "theme",strokeMode: "theme",textMode: "theme",fill: "#FFFFFF",stroke: "#172238",text: "#172238",penwidth: 1.5),x: nil,y: nil,width: nil,height: nil,icon: entry.icon)
+                let title = entry.description ?? (entry.nodeId == nil ? PaletteLibrary.allObjects.first { $0.iconPath == entry.icon && $0.shape == entry.shape }?.title ?? "" : node.label)
+                return .custom(.node(node,1),title)
+            }
+        }
         let nodes = Dictionary(grouping: project.nodes) { node in
             "\(node.kind)|\(node.icon ?? node.shape)|\(node.style.resolved(.fill,theme: "light"))|\(node.style.resolved(.stroke,theme: "light"))"
         }.sorted { $0.key < $1.key }
@@ -176,47 +214,28 @@ final class DiagramPDFExportView: NSView {
         text("Условные обозначения",in: NSRect(x: rect.minX,y: rect.maxY-17,width: rect.width,height: 16),size: 10,weight: .bold)
         var y = rect.maxY-48
         for row in rows {
+            let rowHeight = row.height(width: rect.width)
             let symbol = NSRect(x: rect.minX+2,y: y+2,width: 28,height: 22)
             let title: String, detail: String
-            switch row {
+            switch row.symbol {
             case .node(let node,let count):
-                let aspect = (node.width ?? 1)/(node.height ?? 1)
-                let width = min(symbol.width,symbol.height*aspect), height = min(symbol.height,symbol.width/aspect)
-                let frame = NSRect(x: symbol.midX-width/2,y: symbol.midY-height/2,width: width,height: height)
-                let fill = NSBezierPath()
-                for contour in CanvasGeometry.fillPaths(node) {
-                    let points = contour.map { NSPoint(x: frame.minX+$0.x*frame.width,y: frame.minY+$0.y*frame.height) }
-                    if let first = points.first { fill.move(to: first); for p in points.dropFirst() { fill.line(to: p) }; fill.close() }
-                }
-                NSColor(hex: node.style.resolved(.fill,theme: "light")).setFill(); fill.fill()
-                NSColor(hex: node.style.resolved(.stroke,theme: "light")).setStroke()
-                for contour in CanvasGeometry.paths(node) {
-                    let line = NSBezierPath(); line.lineWidth = 0.8; line.lineJoinStyle = .round
-                    let points = contour.map { NSPoint(x: frame.minX+$0.x*frame.width,y: frame.minY+$0.y*frame.height) }
-                    if let first = points.first { line.move(to: first); for p in points.dropFirst() { line.line(to: p) }; line.stroke() }
-                }
+                LegendSymbols.draw(node,in: symbol,theme: "light")
                 title = node.kind.isEmpty ? "Компонент" : node.kind
                 detail = "\(node.icon.map { URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent } ?? node.shape) · \(count) шт."
             case .edge(let edge,let count):
-                let points = [NSPoint(x: symbol.minX,y: symbol.midY),NSPoint(x: symbol.maxX,y: symbol.midY)]
-                let geometry = ArrowGeometry.make(points,head: edge.direction == "none" ? "none" : edge.style.arrowhead,
-                                                   tail: edge.direction == "both" ? edge.style.arrowtail : "none",lineWidth: 1)
-                let path = NSBezierPath(); path.lineWidth = 1; path.lineCapStyle = .round
-                if edge.style.lineStyle == "dashed" { path.setLineDash([4,3],count: 2,phase: 0) }
-                if edge.style.lineStyle == "dotted" { path.setLineDash([1,3],count: 2,phase: 0) }
-                NSColor(hex: edge.style.resolved(.stroke,theme: "light")).setStroke()
-                if let first = geometry.shaft.first { path.move(to: first); for p in geometry.shaft.dropFirst() { path.line(to: p) }; path.stroke() }
-                for marker in [geometry.head,geometry.tail].compactMap({ $0 }) {
-                    let polygon = NSBezierPath(); let points = marker.polygon
-                    if let first = points.first { polygon.move(to: first); for p in points.dropFirst() { polygon.line(to: p) }; polygon.close() }
-                    NSColor(hex: edge.style.resolved(.stroke,theme: "light")).setFill(); polygon.fill()
-                }
+                LegendSymbols.draw(edge,in: symbol,theme: "light")
                 title = edge.label.isEmpty ? "Связь" : edge.label.components(separatedBy: .newlines).joined(separator: " ")
                 detail = "\(["solid":"Сплошная","dashed":"Пунктир","dotted":"Точки","bold":"Жирная"][edge.style.lineStyle] ?? edge.style.lineStyle) · \(count) шт."
+            case .custom: title = ""; detail = "" // symbol recursively unwraps custom descriptions.
             }
+            if let description = row.customDescription {
+                let paragraph = NSMutableParagraphStyle(); paragraph.lineBreakMode = .byWordWrapping
+                (description as NSString).draw(in: NSRect(x: rect.minX+38,y: y+30-rowHeight,width: rect.width-40,height: rowHeight-8),withAttributes: [.font:NSFont.systemFont(ofSize: 9),.foregroundColor:NSColor(hex: "#172238"),.paragraphStyle:paragraph])
+            } else {
             text(title,in: NSRect(x: rect.minX+38,y: y+12,width: rect.width-40,height: 13),size: 9,weight: .medium)
             text(detail,in: NSRect(x: rect.minX+38,y: y,width: rect.width-40,height: 12),size: 8,color: "#64748B")
-            y -= 30
+            }
+            y -= rowHeight
         }
     }
 

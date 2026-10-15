@@ -105,6 +105,7 @@ def health() -> dict[str, str]:
     storage_scope = "config"
     return {
         "status": "ok",
+        "diagram_features": "rotation_types_legend_bridges_v1",
         "app": "GraphiSchema",
         "revision_merge": "three_way_v1",
         "edge_routing": "graphviz_v1",

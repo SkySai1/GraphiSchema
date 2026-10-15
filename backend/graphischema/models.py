@@ -63,7 +63,7 @@ class ContainerStyle(StrictModel):
 
 class DiagramContainer(StrictModel):
     id: str
-    label: str = Field(min_length=1, max_length=120)
+    label: str = Field(default="", max_length=120)
     parent_id: str | None = None
     style: ContainerStyle = Field(default_factory=lambda: ContainerStyle(fill_mode="theme", stroke_mode="theme", text_mode="theme"))
     padding: float = Field(default=16, ge=4, le=48)
@@ -99,7 +99,7 @@ class NodeStyle(StrictModel):
 
 class DiagramNode(StrictModel):
     id: str
-    label: str = Field(min_length=1, max_length=160)
+    label: str = Field(default="", max_length=160)
     description: str = Field(default="", max_length=1000)
     kind: str = Field(default="service", min_length=1, max_length=48)
     shape: Literal["box", "ellipse", "cylinder", "diamond", "hexagon", "cloud"] = "box"
@@ -113,9 +113,15 @@ class DiagramNode(StrictModel):
     # App-layer paint order. Graphviz's `z` is a geometric coordinate, not a
     # reliable SVG/native stacking order, so the renderer consumes this field.
     z_index: int = Field(default=0, ge=-1_000_000, le=1_000_000)
+    rotation: float = Field(default=0, ge=-360000, le=360000, allow_inf_nan=False)
     label_alignment: Literal["left", "center", "right"] = "center"
     label_vertical_alignment: Literal["top", "middle", "bottom"] = "middle"
     label_wrap: bool = False
+
+    @field_validator("rotation")
+    @classmethod
+    def normalized_rotation(cls, value: float) -> float:
+        return (value + 180) % 360 - 180
 
     @field_validator("icon")
     @classmethod
@@ -173,6 +179,45 @@ class RoutePoint(StrictModel):
     y: float = Field(ge=-1000, le=1000, allow_inf_nan=False)
 
 
+class EdgeTypeDefinition(StrictModel):
+    id: str
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=2000)
+    style: EdgeStyle = Field(default_factory=EdgeStyle)
+    direction: Literal["forward", "both", "none"] = "forward"
+    routing: Literal["straight", "angled", "orthogonal", "curved"] | None = None
+
+    @field_validator("id")
+    @classmethod
+    def valid_id(cls, value: str) -> str:
+        if not _ID_RE.fullmatch(value):
+            raise ValueError("Invalid edge type ID")
+        return value
+
+
+class LegendEntry(StrictModel):
+    id: str
+    kind: Literal["node", "edge_type"]
+    node_id: str | None = None
+    edge_type_id: str | None = None
+    icon: str | None = None
+    shape: Literal["box", "ellipse", "cylinder", "diamond", "hexagon", "cloud"] = "box"
+    # None uses the referenced object/type description; "" is an explicit override.
+    description: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("id", "node_id", "edge_type_id")
+    @classmethod
+    def valid_id(cls, value: str | None) -> str | None:
+        if value is not None and not _ID_RE.fullmatch(value):
+            raise ValueError("Invalid legend reference ID")
+        return value
+
+    @field_validator("icon")
+    @classmethod
+    def valid_icon(cls, value: str | None) -> str | None:
+        return DiagramNode.valid_icon(value)
+
+
 class DiagramEdge(StrictModel):
     id: str
     source: str
@@ -184,6 +229,8 @@ class DiagramEdge(StrictModel):
     target_port: str = "auto"
     routing: Literal["straight", "angled", "orthogonal", "curved"] | None = None
     waypoints: list[RoutePoint] = Field(default_factory=list, max_length=32)
+    z_index: int = Field(default=0, ge=-1_000_000, le=1_000_000)
+    type_id: str | None = None
 
     @field_validator("source_port", "target_port")
     @classmethod
@@ -203,6 +250,9 @@ class DiagramEdge(StrictModel):
 class PresentationSettings(StrictModel):
     saved_colors: list[Color] = Field(default_factory=list, max_length=64)
     default_edge_label_background_transparent: bool = True
+    label_new_elements: bool = True
+    legend_mode: Literal["auto", "manual"] = "auto"
+    legend_entries: list[LegendEntry] = Field(default_factory=list, max_length=500)
 
     @field_validator("saved_colors")
     @classmethod
@@ -226,9 +276,20 @@ class DiagramProject(StrictModel):
     nodes: list[DiagramNode] = Field(default_factory=list)
     edges: list[DiagramEdge] = Field(default_factory=list)
     presentation: PresentationSettings = Field(default_factory=PresentationSettings)
+    edge_types: list[EdgeTypeDefinition] = Field(default_factory=list, max_length=256)
 
     @model_validator(mode="after")
     def validate_graph(self) -> DiagramProject:
+        types = {item.id: item for item in self.edge_types}
+        if len(types) != len(self.edge_types):
+            raise ValueError("Edge type IDs must be unique")
+        for edge in self.edges:
+            if edge.type_id is not None:
+                if edge.type_id not in types:
+                    raise ValueError(f"Edge '{edge.id}' references missing type '{edge.type_id}'")
+                definition = types[edge.type_id]
+                edge.style = definition.style.model_copy(deep=True)
+                edge.direction, edge.routing = definition.direction, definition.routing
         # Modern documents inherit the project preference only for omitted edge
         # values. Legacy snapshots without this preference keep their old opaque
         # labels; serialization then records that value explicitly.
@@ -243,6 +304,15 @@ class DiagramProject(StrictModel):
 
         containers = {item.id: item for item in self.containers}
         nodes = {item.id: item for item in self.nodes}
+        legend_ids = [item.id for item in self.presentation.legend_entries]
+        if len(legend_ids) != len(set(legend_ids)):
+            raise ValueError("Legend row IDs must be unique")
+        for entry in self.presentation.legend_entries:
+            if entry.kind == "edge_type":
+                if entry.edge_type_id not in types or entry.node_id is not None or entry.icon is not None:
+                    raise ValueError("Legend must reference an existing edge type")
+            elif entry.edge_type_id is not None or (entry.node_id is not None and entry.node_id not in nodes):
+                raise ValueError("Legend must reference an existing object or a collection figure")
         for container in self.containers:
             if container.parent_id and container.parent_id not in containers:
                 raise ValueError(f"Container '{container.id}' references missing parent '{container.parent_id}'")

@@ -26,6 +26,8 @@ def _node_statement(node: DiagramNode, manual_layout: bool) -> str:
         "tooltip": quote(node.description or node.kind),
         "gs_label_alignment": quote(node.label_alignment),
         "gs_label_vertical_alignment": quote(node.label_vertical_alignment),
+        "gs_rotation": str(node.rotation),
+        "gs_z_index": str(node.z_index),
         "gs_label_wrap": "true" if node.label_wrap else "false",
     }
     if node.icon:
@@ -63,7 +65,7 @@ def _container_open(container: DiagramContainer, depth: int) -> list[str]:
     return [f"{indent}subgraph {quote('cluster_' + container.id)} {{", f"{indent}    graph [{rendered}];"]
 
 
-def to_dot(project: DiagramProject) -> str:
+def to_dot(project: DiagramProject, *, include_metadata: bool = True) -> str:
     """Generate valid, deterministic DOT from a validated project."""
     graph_name = "GraphiSchema"
     lines = [f"digraph {graph_name} {{"]
@@ -77,6 +79,13 @@ def to_dot(project: DiagramProject) -> str:
         "compound=true",
         "pad=0.25",
     ]
+    if include_metadata:
+        graph_attrs.extend([
+        "gs_edge_types=" + quote(json.dumps([item.model_dump(mode="json") for item in project.edge_types], ensure_ascii=False, separators=(",", ":"))),
+        "gs_legend_entries=" + quote(json.dumps([item.model_dump(mode="json") for item in project.presentation.legend_entries], ensure_ascii=False, separators=(",", ":"))),
+        "gs_legend_mode=" + quote(project.presentation.legend_mode),
+        "gs_label_new_elements=" + ("true" if project.presentation.label_new_elements else "false"),
+        ])
     if project.diagram.layout_mode == "manual":
         graph_attrs.append("notranslate=true")
     lines.append("    graph [" + ", ".join(graph_attrs) + "];")
@@ -105,6 +114,8 @@ def to_dot(project: DiagramProject) -> str:
         direction = {"forward": "forward", "both": "both", "none": "none"}[edge.direction]
         attrs = {
             "label": quote(edge.label),
+            "gs_z_index": str(edge.z_index),
+            "gs_type_id": quote(edge.type_id or ""),
             "color": quote(style.color),
             "gs_color_mode": quote(style.color_mode),
             "gs_text_mode": quote(style.text_mode),

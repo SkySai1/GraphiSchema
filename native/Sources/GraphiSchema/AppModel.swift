@@ -503,7 +503,7 @@ final class AppModel: ObservableObject {
             if let index = current.containers.firstIndex(where: { $0.id == id }) { current.containers[index].style.setMode(parameter, mode) }
         case .edge, .edges:
             guard parameter != .fill else { return }
-            for index in current.edges.indices where selection.edgeIDs.contains(current.edges[index].id) { current.edges[index].style.setMode(parameter, mode) }
+            for index in current.edges.indices where selection.edgeIDs.contains(current.edges[index].id) { current.edges[index].style.setMode(parameter, mode); current.edges[index].typeId = nil }
         case .project: return
         }
         guard current != diagram else { return }; diagram = current; changed()
@@ -550,6 +550,7 @@ final class AppModel: ObservableObject {
         case .edge, .edges:
             guard parameter != .fill else { return }
             for index in current.edges.indices where selection.edgeIDs.contains(current.edges[index].id) {
+                current.edges[index].typeId = nil
                 if parameter == .stroke { current.edges[index].style.color = valueRGBA; current.edges[index].style.colorMode = "custom" }
                 else { current.edges[index].style.text = valueRGBA; current.edges[index].style.textMode = "custom" }
             }
@@ -598,6 +599,7 @@ final class AppModel: ObservableObject {
             if current.containers[index].style.effectivePenwidth != value { current.containers[index].style.penwidth = value }
         case .edge, .edges:
             for index in current.edges.indices where target.edgeIDs.contains(current.edges[index].id) {
+            if change != .reverse { current.edges[index].typeId = nil }
             switch change {
             case .lineStyle(let value):
                 current.edges[index].style.lineStyle = value
@@ -660,9 +662,97 @@ final class AppModel: ObservableObject {
     func editEdge(_ id: String, _ update: (inout DiagramEdge) -> Void) {
         guard !isEditingLocked else { return }
         guard var current = diagram, let index = current.edges.firstIndex(where: { $0.id == id }) else { return }
+        let old = current.edges[index]
         update(&current.edges[index])
+        if old.style != current.edges[index].style || old.direction != current.edges[index].direction || old.routing != current.edges[index].routing {
+            current.edges[index].typeId = nil
+        }
+        guard old != current.edges[index] else { return }
         diagram = current
         changed()
+    }
+
+    func rotateNodes(_ ids: Set<String>, by degrees: Double) {
+        guard !isEditingLocked, degrees.isFinite, var current = diagram else { return }
+        let positions = Dictionary(uniqueKeysWithValues: (layout?.nodes ?? []).map { ($0.id,$0) })
+        // Rotation changes app geometry, not the Graphviz placement algorithm.
+        for index in current.nodes.indices {
+            if current.diagram.layoutMode == "auto" || current.nodes[index].x == nil || current.nodes[index].y == nil {
+                current.nodes[index].x = positions[current.nodes[index].id]?.x ?? current.nodes[index].x ?? 0
+                current.nodes[index].y = positions[current.nodes[index].id]?.y ?? current.nodes[index].y ?? 0
+            }
+            if ids.contains(current.nodes[index].id) {
+                let value = (current.nodes[index].effectiveRotation+degrees+180).truncatingRemainder(dividingBy: 360)
+                current.nodes[index].rotation = (value<0 ? value+360 : value)-180
+            }
+        }
+        current.diagram.layoutMode = "manual"
+        guard current != diagram else { return }; diagram = current; changed()
+    }
+
+    func resetNodeRotations(_ ids: Set<String>) {
+        guard !isEditingLocked,var current = diagram else { return }
+        for index in current.nodes.indices where ids.contains(current.nodes[index].id) { current.nodes[index].rotation = 0 }
+        guard current != diagram else { return }; diagram = current; changed()
+    }
+
+    func setEdgeZIndex(_ ids: Set<String>, value: Int? = nil, front: Bool = true) {
+        guard !isEditingLocked, var current = diagram else { return }
+        let ordered = DiagramEdgeStackOrder.sorted(current.edges)
+        let selected = ordered.filter { ids.contains($0.id) }, rest = ordered.filter { !ids.contains($0.id) }
+        let arranged = front ? rest+selected : selected+rest
+        for index in current.edges.indices where value == nil || ids.contains(current.edges[index].id) {
+            current.edges[index].zIndex = value.map { min(1_000_000,max(-1_000_000,$0)) }
+                ?? arranged.firstIndex(where: { $0.id == current.edges[index].id }) ?? 0
+        }
+        guard current != diagram else { return }; diagram = current; changed()
+    }
+
+    func applyEdgeType(_ typeID: String?, to ids: Set<String>) {
+        guard !isEditingLocked, var current = diagram else { return }
+        let definition = current.effectiveEdgeTypes.first { $0.id == typeID }
+        guard typeID == nil || definition != nil else { return }
+        for index in current.edges.indices where ids.contains(current.edges[index].id) {
+            current.edges[index].typeId = typeID
+            if let definition {
+                current.edges[index].style = definition.style; current.edges[index].direction = definition.direction
+                current.edges[index].routing = definition.routing
+            }
+        }
+        guard current != diagram else { return }; diagram = current; changed()
+    }
+
+    func saveEdgeType(_ definition: EdgeTypeDefinition, applyingTo ids: Set<String> = []) {
+        guard !isEditingLocked, var current = diagram else { return }
+        var types = current.effectiveEdgeTypes
+        if let index = types.firstIndex(where: { $0.id == definition.id }) { types[index] = definition }
+        else { guard types.count<256 else { return }; types.append(definition) }
+        current.edgeTypes = types
+        for index in current.edges.indices where current.edges[index].typeId == definition.id || ids.contains(current.edges[index].id) {
+            current.edges[index].typeId = definition.id; current.edges[index].style = definition.style
+            current.edges[index].direction = definition.direction; current.edges[index].routing = definition.routing
+        }
+        guard current != diagram else { return }; diagram = current; changed()
+    }
+
+    func deleteEdgeType(_ id: String) {
+        guard !isEditingLocked, var current = diagram else { return }
+        current.edgeTypes = current.effectiveEdgeTypes.filter { $0.id != id }
+        for index in current.edges.indices where current.edges[index].typeId == id { current.edges[index].typeId = nil }
+        current.presentation.legendEntries = current.presentation.effectiveLegendEntries.filter { $0.edgeTypeId != id }
+        guard current != diagram else { return }; diagram = current; changed()
+    }
+
+    func updateLegend(mode: String, entries: [LegendEntry]) {
+        guard !isEditingLocked, ["auto","manual"].contains(mode), entries.count<=500, var current = diagram else { return }
+        current.presentation.legendMode = mode; current.presentation.legendEntries = entries
+        guard current != diagram else { return }; diagram = current; changed()
+    }
+
+    func updateNewElementLabels(_ enabled: Bool) {
+        guard !isEditingLocked, var current = diagram else { return }
+        current.presentation.labelNewElements = enabled
+        guard current != diagram else { return }; diagram = current; changed()
     }
 
     func moveNode(_ id: String, x: Double, y: Double, containerID: String? = nil) {
@@ -851,7 +941,7 @@ final class AppModel: ObservableObject {
         let iconSize = icon.map { CanvasGeometry.iconSize($0) }
         current.nodes.append(DiagramNode(
             id: id,
-            label: label,
+            label: current.presentation.effectiveLabelNewElements ? label : "",
             description: "",
             kind: kind,
             shape: shape,
@@ -875,7 +965,7 @@ final class AppModel: ObservableObject {
         let id = makeID("zone")
         current.containers.append(DiagramContainer(
             id: id,
-            label: "Новая зона",
+            label: current.presentation.effectiveLabelNewElements ? "Новая зона" : "",
             parentId: nil,
             style: ContainerStyle(fillMode: "theme", strokeMode: "theme", textMode: "theme", fill: "#EEF3FF", stroke: "#9CB4F5", text: "#3554A5"),
             x: min(1000, max(-1000, position?.x ?? ((layout?.minX ?? 0) + 1.7 + Double(current.containers.count % 3) * 3.4))),
@@ -912,7 +1002,7 @@ final class AppModel: ObservableObject {
             id: id,
             source: source.id,
             target: target.id,
-            label: "Новая связь",
+            label: current.presentation.effectiveLabelNewElements ? "Новая связь" : "",
             direction: "forward",
             style: EdgeStyle(colorMode: "theme", textMode: "theme", lineStyle: "solid", color: "#64748B", penwidth: 1.5, arrowhead: "normal", arrowtail: "none", constraint: true, weight: 1, minlen: 1,
                              labelBackgroundTransparent: current.presentation.effectiveDefaultEdgeLabelBackgroundTransparent),
@@ -955,6 +1045,8 @@ final class AppModel: ObservableObject {
                 current.nodes[index].containerId = parent
             }
         }
+        let remaining = Set(current.nodes.map(\.id))
+        current.presentation.legendEntries = current.presentation.effectiveLegendEntries.filter { $0.nodeId.map(remaining.contains) ?? true }
         selection = .project
         diagram = current
         changed()

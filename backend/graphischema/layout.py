@@ -33,7 +33,7 @@ def compute_layout(project: DiagramProject, timeout: float = 8.0) -> dict[str, o
     try:
         result = subprocess.run(
             command,
-            input=to_dot(project),
+            input=to_dot(project, include_metadata=False),
             text=True,
             capture_output=True,
             check=False,

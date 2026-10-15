@@ -33,6 +33,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
     private var historyWindowController: VersionHistoryWindowController?
     private var projectManager: ProjectManagerWindowController?
     private var branchManager: BranchManagerWindowController?
+    private var libraryController: DiagramLibraryWindowController?
     private var settingsController: ApplicationSettingsWindowController?
     private(set) var pdfExportWindowController: PDFExportWindowController?
     private let titleField = NSTextField(string: "")
@@ -95,7 +96,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         guard var active = notification.object as? NSWindow else { return }
         while let parent = active.sheetParent { active = parent }
         let owned = [window, historyWindowController?.window, branchManager?.window, projectManager?.window,
-                     settingsController?.window, styleWindowController?.window, pdfExportWindowController?.window, nodeTextEditorController?.window,
+                     settingsController?.window, libraryController?.window, styleWindowController?.window, pdfExportWindowController?.window, nodeTextEditorController?.window,
                      elementTextEditorController?.window, ollamaWindowController?.window]
             + colorEditors.values.map { $0.window }
         let context = (active.windowController as? ProjectThemedWindow)?.projectModel
@@ -106,7 +107,9 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
     }
 
     private func synchronizeWorkspaceWindows() {
+        if let libraryController, libraryController.documentID != model.projectID { libraryController.close(); self.libraryController = nil }
         guard displayedWorkspace != model.workspace else { return }
+        if displayedWorkspace != nil { libraryController?.close(); libraryController = nil }
         displayedWorkspace = model.workspace
         historyWindowController?.close(); historyWindowController = nil
         branchManager?.close(); branchManager = nil
@@ -117,6 +120,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         Task { try? await model.saveNow() }
         historyWindowController?.close()
         branchManager?.close()
+        libraryController?.close()
         styleWindowController?.close()
         pdfExportWindowController?.close()
         for editor in colorEditors.values { editor.close() }
@@ -291,6 +295,9 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         workspace.onMoveNodes = { [weak self] destinations, containerIDs in
             self?.model.moveNodes(destinations, containerIDs: containerIDs)
         }
+        workspace.onResetNodeRotations = { [weak self] ids in self?.model.resetNodeRotations(ids) }
+        workspace.onRotateNodes = { [weak self] ids, degrees in self?.model.rotateNodes(ids, by: degrees) }
+        workspace.onSetEdgeZIndex = { [weak self] ids, value, front in self?.model.setEdgeZIndex(ids, value: value, front: front) }
         workspace.onScaleNodes = { [weak self] ids, factor in self?.model.scaleNodes(ids, factor: factor) }
         workspace.onTransformNode = { [weak self] id, x, y, width, height in
             self?.model.transformNode(id, x: x, y: y, width: width, height: height)
@@ -394,6 +401,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         model.onModelChange = { [weak self] in
             guard let self else { return }
             self.synchronizeWorkspaceWindows()
+            self.libraryController?.refresh()
             self.historyWindowController?.refreshInteractionState()
             self.refreshSidebar()
             self.refreshInspector()
@@ -408,6 +416,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         }
         model.onProjectRemoval = { [weak self] in
             guard let self else { return }
+            libraryController?.close(); libraryController = nil
             historyWindowController?.close(); historyWindowController = nil
             branchManager?.close(); branchManager = nil
             styleWindowController?.close(); styleWindowController = nil; styleInspector = nil
@@ -584,6 +593,8 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         menuItems["style-selection"] = selectedStyle
         selectedStyle.isEnabled = hasSelectedElement && !model.isEditingLocked
         settings.addItem(selectedStyle)
+        settings.addItem(menuItem("Типы связей…", #selector(showEdgeTypesFromMenu(_:))))
+        settings.addItem(menuItem("Конструктор условных обозначений…", #selector(showLegendFromMenu(_:))))
         settings.addItem(.separator())
         for parameter in DiagramColorParameter.allCases {
             let item = menuItem("Цвет: \(parameter.title.lowercased())…", #selector(showColorFromMenu(_:)),
@@ -697,6 +708,13 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
     @objc private func exportJSONFromMenu(_ sender: Any?) { exportJSON() }
     @objc private func exportPNGFromMenu(_ sender: Any?) { exportPNG() }
     @objc private func exportPDFFromMenu(_ sender: Any?) { exportPDF() }
+    @objc private func showEdgeTypesFromMenu(_ sender: Any?) { showDiagramLibrary(legend: false) }
+    @objc private func showLegendFromMenu(_ sender: Any?) { showDiagramLibrary(legend: true) }
+    private func showDiagramLibrary(legend: Bool) {
+        guard model.diagram != nil else { return }
+        if libraryController == nil { libraryController = DiagramLibraryWindowController(model: model) }
+        libraryController?.present(legend: legend)
+    }
     @objc private func showSelectedStyleFromMenu(_ sender: Any?) { presentStyleWindow(scope: .selected) }
     @objc private func showProjectStyleFromMenu(_ sender: Any?) { presentStyleWindow(scope: .project) }
     @objc private func showColorFromMenu(_ sender: NSMenuItem) {
@@ -1904,18 +1922,18 @@ private final class SidebarView: NSView {
         addArranged(section("КОНТЕЙНЕРЫ · \(model.containers.count)"), to: contentStack)
         if model.containers.isEmpty { addArranged(hint("Нет контейнеров"), to: contentStack) }
         for container in model.containers {
-            addArranged(elementButton(container.label, symbol: "rectangle.dashed", color: NSColor(hex: container.style.stroke), selected: model.selection == .container(container.id), action: { [weak self] in self?.onSelect?(.container(container.id)) }, context: { [weak self] in self?.onSelect?(.container(container.id)); self?.onShowProperties?() }), to: contentStack)
+            addArranged(elementButton(container.label.isEmpty ? container.id : container.label, symbol: "rectangle.dashed", color: NSColor(hex: container.style.stroke), selected: model.selection == .container(container.id), action: { [weak self] in self?.onSelect?(.container(container.id)) }, context: { [weak self] in self?.onSelect?(.container(container.id)); self?.onShowProperties?() }), to: contentStack)
         }
         addArranged(separator(), to: contentStack)
         addArranged(section("КОМПОНЕНТЫ · \(model.nodes.count)"), to: contentStack)
         if model.nodes.isEmpty { addArranged(hint("Нет компонентов"), to: contentStack) }
         for node in model.nodes {
-            addArranged(elementButton(node.label, symbol: "square", color: NSColor(hex: node.style.stroke), selected: model.selection == .node(node.id), action: { [weak self] in self?.onSelect?(.node(node.id)) }, context: { [weak self] in self?.onSelect?(.node(node.id)); self?.onShowProperties?() }), to: contentStack)
+            addArranged(elementButton(node.label.isEmpty ? node.id : node.label, symbol: "square", color: NSColor(hex: node.style.stroke), selected: model.selection == .node(node.id), action: { [weak self] in self?.onSelect?(.node(node.id)) }, context: { [weak self] in self?.onSelect?(.node(node.id)); self?.onShowProperties?() }), to: contentStack)
         }
         addArranged(separator(), to: contentStack)
         addArranged(section("СВЯЗИ · \(model.edges.count)"), to: contentStack)
         if model.edges.isEmpty { addArranged(hint("Нет связей"), to: contentStack) }
-        let nodeLabels = Dictionary(uniqueKeysWithValues: model.nodes.map { ($0.id, $0.label) })
+        let nodeLabels = Dictionary(uniqueKeysWithValues: model.nodes.map { ($0.id, $0.label.isEmpty ? $0.id : $0.label) })
         for edge in model.edges {
             let source = nodeLabels[edge.source] ?? edge.source
             let target = nodeLabels[edge.target] ?? edge.target
@@ -2047,6 +2065,9 @@ private final class WorkspaceView: NSView {
     var onMoveNodes: (([String: NSPoint], [String: String]) -> Void)?
     var onResizeNode: ((String, Double, Double) -> Void)?
     var onScaleNodes: ((Set<String>, Double) -> Void)?
+    var onResetNodeRotations: ((Set<String>) -> Void)?
+    var onRotateNodes: ((Set<String>, Double) -> Void)?
+    var onSetEdgeZIndex: ((Set<String>, Int?, Bool) -> Void)?
     var onTransformNode: ((String, Double, Double, Double, Double) -> Void)?
     var onCopySelection: (() -> Void)?
     var onPasteSelection: (() -> Void)?
@@ -2251,6 +2272,9 @@ private final class WorkspaceView: NSView {
         canvasView.onMoveNodeInStack = { [weak self] id, front in self?.onMoveNodeInStack?(id, front) }
         canvasView.onMoveNodes = { [weak self] destinations, containerIDs in self?.onMoveNodes?(destinations, containerIDs) }
         canvasView.onResizeNode = { [weak self] id, width, height in self?.onResizeNode?(id, width, height) }
+        canvasView.onResetNodeRotations = { [weak self] ids in self?.onResetNodeRotations?(ids) }
+        canvasView.onRotateNodes = { [weak self] ids, degrees in self?.onRotateNodes?(ids,degrees) }
+        canvasView.onSetEdgeZIndex = { [weak self] ids, value, front in self?.onSetEdgeZIndex?(ids,value,front) }
         canvasView.onScaleNodes = { [weak self] ids, factor in self?.onScaleNodes?(ids, factor) }
         canvasView.onTransformNode = { [weak self] id, x, y, width, height in self?.onTransformNode?(id, x, y, width, height) }
         canvasView.onCopySelection = { [weak self] in self?.onCopySelection?() }
@@ -2673,6 +2697,8 @@ private final class InspectorView: NSView {
                         tooltip: "Фон подписей новых связей по умолчанию. Включён: прозрачный; выключен: непрозрачная плашка в цвете темы. Новый проект начинает с прозрачного фона. Уже созданные связи сохраняют своё оформление; для их изменения используйте групповое выделение.") { model.updateEdgeLabelBackgroundDefault($0) }
             addPopup("Тема", value: model.themeMode, choices: [("system", "Системная"), ("light", "Светлая"), ("dark", "Тёмная")]) { model.updateThemeMode($0) }
             addPopup("Тачпад", value: model.inverseTrackpad ? "inverse" : "follow", choices: [("follow", "За пальцами"), ("inverse", "Против пальцев")], tooltip: "Задаёт, движется ли холст вслед за пальцами по обеим осям или в обратную сторону.") { model.inverseTrackpad = $0 == "inverse" }
+            addCheckbox("Подписывать новые элементы", value: model.diagram?.presentation.effectiveLabelNewElements ?? true,
+                        tooltip: "Выключите для создания фигур, контейнеров и связей без текста. У уже созданных элементов подпись можно полностью удалить в редакторе текста.") { model.updateNewElementLabels($0) }
             addSection("КОМПОНОВКА")
             addPopup("Движок Graphviz", value: model.diagram?.diagram.layoutEngine ?? "dot", choices: GraphvizEngineOptions.choices,
                      tooltip: model.diagram?.diagram.layoutMode == "manual"
@@ -2716,7 +2742,7 @@ private final class InspectorView: NSView {
                 addSection("ОБЩЕЕ")
                 addText("Название", value: node.label, continuous: true) { value in
                     let label = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !label.isEmpty, label.unicodeScalars.count <= 160 else { return }
+                    guard label.unicodeScalars.count <= 160 else { return }
                     model.editNode(id) { $0.label = label }
                 }
                 addText("Тип", value: node.kind, tooltip: "Семантический класс компонента. Учитывается при анализе и генерации Ollama, но не меняет форму и геометрию.") { value in model.editNode(id) { $0.kind = value } }
@@ -2724,8 +2750,12 @@ private final class InspectorView: NSView {
                     guard let index = Int(value), (-1_000_000...1_000_000).contains(index) else { return }
                     model.setNodeZIndex(id, index)
                 }
+                addText("Поворот, °", value: String(format: "%.1f",node.effectiveRotation), tooltip: "Угол против часовой стрелки. Фигура, её текст, точки крепления и область нажатия поворачиваются вместе. Также доступен жест вращения двумя пальцами и круглый маркер над фигурой.") { value in
+                    guard let degrees = Double(value), degrees.isFinite, abs(degrees)<=360000 else { return }
+                    model.rotateNodes([id],by: degrees-node.effectiveRotation)
+                }
                 addReadOnly("ID", value: node.id)
-                addPopup("Контейнер", value: node.containerId ?? "", choices: [("", "Без контейнера")] + model.containers.map { ($0.id, $0.label) }) { value in
+                addPopup("Контейнер", value: node.containerId ?? "", choices: [("", "Без контейнера")] + model.containers.map { ($0.id, $0.label.isEmpty ? $0.id : $0.label) }) { value in
                     model.editNode(id) { $0.containerId = value.isEmpty ? nil : value }
                 }
                 if figureNodeID != id {
@@ -2782,7 +2812,7 @@ private final class InspectorView: NSView {
                 addSection("ОБЩЕЕ")
                 addText("Название", value: item.label, continuous: true) { value in
                     let label = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !label.isEmpty, label.unicodeScalars.count <= 120 else { return }
+                    guard label.unicodeScalars.count <= 120 else { return }
                     model.editContainer(id) { $0.label = label }
                 }
                 addReadOnly("ID", value: item.id)
@@ -2805,6 +2835,7 @@ private final class InspectorView: NSView {
         case .edges(let ids):
             title.stringValue = "\(ids.count) связей"
             addSection("ГРУППОВОЕ ОФОРМЛЕНИЕ")
+            addEdgeTypePicker(model: model, ids: ids)
             if let item = model.edges.first(where: { ids.contains($0.id) }) {
                 addPopup("Стиль линии", value: item.style.lineStyle, choices: DiagramStyleOptions.edgeLines) { model.setStyle(.lineStyle($0), for: .edges(ids)) }
                 addPopup("Направление", value: item.direction, choices: DiagramStyleOptions.directions) { model.setStyle(.direction($0), for: .edges(ids)) }
@@ -2828,6 +2859,10 @@ private final class InspectorView: NSView {
             title.stringValue = "Связь"
             if let item = model.edges.first(where: { $0.id == id }) {
                 addSection("СОЕДИНЕНИЕ")
+                addEdgeTypePicker(model: model, ids: [id])
+                addText("Z-index", value: String(item.effectiveZIndex), tooltip: "Линия с большим z-index рисуется поверх других; в местах пересечений на ней появляются перемычки. Равные значения сохраняют порядок связей проекта.") { value in
+                    if let index = Int(value), (-1_000_000...1_000_000).contains(index) { model.setEdgeZIndex([id],value: index) }
+                }
                 addText("Подпись", value: item.label, continuous: true) { value in
                     guard value.unicodeScalars.count <= 160 else { return }
                     model.editEdge(id) { $0.label = value }
@@ -2837,7 +2872,7 @@ private final class InspectorView: NSView {
                             tooltip: "Включён: подпись рисуется без фоновой плашки, видны линии и объекты под текстом. Выключен: непрозрачная плашка в цвете текущей темы улучшает читаемость. Применяется сразу на холсте и при экспорте; цвет текста задаётся отдельно.") { value in
                     model.setStyle(.labelBackgroundTransparent(value), for: .edge(id))
                 }
-                let nodes = model.nodes.map { ($0.id, $0.label) }
+                let nodes = model.nodes.map { ($0.id, $0.label.isEmpty ? $0.id : $0.label) }
                 addPopup("Источник", value: item.source, choices: nodes) { value in model.editEdge(id) { $0.source = value; $0.sourcePort = "auto" } }
                 addPopup("Цель", value: item.target, choices: nodes) { value in model.editEdge(id) { $0.target = value; $0.targetPort = "auto" } }
                 addPopup("Направление", value: item.direction, choices: DiagramStyleOptions.directions,
@@ -2966,6 +3001,12 @@ private final class InspectorView: NSView {
         let label = makeLabel(text, size: 8, weight: .bold, color: .secondaryLabelColor)
         label.identifier = NSUserInterfaceItemIdentifier("inspector-section-\(text)")
         addFullWidth(label)
+    }
+
+    private func addEdgeTypePicker(model: AppModel, ids: Set<String>) {
+        let values = Set(model.edges.filter { ids.contains($0.id) }.map { $0.typeId ?? "" })
+        addPopup("Тип связи", value: values.count == 1 ? (values.first ?? "") : "", choices: [("","Индивидуальный стиль")] + (model.diagram?.effectiveEdgeTypes ?? []).map { ($0.id,$0.name) }, mixed: values.count>1,
+                 tooltip: "Общий идентификатор, стиль и описание связи. Настройте типы через меню Настройки → Типы связей. Изменение общего типа обновляет все связанные линии; индивидуальная правка стиля отключает тип.") { model.applyEdgeType($0.isEmpty ? nil : $0,to: ids) }
     }
 
     private func addEdgeRouting(model: AppModel, label: String) {

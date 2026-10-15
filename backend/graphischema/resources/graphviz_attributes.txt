@@ -53,3 +53,13 @@ gs_source_port/gs_target_port (vertex), gs_routing, gs_waypoints: расшире
 
 Режимы цвета GraphiSchema: gs_fill_mode, gs_stroke_mode, gs_text_mode у узлов/контейнеров; gs_color_mode и gs_text_mode у связей. Значения custom, theme, inverse. В custom используются явные RGBA; theme/inverse разрешают чёрный/белый по теме проекта в SVG/AppKit. Сам Graphviz расширения gs_* не обрабатывает. Изменение явного DOT-цвета отключает автоматический режим этого параметра.
 Кривые с закреплением на гранях/вершинах и ручными точками сглаживаются геометрическим слоем GraphiSchema кубическими кривыми с общей касательной. Прямоугольные маршруты остаются ортогональными.
+
+
+Расширения GraphiSchema (не встроенные атрибуты Graphviz):
+- Узел rotation: угол в градусах, против часовой стрелки; в DOT gs_rotation. Приложение поворачивает контуры, текст и порты. z_index сохраняется через gs_z_index.
+- Связь z_index: порядок отрисовки; верхняя линия получает дугу в месте пересечения. type_id / gs_type_id: ссылка на общий тип связи.
+- edge_types: массив {id,name,description,style,direction,routing}. Стиль, направление и маршрут типов распространяются на все связи с type_id. Для индивидуального стиля отсоединяйте связь от типа (type_id=null).
+- presentation.label_new_elements / gs_label_new_elements: подписывать ли новые элементы. Пустые label разрешены у узлов, контейнеров и связей.
+- presentation.legend_mode: auto или manual; legend_entries: строки {id,kind,node_id,edge_type_id,icon,shape,description}. kind=node ссылается на объект или фигуру коллекции, kind=edge_type — на общий тип связи. description=null использует описание типа/название объекта, строка задаёт ручную замену.
+- DOT графа: gs_edge_types и gs_legend_entries содержат JSON-массивы; gs_legend_mode задаёт режим. Сторонний Graphviz не интерпретирует эти метаданные.
+- Прямые/прямоугольные маршруты не требуют жёсткого отрезка фиксированной длины у порта. Для дальней стороны строго прямой связи выберите другой порт или маршрут обхода.

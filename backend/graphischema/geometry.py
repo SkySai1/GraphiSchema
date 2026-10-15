@@ -35,9 +35,24 @@ def normalized_paths(node) -> list[list[tuple[float, float]]]:
     return [vertices + vertices[:1]]
 
 
+def rotate(point, center, degrees):
+    angle = math.radians(degrees)
+    x, y = point[0]-center[0], point[1]-center[1]
+    return center[0]+x*math.cos(angle)-y*math.sin(angle), center[1]+x*math.sin(angle)+y*math.cos(angle)
+
+
+def world_point(point, node, position):
+    center = position["x"], position["y"]
+    return rotate((center[0]+(point[0]-.5)*position["width"], center[1]+(point[1]-.5)*position["height"]), center, node.rotation)
+
+
+def node_bounds(node, position):
+    corners = [world_point(p, node, position) for p in ((0,0),(1,0),(1,1),(0,1))]
+    return min(p[0] for p in corners), min(p[1] for p in corners), max(p[0] for p in corners), max(p[1] for p in corners)
+
+
 def outline_paths(node, position) -> list[list[tuple[float, float]]]:
-    return [[(position["x"]+(x-.5)*position["width"], position["y"]+(y-.5)*position["height"])
-             for x, y in path] for path in normalized_paths(node)]
+    return [[world_point(p, node, position) for p in path] for path in normalized_paths(node)]
 
 
 def vertices(node) -> list:
@@ -59,11 +74,11 @@ def attachment(node, position, toward, port="auto") -> tuple[float, float]:
     center = position["x"], position["y"]
     if port.startswith("vertex:"):
         x, y = vertices(node)[int(port.split(":")[1])]
-        return center[0]+(x-.5)*position["width"], center[1]+(y-.5)*position["height"]
+        return world_point((x, y), node, position)
     directions = {"n": (0, 1), "ne": (1, 1), "e": (1, 0), "se": (1, -1),
                   "s": (0, -1), "sw": (-1, -1), "w": (-1, 0), "nw": (-1, 1)}
     if port in directions:
-        dx, dy = directions[port]
+        dx, dy = rotate(directions[port], (0, 0), node.rotation)
         intersections = []
         for path in paths:
             for a, b in zip(path, path[1:]):
@@ -122,18 +137,47 @@ def route_midpoint(points):
     return points[0]
 
 
-def port_lead(point, position, port, routing, length=.25):
-    """Reserve an outside approach to a fixed side or vertex."""
-    if port == "auto":
-        return point
-    dx, dy = point[0]-position["x"], point[1]-position["y"]
-    if routing == "orthogonal":
-        if abs(dx) >= abs(dy):
-            dy = 0
-        else:
-            dx = 0
-    norm = math.hypot(dx, dy)
-    return (point[0]+length*dx/norm, point[1]+length*dy/norm) if norm > 1e-9 else point
+def orthogonal_route(a, b, source=None, target=None):
+    """Choose complete Manhattan legs; never insert a rigid endpoint stub."""
+    xs = [(a[0]+b[0])/2, a[0], b[0]]
+    ys = [(a[1]+b[1])/2, a[1], b[1]]
+    for obj in (source, target):
+        if obj:
+            xs += [obj["x"]-obj["width"]/2-.08, obj["x"]+obj["width"]/2+.08]
+            ys += [obj["y"]-obj["height"]/2-.08, obj["y"]+obj["height"]/2+.08]
+    candidates = [[a, (a[0], b[1]), b], [a, (b[0], a[1]), b]]
+    candidates += [[a, (x,a[1]), (x,b[1]), b] for x in xs]
+    candidates += [[a, (a[0],y), (b[0],y), b] for y in ys]
+    candidates += [[a,(x,a[1]),(x,y),(b[0],y),b] for x in xs for y in ys]
+    candidates += [[a,(a[0],y),(x,y),(x,b[1]),b] for x in xs for y in ys]
+    def compact(points):
+        result = []
+        for p in points:
+            if result and math.dist(result[-1],p)<1e-7: continue
+            while len(result)>1 and abs((result[-1][0]-result[-2][0])*(p[1]-result[-1][1])-(result[-1][1]-result[-2][1])*(p[0]-result[-1][0]))<1e-9:
+                # Keep a U-turn so that it receives a cost below.
+                if (result[-1][0]-result[-2][0])*(p[0]-result[-1][0])+(result[-1][1]-result[-2][1])*(p[1]-result[-1][1]) <= 0: break
+                result.pop()
+            result.append(p)
+        return result
+    def score(points):
+        if len(points)<2: return 0
+        cost = sum(math.dist(u,v) for u,v in zip(points,points[1:]))+.12*len(points)
+        for end, peer, obj in ((points[0],points[1],source),(points[-1],points[-2],target)):
+            if obj:
+                dx,dy = end[0]-obj["x"],end[1]-obj["y"]
+                # Follow the outward half-plane of the actual attachment.
+                if dx*(peer[0]-end[0])+dy*(peer[1]-end[1]) <= 1e-8: cost += 10000
+        for obj in (source,target):
+            if not obj: continue
+            for u,v in zip(points,points[1:]):
+                # Axis-aligned segment enters the interior of an endpoint body.
+                l,r=obj["x"]-obj["width"]/2+1e-5,obj["x"]+obj["width"]/2-1e-5
+                d,t=obj["y"]-obj["height"]/2+1e-5,obj["y"]+obj["height"]/2-1e-5
+                if (abs(u[0]-v[0])<1e-8 and l<u[0]<r and max(min(u[1],v[1]),d)<min(max(u[1],v[1]),t)) or (abs(u[1]-v[1])<1e-8 and d<u[1]<t and max(min(u[0],v[0]),l)<min(max(u[0],v[0]),r)):
+                    cost += 10000
+        return cost
+    return min((compact(p) for p in candidates), key=score)
 
 
 def smooth_route(anchors, source=None, target=None):
@@ -195,19 +239,17 @@ def normalize_edges(project, layout):
         if routing == "curved" and (waypoints or edge.source_port != "auto" or edge.target_port != "auto"):
             points = smooth_route([start,*waypoints,end], source if edge.source_port != "auto" else None,
                                   target if edge.target_port != "auto" else None)
-        elif edge.source_port != "auto" or edge.target_port != "auto":
-            lead_length = min(.25, math.dist(start, end)/3)
-            anchors = [port_lead(start, source, edge.source_port, routing, lead_length), *waypoints,
-                       port_lead(end, target, edge.target_port, routing, lead_length)]
-            core = [anchors[0]]
-            for a, b in zip(anchors, anchors[1:]):
-                core.extend(route(a, b, routing, horizontal)[1:] if not waypoints or routing == "orthogonal" else [b])
-            points = [start, *core, end]
-        elif waypoints:
+        elif routing == "orthogonal":
             anchors = [start, *waypoints, end]
-            points = [anchors[0]]
-            for a, b in zip(anchors, anchors[1:]):
-                points.extend(route(a, b, "orthogonal", horizontal)[1:] if routing == "orthogonal" else [b])
+            points = [start]
+            for index, (a, b) in enumerate(zip(anchors, anchors[1:])):
+                points.extend(orthogonal_route(a, b,
+                    source if index == 0 and edge.source_port != "auto" else None,
+                    target if index == len(anchors)-2 and edge.target_port != "auto" else None)[1:])
+        elif waypoints:
+            points = [start, *waypoints, end]
+        elif edge.source_port != "auto" or edge.target_port != "auto":
+            points = route(start, end, routing, horizontal)
         elif routing == "curved" and edge.source_port == edge.target_port == "auto" and len(geometry["points"]) >= 4:
             old = _source_to_target([(p["x"], p["y"]) for p in geometry["points"]], source, target)
             start = attachment(nodes[edge.source], source, old[1])
@@ -239,6 +281,7 @@ def normalize_edges(project, layout):
         if edge.waypoints or edge.routing or nodes[edge.source].icon or nodes[edge.target].icon or edge.source_port != "auto" or edge.target_port != "auto":
             geometry["labelX"], geometry["labelY"] = middle[0], middle[1]+.15
     all_points = [(p["x"], p["y"]) for e in layout["edges"] for p in e["points"]]
+    all_points.extend(p for node in project.nodes for p in ((node_bounds(node, positions[node.id])[:2]), (node_bounds(node, positions[node.id])[2:])))
     if all_points:
         max_x = max(layout["minX"]+layout["width"], *(p[0] for p in all_points))
         max_y = max(layout["minY"]+layout["height"], *(p[1] for p in all_points))

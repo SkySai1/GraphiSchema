@@ -9,6 +9,7 @@ struct DiagramClipboard: Codable {
     var containers: [DiagramContainer]
     var nodes: [DiagramNode]
     var edges: [DiagramEdge]
+    var edgeTypes: [EdgeTypeDefinition]? = nil
 
     static func capture(_ selection: DiagramSelection, from project: DiagramProject,
                         layout: DiagramLayout?) -> DiagramClipboard? {
@@ -54,7 +55,8 @@ struct DiagramClipboard: Codable {
         }
         guard !nodes.isEmpty || !containers.isEmpty || !edges.isEmpty else { return nil }
         return DiagramClipboard(projectId: project.project.id, rootContainerIds: roots,
-                                containers: containers, nodes: nodes, edges: edges)
+                                containers: containers, nodes: nodes, edges: edges,
+                                edgeTypes: project.effectiveEdgeTypes.filter { type in edges.contains { $0.typeId == type.id } })
     }
 
     func inserting(into project: DiagramProject, layout: DiagramLayout?, delta: NSPoint, containerOverrides: [String: String] = [:])
@@ -111,12 +113,25 @@ struct DiagramClipboard: Codable {
             copy.y = translated(node.y, by: delta.y)
             return copy
         }
+        var types = result.effectiveEdgeTypes
+        var typeIDs: [String:String] = [:]
+        for definition in edgeTypes ?? [] {
+            if let existing = types.first(where: { $0.id == definition.id }), existing == definition {
+                typeIDs[definition.id] = existing.id
+            } else {
+                var copy = definition
+                if types.contains(where: { $0.id == copy.id }) { copy.id = newId("type") }
+                typeIDs[definition.id] = copy.id; types.append(copy)
+            }
+        }
+        result.edgeTypes = types
         var copiedEdges: [DiagramEdge] = []
         for edge in edges {
             guard let source = nodeIds[edge.source] ?? (sameProject && validNodes.contains(edge.source) ? edge.source : nil),
                   let target = nodeIds[edge.target] ?? (sameProject && validNodes.contains(edge.target) ? edge.target : nil) else { continue }
             var copy = edge
             copy.id = newId("edge")
+            copy.typeId = edge.typeId.flatMap { typeIDs[$0] ?? (sameProject && types.contains(where: { $0.id == edge.typeId }) ? $0 : nil) }
             copy.source = source
             copy.target = target
             if nodeIds[edge.source] != nil && nodeIds[edge.target] != nil {

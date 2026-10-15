@@ -75,7 +75,7 @@ class _Parser:
         if self.index != len(self.tokens):
             raise self._error("Лишний текст после закрывающей скобки графа")
         _check_attrs(self.node_defaults, {"fontname", "fontsize", "margin", "label", "shape", "style", "fillcolor", "color", "fontcolor", "penwidth", "tooltip", "pos"}, "узлов по умолчанию")
-        _check_attrs(self.edge_defaults, {"fontname", "fontsize", "label", "color", "fontcolor", "style", "penwidth", "arrowhead", "arrowtail", "dir", "constraint", "weight", "minlen", "gs_label_background_transparent", "gs_color_mode", "gs_text_mode"}, "связей по умолчанию")
+        _check_attrs(self.edge_defaults, {"fontname", "fontsize", "label", "color", "fontcolor", "style", "penwidth", "arrowhead", "arrowtail", "dir", "constraint", "weight", "minlen", "gs_label_background_transparent", "gs_color_mode", "gs_text_mode", "gs_type_id", "gs_z_index"}, "связей по умолчанию")
         return self.nodes, self.containers, self.edges
 
     def _statements(self, parent_id: str | None) -> None:
@@ -201,7 +201,7 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
     parser = _Parser(source)
     node_statements, container_statements, edge_statements = parser.parse()
     graph_attrs = parser.graph_attrs
-    _check_attrs(graph_attrs, {"rankdir", "splines", "bgcolor", "nodesep", "ranksep", "compound", "pad", "notranslate", "gs_default_edge_label_background_transparent"}, "графа")
+    _check_attrs(graph_attrs, {"rankdir", "splines", "bgcolor", "nodesep", "ranksep", "compound", "pad", "notranslate", "gs_edge_types", "gs_legend_entries", "gs_legend_mode", "gs_label_new_elements", "gs_default_edge_label_background_transparent"}, "графа")
     default_label_background = graph_attrs.get("gs_default_edge_label_background_transparent", "true" if project.presentation.default_edge_label_background_transparent else "false")
     if default_label_background not in {"true", "false"}:
         raise DOTEditError("gs_default_edge_label_background_transparent должен быть true или false.")
@@ -258,7 +258,7 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
                 all_node_statements[node_id] = NodeStatement(None, {})
     for node_id, statement in all_node_statements.items():
         attrs = statement.attrs
-        allowed = {"label", "shape", "style", "fillcolor", "color", "fontcolor", "penwidth", "tooltip", "pos", "fontname", "fontsize", "margin", "fixedsize", "width", "height", "gs_icon", "gs_label_alignment", "gs_label_vertical_alignment", "gs_label_wrap", "gs_fill_mode", "gs_stroke_mode", "gs_text_mode"}
+        allowed = {"label", "shape", "style", "fillcolor", "color", "fontcolor", "penwidth", "tooltip", "pos", "fontname", "fontsize", "margin", "fixedsize", "width", "height", "gs_icon", "gs_rotation", "gs_z_index", "gs_label_alignment", "gs_label_vertical_alignment", "gs_label_wrap", "gs_fill_mode", "gs_stroke_mode", "gs_text_mode"}
         _check_attrs(attrs, allowed, f"узла {node_id}")
         old = existing_nodes.get(node_id)
         line_style = old.style.line_style if old else "solid"
@@ -296,7 +296,8 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
             "label_alignment": attrs.get("gs_label_alignment", old.label_alignment if old else "center"),
             "label_vertical_alignment": attrs.get("gs_label_vertical_alignment", old.label_vertical_alignment if old else "middle"),
             "label_wrap": wrap_value == "true",
-            "z_index": old.z_index if old else 0,
+            "z_index": _integer(attrs.get("gs_z_index", str(old.z_index if old else 0)), "gs_z_index"),
+            "rotation": _number(attrs.get("gs_rotation", str(old.rotation if old else 0)), "gs_rotation"),
             "container_id": statement.parent_id,
             "style": {
                 **_color_modes(attrs, old, ("fill", "stroke", "text")),
@@ -346,6 +347,35 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
         candidate_data["diagram"]["rank_spacing"] = _number(graph_attrs["ranksep"], "ranksep")
     candidate_data["presentation"]["background"] = graph_attrs.get("bgcolor", project.presentation.background)
     candidate_data["presentation"]["default_edge_label_background_transparent"] = default_label_background == "true"
+    try:
+        if "gs_edge_types" in graph_attrs:
+            from .models import EdgeTypeDefinition
+            parsed_types = json.loads(graph_attrs["gs_edge_types"])
+            if not isinstance(parsed_types,list): raise ValueError("Expected type array")
+            candidate_data["edge_types"] = [EdgeTypeDefinition.model_validate(item).model_dump() for item in parsed_types]
+        if "gs_legend_entries" in graph_attrs:
+            from .models import LegendEntry
+            parsed_entries = json.loads(graph_attrs["gs_legend_entries"])
+            if not isinstance(parsed_entries,list): raise ValueError("Expected legend array")
+            candidate_data["presentation"]["legend_entries"] = [LegendEntry.model_validate(item).model_dump() for item in parsed_entries]
+    except (ValueError, TypeError) as exc:
+        raise DOTEditError("Типы связей и строки легенды должны быть JSON-массивами.") from exc
+    if "gs_legend_mode" in graph_attrs:
+        candidate_data["presentation"]["legend_mode"] = graph_attrs["gs_legend_mode"]
+    if "gs_label_new_elements" in graph_attrs:
+        if graph_attrs["gs_label_new_elements"] not in {"true", "false"}:
+            raise DOTEditError("gs_label_new_elements должен быть true или false.")
+        candidate_data["presentation"]["label_new_elements"] = graph_attrs["gs_label_new_elements"] == "true"
+    # Remove rows only for entities actually deleted by this edit. Invalid new
+    # references still reach canonical validation and produce an error.
+    node_ids = {node["id"] for node in nodes}
+    type_ids = {item["id"] for item in candidate_data["edge_types"]}
+    deleted_nodes = {item.id for item in project.nodes}-node_ids
+    deleted_types = {item.id for item in project.edge_types}-type_ids
+    for edge in edges:
+        if edge["type_id"] in deleted_types: edge["type_id"] = None
+    candidate_data["presentation"]["legend_entries"] = [item for item in candidate_data["presentation"]["legend_entries"]
+        if item.get("node_id") not in deleted_nodes and item.get("edge_type_id") not in deleted_types]
     if explicit_positions:
         candidate_data["diagram"]["layout_mode"] = "manual"
     if graph_attrs.get("notranslate", "false").lower() == "true" and not explicit_positions:
@@ -382,7 +412,7 @@ def _build_edges(project: DiagramProject, statements: list[EdgeStatement], defau
     result = []
     for index, statement in enumerate(statements):
         attrs = statement.attrs
-        _check_attrs(attrs, {"label", "color", "fontcolor", "style", "penwidth", "arrowhead", "arrowtail", "dir", "constraint", "weight", "minlen", "fontname", "fontsize", "headport", "tailport", "gs_source_port", "gs_target_port", "gs_routing", "gs_waypoints", "gs_label_background_transparent", "gs_color_mode", "gs_text_mode"}, f"связи {statement.source} -> {statement.target}")
+        _check_attrs(attrs, {"label", "color", "fontcolor", "style", "penwidth", "arrowhead", "arrowtail", "dir", "constraint", "weight", "minlen", "fontname", "fontsize", "headport", "tailport", "gs_source_port", "gs_target_port", "gs_routing", "gs_waypoints", "gs_label_background_transparent", "gs_color_mode", "gs_text_mode", "gs_type_id", "gs_z_index"}, f"связи {statement.source} -> {statement.target}")
         _require_value(attrs, "fontname", "Arial", "связи")
         old_candidates = old_by_pair.get((statement.source, statement.target), [])
         label = attrs.get("label", "")
@@ -412,6 +442,8 @@ def _build_edges(project: DiagramProject, statements: list[EdgeStatement], defau
             raise DOTEditError("gs_waypoints должен быть JSON-массивом координат.") from exc
         result.append({
             "id": edge_id,
+            "z_index": _integer(attrs.get("gs_z_index", str(old.z_index if old else 0)), "gs_z_index"),
+            "type_id": attrs.get("gs_type_id", old.type_id if old else None) or None,
             "source": statement.source,
             "target": statement.target,
             "label": label,
@@ -435,6 +467,10 @@ def _build_edges(project: DiagramProject, statements: list[EdgeStatement], defau
                 "minlen": _integer(attrs.get("minlen", str(old.style.minlen if old else 1)), "minlen"),
             },
         })
+        # Per-edge DOT styling is an explicit override of its shared type.
+        if old and result[-1]["type_id"] == old.type_id:
+            if result[-1]["style"] != old.style.model_dump() or direction != old.direction or result[-1]["routing"] != old.routing:
+                result[-1]["type_id"] = None
     return result
 
 
@@ -581,6 +617,8 @@ def describe_dot_changes(before: DiagramProject, after: DiagramProject) -> dict[
     settings_changed = []
     if before.diagram != after.diagram:
         settings_changed.append("Настройки компоновки")
+    if before.edge_types != after.edge_types:
+        settings_changed.append("Типы связей")
     if before.presentation != after.presentation:
         settings_changed.append("Оформление")
     result["settings"] = settings_changed

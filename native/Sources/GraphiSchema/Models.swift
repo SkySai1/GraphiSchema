@@ -15,6 +15,9 @@ struct DiagramProject: Codable, Equatable {
     var nodes: [DiagramNode]
     var edges: [DiagramEdge]
     var presentation: PresentationSettings
+    var edgeTypes: [EdgeTypeDefinition]? = nil
+
+    var effectiveEdgeTypes: [EdgeTypeDefinition] { edgeTypes ?? [] }
 }
 
 struct ProjectInfo: Codable, Equatable {
@@ -118,11 +121,13 @@ struct DiagramNode: Codable, Equatable, Identifiable {
     var labelVerticalAlignment: String? = nil
     var labelWrap: Bool? = nil
     var zIndex: Int? = nil
+    var rotation: Double? = nil
 
     var effectiveLabelAlignment: String { labelAlignment ?? "center" }
     var effectiveLabelVerticalAlignment: String { labelVerticalAlignment ?? "middle" }
     var effectiveLabelWrap: Bool { labelWrap ?? false }
     var effectiveZIndex: Int { zIndex ?? 0 }
+    var effectiveRotation: Double { rotation ?? 0 }
 }
 
 enum DiagramNodeStackOrder {
@@ -193,8 +198,11 @@ struct DiagramEdge: Codable, Equatable, Identifiable {
     var targetPort: String = "auto"
     var routing: String? = nil
     var waypoints: [RoutePoint] = []
+    var zIndex: Int? = nil
+    var typeId: String? = nil
+    var effectiveZIndex: Int { zIndex ?? 0 }
 
-    enum CodingKeys: String, CodingKey { case id, source, target, label, direction, style, sourcePort, targetPort, routing, waypoints }
+    enum CodingKeys: String, CodingKey { case id, source, target, label, direction, style, sourcePort, targetPort, routing, waypoints, zIndex, typeId }
     init(id: String, source: String, target: String, label: String, direction: String, style: EdgeStyle,
          sourcePort: String = "auto", targetPort: String = "auto") {
         self.id = id; self.source = source; self.target = target; self.label = label
@@ -210,10 +218,40 @@ struct DiagramEdge: Codable, Equatable, Identifiable {
         targetPort = try v.decodeIfPresent(String.self, forKey: .targetPort) ?? "auto"
         routing = try v.decodeIfPresent(String.self, forKey: .routing)
         waypoints = try v.decodeIfPresent([RoutePoint].self, forKey: .waypoints) ?? []
+        zIndex = try v.decodeIfPresent(Int.self, forKey: .zIndex)
+        typeId = try v.decodeIfPresent(String.self, forKey: .typeId)
     }
 }
 
 struct RoutePoint: Codable, Equatable { var x: Double; var y: Double }
+
+struct EdgeTypeDefinition: Codable, Equatable, Identifiable {
+    var id: String
+    var name: String
+    var description: String
+    var style: EdgeStyle
+    var direction: String
+    var routing: String?
+}
+
+struct LegendEntry: Codable, Equatable, Identifiable {
+    var id: String
+    var kind: String
+    var nodeId: String? = nil
+    var edgeTypeId: String? = nil
+    var icon: String? = nil
+    var shape: String = "box"
+    var description: String? = nil
+}
+
+enum DiagramEdgeStackOrder {
+    static func sorted(_ edges: [DiagramEdge]) -> [DiagramEdge] {
+        edges.enumerated().sorted {
+            $0.element.effectiveZIndex == $1.element.effectiveZIndex
+                ? $0.offset < $1.offset : $0.element.effectiveZIndex < $1.element.effectiveZIndex
+        }.map(\.element)
+    }
+}
 
 struct EdgeStyle: Codable, Equatable {
     var colorMode: String? = nil
@@ -239,6 +277,13 @@ struct PresentationSettings: Codable, Equatable {
     var background: String
     var savedColors: [String]? = nil
     var defaultEdgeLabelBackgroundTransparent: Bool? = nil
+    var labelNewElements: Bool? = nil
+    var legendMode: String? = nil
+    var legendEntries: [LegendEntry]? = nil
+
+    var effectiveLabelNewElements: Bool { labelNewElements ?? true }
+    var effectiveLegendMode: String { legendMode ?? "auto" }
+    var effectiveLegendEntries: [LegendEntry] { legendEntries ?? [] }
 
     var effectiveDefaultEdgeLabelBackgroundTransparent: Bool { defaultEdgeLabelBackgroundTransparent ?? true }
     var canvasBackground: String { theme == "dark" && background.uppercased() == "#FFFFFF" ? "#21172F" : background }

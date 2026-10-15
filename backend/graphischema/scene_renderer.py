@@ -3,6 +3,7 @@ import html
 
 from .geometry import icon_library, normalized_paths
 from .arrows import arrow_drawing
+from .crossings import bridged_path
 from .text_layout import elide_text, estimated_text_width, label_lines
 from .container_layout import FONT_SIZE, LABEL_HEIGHT, LABEL_INSET_X, LABEL_INSET_TOP, container_rects
 
@@ -36,6 +37,11 @@ def render_scene(project, layout, background=None):
         red, green, blue = (int(background[i:i+2], 16)/255 for i in (1, 3, 5))
         dark = .2126*red+.7152*green+.0722*blue < .5
     text = "#FFFFFF" if dark else "#172238"
+    legend = []
+    if project.presentation.legend_mode == "manual" and project.presentation.legend_entries:
+        legend, legend_height = _manual_legend(project, width+14, pad)
+        width += 280+pad
+        height = max(height,legend_height+pad*2)
     out = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width:.4f}pt" height="{height:.4f}pt" viewBox="0 0 {width:.4f} {height:.4f}">']
     if canvas != "transparent":
         canvas_color, canvas_alpha = color(canvas)
@@ -61,7 +67,9 @@ def render_scene(project, layout, background=None):
         out.append(f'<text data-container-label="{c.id}" clip-path="url(#{clip_id})" x="{x+LABEL_INSET_X:.4f}" y="{y+LABEL_INSET_TOP+FONT_SIZE:.4f}" fill="{caption}" fill-opacity="{text_alpha:.4f}" font-family="Arial,sans-serif" font-size="{FONT_SIZE}" font-weight="700"><title>{html.escape(c.label)}</title>{html.escape(caption_text)}</text>')
     edges = {e.id: e for e in project.edges}
     arrow_elements = []
-    for g in layout["edges"]:
+    lower_paths = []
+    order = {e.id: i for i, e in enumerate(project.edges)}
+    for g in sorted(layout["edges"], key=lambda g: (edges[g["id"]].z_index, order[g["id"]])):
         edge = edges[g["id"]]
         points = [point(p["x"], p["y"]) for p in g["points"]]
         if len(points) < 2:
@@ -71,7 +79,8 @@ def render_scene(project, layout, background=None):
                                 style.arrowtail if edge.direction == "both" else "none", style.penwidth)
         dash = {"dashed": ' stroke-dasharray="6 4"', "dotted": ' stroke-dasharray="1.5 3"'}.get(style.line_style, "")
         edge_color, edge_alpha = color(style.color)
-        shaft = drawing.shaft
+        shaft = bridged_path(drawing.shaft, lower_paths, radius=max(5, style.penwidth*1.5))
+        lower_paths.append(drawing.shaft)
         if dash:
             shaft = shaft[(1 if drawing.tail else 0):(-1 if drawing.head else None)]
         out.append(f'<path data-edge="{edge.id}" d="{data(shaft)}" fill="none" stroke="{edge_color}" stroke-opacity="{edge_alpha:.4f}" stroke-width="{style.penwidth}" stroke-linecap="round" stroke-linejoin="round"{dash}/>')
@@ -107,7 +116,8 @@ def render_scene(project, layout, background=None):
         n = positions[node.id]
         paths = normalized_paths(node)
         closed = icon_library()[node.icon]["closed"] if node.icon else [True]+[False]*(len(paths)-1)
-        out.append(f'<g data-node="{node.id}"' + (f' data-icon="{node.icon}"' if node.icon else "") + ">")
+        cx, cy = point(n["x"], n["y"])
+        out.append(f'<g data-node="{node.id}" transform="rotate({-node.rotation:g} {cx:.4f} {cy:.4f})"' + (f' data-icon="{node.icon}"' if node.icon else "") + ">")
         fill, fill_alpha = color(node.style.fill); stroke, stroke_alpha = color(node.style.stroke)
         fills = icon_library()[node.icon].get("fill_paths", []) if node.icon else [paths[0]]
         # A compound nonzero path paints overlapping bodies only once, preserving alpha.
@@ -151,9 +161,75 @@ def render_scene(project, layout, background=None):
         else:
             out.append(f'<text x="{x:.4f}" y="{y:.4f}" text-anchor="{text_anchor}" fill="{label_color}" fill-opacity="{label_alpha:.4f}" font-family="Arial,sans-serif" font-size="{font_size:g}" font-weight="600">{html.escape(node.label)}</text></g>')
     out.extend(arrow_elements)
+    out.extend(legend)
     out.append("</svg>")
     return "\n".join(out)
 
 
 def _area(path):
     return abs(sum(a[0]*b[1]-b[0]*a[1] for a, b in zip(path, path[1:]+path[:1])))/2
+
+
+def _manual_legend(project, x, y, width=280):
+    """Two-column manual legend shared by SVG and PNG exports."""
+    from .models import DiagramNode
+    from .colors import resolve_color
+    nodes = {node.id: node for node in project.nodes}
+    types = {item.id: item for item in project.edge_types}
+    dark = project.presentation.theme == "dark"
+    ink, divider = ("#FFFFFF", "#64556F") if dark else ("#172238", "#CBD5E1")
+    output = [f'<g data-legend="manual"><text x="{x}" y="{y+12}" fill="{ink}" font-size="11" font-family="Arial,sans-serif" font-weight="700">Условные обозначения</text>']
+    cursor = y+24
+    def path_data(points, closed=False):
+        return "M "+" L ".join(f"{px:.4f} {py:.4f}" for px, py in points)+(" Z" if closed else "")
+    def paint(value):
+        value = (value or ink).upper()
+        return value[:7], int(value[7:9], 16)/255 if len(value) == 9 else 1
+    for entry in project.presentation.legend_entries:
+        node = nodes.get(entry.node_id) if entry.node_id else None
+        definition = types.get(entry.edge_type_id) if entry.kind == "edge_type" else None
+        description = entry.description
+        if description is None:
+            if definition:
+                description = definition.description
+            elif node:
+                description = node.label
+            else:
+                description = entry.icon.rsplit("/",1)[-1].rsplit(".",1)[0] if entry.icon else entry.shape
+        lines = label_lines(description, width-58, 9, True)
+        height = max(34, len(lines)*12+12)
+        cy = cursor+height/2
+        output.append(f'<path d="M {x} {cursor} H {x+width} M {x+46} {cursor} V {cursor+height}" stroke="{divider}" stroke-width="0.5" fill="none"/>')
+        if definition:
+            style = definition.style
+            stroke, alpha = paint(resolve_color(style.color, style.color_mode, project.presentation.theme))
+            drawing = arrow_drawing([(x+4,cy),(x+40,cy)],style.arrowhead if definition.direction != "none" else "none",style.arrowtail if definition.direction == "both" else "none",1.2)
+            dash = {"dashed": ' stroke-dasharray="4 3"', "dotted": ' stroke-dasharray="1 3"'}.get(style.line_style, "")
+            output.append(f'<path d="{path_data(drawing.shaft)}" fill="none" stroke="{stroke}" stroke-opacity="{alpha}" stroke-width="1.2"{dash}/>')
+            for marker in (drawing.head,drawing.tail):
+                if marker is None: continue
+                if marker.kind == "dot":
+                    px,py = marker.point(3)
+                    output.append(f'<circle cx="{px}" cy="{py}" r="{3*marker.scale}" fill="{stroke}" fill-opacity="{alpha}"/>')
+                else:
+                    closed = marker.kind not in {"tee","vee","crow"}
+                    output.append(f'<path d="{path_data(marker.polygon,closed)}" fill="{stroke if closed else "none"}" fill-opacity="{alpha}" stroke="{stroke}" stroke-opacity="{alpha}" stroke-width="1"/>')
+        else:
+            if node is None:
+                node = DiagramNode(id=entry.id,icon=entry.icon,shape=entry.shape)
+                for attr in ("fill","stroke","text"):
+                    setattr(node.style,attr,resolve_color(getattr(node.style,attr),"theme",project.presentation.theme,fill=attr=="fill"))
+            aspect = (node.width or 1)/(node.height or 1)
+            w, h = min(30,24*aspect), min(24,30/aspect)
+            def local(points): return [(x+23+(px-.5)*w,cy-(py-.5)*h) for px,py in points]
+            fill, fa = paint(node.style.fill); stroke, sa = paint(node.style.stroke)
+            paths = normalized_paths(node)
+            fills = icon_library()[node.icon].get("fill_paths",[]) if node.icon else [paths[0]]
+            output.append(f'<path d="{" ".join(path_data(local(p),True) for p in fills)}" fill="{fill}" fill-opacity="{fa}"/>')
+            for path in paths:
+                output.append(f'<path d="{path_data(local(path))}" fill="none" stroke="{stroke}" stroke-opacity="{sa}" stroke-width="1"/>')
+        for index,line in enumerate(lines):
+            output.append(f'<text x="{x+54}" y="{cursor+14+index*12}" fill="{ink}" font-family="Arial,sans-serif" font-size="9">{html.escape(line)}</text>')
+        cursor += height
+    output.append(f'<path d="M {x} {cursor} H {x+width}" stroke="{divider}" stroke-width="0.5"/></g>')
+    return output, cursor-y

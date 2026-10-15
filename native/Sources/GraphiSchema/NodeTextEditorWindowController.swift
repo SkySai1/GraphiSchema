@@ -178,7 +178,7 @@ final class NodeTextEditorWindowController: NSWindowController, NSTextViewDelega
         guard !isUpdating, !isEditingLocked else { return }
         var updated = values
         let label = labelField.string.trimmingCharacters(in: .whitespacesAndNewlines)
-        let labelValid = !label.isEmpty && label.unicodeScalars.count <= 160
+        let labelValid = label.unicodeScalars.count <= 160
         if labelValid { updated.label = label }
         let fontText = fontSizeField.currentEditor()?.string ?? fontSizeField.stringValue
         let font = Double(fontText.replacingOccurrences(of: ",", with: "."))
@@ -187,7 +187,7 @@ final class NodeTextEditorWindowController: NSWindowController, NSTextViewDelega
         updated.horizontal = horizontalAlignment.selectedItem?.representedObject as? String ?? values.horizontal
         updated.vertical = verticalAlignment.selectedItem?.representedObject as? String ?? values.vertical
         updated.wrap = wrapButton.state == .on
-        statusLabel.stringValue = !labelValid ? "Подпись должна содержать от 1 до 160 символов."
+        statusLabel.stringValue = !labelValid ? "Подпись должна содержать от 0 до 160 символов."
             : !fontValid ? "Размер текста: от 1 до 144 pt. Применено последнее допустимое значение."
             : "Изменения применяются сразу. Cmd+Z отменяет изменение."
         guard updated != values else { return }

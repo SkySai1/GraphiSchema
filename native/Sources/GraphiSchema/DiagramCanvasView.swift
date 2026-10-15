@@ -10,6 +10,8 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
     var onMoveNodeInStack: ((String, Bool) -> Void)?
     var onMoveNodes: (([String: NSPoint], [String: String]) -> Void)?
     var onResizeNode: ((String, Double, Double) -> Void)?
+    var onRotateNodes: ((Set<String>, Double) -> Void)?
+    var onSetEdgeZIndex: ((Set<String>, Int?, Bool) -> Void)?
     var onScaleNodes: ((Set<String>, Double) -> Void)?
     var onTransformNode: ((String, Double, Double, Double, Double) -> Void)?
     var onCopySelection: (() -> Void)?
@@ -29,6 +31,14 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
     var onRequestColor: ((DiagramColorParameter) -> Void)?
     var onSetStyle: ((DiagramSelection, DiagramStyleChange) -> Void)?
     var onDeleteSelection: (() -> Void)?
+
+    private struct CrossingInput: Equatable {
+        var id: String
+        var shaft: [NSPoint]
+        var radius: CGFloat
+    }
+    private var crossingInputs: [CrossingInput] = []
+    private var crossingPaths: [String:[NSPoint]] = [:]
 
     private var diagram: DiagramProject?
     private var diagramLayout: DiagramLayout?
@@ -53,6 +63,10 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
     private var didDragGroup = false
     private var dragPointerOffset = NSPoint.zero
     private var didDragNode = false
+    private var rotationIDs: Set<String> = []
+    private var rotationDelta: Double = 0
+    private var rotationDrag: (center: NSPoint, angle: Double)?
+    private var rotationCommitTask: Task<Void,Never>?
     private var resizingNodeID: String?
     private var nodeResizeStart: NSPoint?
     private var initialNodeSize: (width: Double, height: Double)?
@@ -109,6 +123,7 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
     private struct AttachmentHandleCache {
         let shape: String
         let icon: String?
+        let rotation: Double
         let rect: NSRect
         let handles: [(port: String, center: NSPoint)]
     }
@@ -137,6 +152,7 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
     override var acceptsFirstResponder: Bool { true }
 
     override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53, !rotationIDs.isEmpty { finishRotation(cancel: true); return }
         if event.keyCode == 53, endpointDrag != nil || connectingFromNodeID != nil {
             endpointDrag = nil; endpointPointer = nil; didDragEndpoint = false
             connectingFromNodeID = nil; connectionPointer = nil
@@ -183,6 +199,7 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
         }
         let wasEmpty = diagramLayout == nil
         let changedProject = self.diagram?.project.id != diagram?.project.id
+        if changedProject { finishRotation(cancel: true) }
         let previousSelection = self.selection
         let previousEdges = Dictionary(uniqueKeysWithValues: (self.diagram?.edges ?? []).map { ($0.id, $0) })
         let previousNodes = nodeByID
@@ -354,7 +371,7 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
 
     private func sameContour(_ node: DiagramNode, previous: DiagramNode?) -> Bool {
         guard let previous else { return true }
-        return node.shape == previous.shape && node.icon == previous.icon
+        return node.shape == previous.shape && node.icon == previous.icon && node.effectiveRotation == previous.effectiveRotation
     }
 
     private func rebuildContainerGeometryIndex() {
@@ -394,7 +411,7 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
         guard let diagram, let layout = diagramLayout else { return Data() }
         var frame = NSRect.null
         for node in diagram.nodes {
-            if let rect = nodeScreenRect(for: node.id) { frame = frame.union(rect) }
+            if let rect = nodeVisualRect(for: node.id) { frame = frame.union(rect) }
         }
         for rect in containerWorldRects(diagram: diagram, layout: layout, atScale: 72).values {
             frame = frame.union(NSRect(x: rect.minX*72, y: rect.minY*72, width: rect.width*72, height: rect.height*72))
@@ -436,13 +453,19 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
         let availableWidth = max(1, bounds.width-48), availableHeight = max(1, bounds.height-48)
         func contentBounds(at candidate: CGFloat) -> NSRect {
             var frame = NSRect(x: layout.minX, y: layout.minY, width: layout.width, height: layout.height)
+            for node in diagram.nodes {
+                guard let position = layoutNodeByID[node.id] else { continue }
+                let p = previewPosition(position)
+                frame = frame.union(CanvasGeometry.visualBounds(NSRect(x: p.x-p.width/2,y: p.y-p.height/2,width: p.width,height: p.height),rotation: displayedNode(node).effectiveRotation))
+            }
             for container in containerWorldRects(diagram: diagram, layout: layout, atScale: candidate).values {
                 frame = frame.union(container)
             }
             return frame
         }
         if diagram.containers.isEmpty {
-            let fitScale = min(availableWidth/CGFloat(layout.width), availableHeight/CGFloat(layout.height))
+            let content = contentBounds(at: scale)
+            let fitScale = min(availableWidth/max(0.01,content.width), availableHeight/max(0.01,content.height))
             scale = min(maximumScale, max(minimumScale, fitScale))
         } else {
             // Fixed-size headers must be included at the final export/viewport
@@ -544,6 +567,49 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
         zoom(by: 1 + event.magnification, around: point)
     }
 
+    private func displayedNode(_ node: DiagramNode) -> DiagramNode {
+        guard rotationIDs.contains(node.id) else { return node }
+        var result = node; result.rotation = node.effectiveRotation+rotationDelta; return result
+    }
+
+    override func rotate(with event: NSEvent) {
+        guard !isReadOnly, !selectedNodeIDs.isEmpty else { super.rotate(with: event); return }
+        if rotationIDs.isEmpty { rotationIDs = selectedNodeIDs; rotationDelta = 0 }
+        rotationDelta += Double(event.rotation)
+        attachmentHandleCache.removeAll(); needsDisplay = true
+        rotationCommitTask?.cancel()
+        if event.phase == .cancelled { finishRotation(cancel: true) }
+        else if event.phase == .ended { finishRotation() }
+        else {
+            rotationCommitTask = Task { @MainActor [weak self] in
+                do { try await Task.sleep(for: .milliseconds(300)) } catch { return }
+                self?.finishRotation()
+            }
+        }
+    }
+
+    override func endGesture(with event: NSEvent) {
+        if rotationDrag == nil { finishRotation() }
+        super.endGesture(with: event)
+    }
+
+    private func finishRotation(cancel: Bool = false) {
+        rotationCommitTask?.cancel(); rotationCommitTask = nil
+        let ids = rotationIDs, delta = rotationDelta
+        rotationIDs = []; rotationDelta = 0; rotationDrag = nil
+        attachmentHandleCache.removeAll(); needsDisplay = true
+        if !cancel && abs(delta)>0.001 { onRotateNodes?(ids,delta) }
+    }
+
+    private func nodeVisualRect(for id: String) -> NSRect? {
+        guard let rect = nodeScreenRect(for: id), let node = nodeByID[id] else { return nil }
+        return CanvasGeometry.visualBounds(rect,rotation: displayedNode(node).effectiveRotation)
+    }
+    private func rotationHandle(for id: String) -> NSRect? {
+        guard let rect = nodeVisualRect(for: id) else { return nil }
+        return Self.controlFrame(center: .init(x: rect.midX,y: rect.maxY+24))
+    }
+
     static func scrollDirection(precise: Bool, natural: Bool, inverse: Bool) -> CGFloat {
         guard precise else { return 1 }
         return natural == inverse ? -1 : 1
@@ -598,6 +664,12 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
             return
         }
         if isReadOnly { return }
+        if case .node(let id) = selection, let frame = rotationHandle(for: id), frame.contains(point), let rect = nodeScreenRect(for: id) {
+            let center = NSPoint(x: rect.midX,y: rect.midY)
+            rotationIDs = [id]; rotationDelta = 0
+            rotationDrag = (center,atan2(point.y-center.y,point.x-center.x)*180 / .pi)
+            return
+        }
         if case .edge(let id) = selection,
            let edge = edgeByID[id], let geometry = diagramLayout?.edges.first(where: { $0.id == id }),
            let settings = diagram?.diagram {
@@ -665,7 +737,8 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
            let position = layoutNodeByID[id],
            let rect = nodeScreenRect(for: id) {
             let size = nodeSizePreview[id] ?? (node.width ?? position.width, node.height ?? position.height)
-            let resizeHandle = Self.controlFrame(center: Self.resizeControlCenter(for: rect))
+            let controlRect = nodeVisualRect(for: id) ?? rect
+            let resizeHandle = Self.controlFrame(center: Self.resizeControlCenter(for: controlRect))
             if resizeHandle.contains(point) {
                 resizingNodeID = id
                 stretchDirection = nil
@@ -675,7 +748,7 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
                 didResizeNode = false
                 return
             }
-            let connector = Self.controlFrame(center: Self.connectionControlCenter(for: rect))
+            let connector = Self.controlFrame(center: Self.connectionControlCenter(for: controlRect))
             if connector.contains(point) {
                 connectingFromNodeID = id
                 connectionPointer = point
@@ -846,6 +919,18 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
         let duplicate = NSMenuItem(title: "Дублировать", action: #selector(duplicate(_:)), keyEquivalent: "")
         duplicate.target = self
         menu.addItem(duplicate)
+        if !selectedNodeIDs.isEmpty {
+            let rotate = NSMenuItem(title: "Поворот",action: nil,keyEquivalent: ""); let choices = NSMenu()
+            for (title,angle) in [("На 90° против часовой",90.0),("На 90° по часовой",-90.0),("На 180°",180.0),("Сбросить поворот",0.0)] {
+                let item = NSMenuItem(title: title,action: #selector(contextRotate(_:)),keyEquivalent: ""); item.target = self; item.representedObject = angle; choices.addItem(item)
+            }
+            rotate.submenu = choices; menu.addItem(rotate)
+        }
+        if !selection.edgeIDs.isEmpty {
+            for (title,action) in [("Линию на передний план",#selector(contextEdgeFront(_:))),("Линию на задний план",#selector(contextEdgeBack(_:))),("Z-index линии…",#selector(contextEdgeZ(_:)))] {
+                let item = NSMenuItem(title: title,action: action,keyEquivalent: ""); item.target = self; menu.addItem(item)
+            }
+        }
         if case .node(let nodeID) = selection {
             nodeStackMenuItems(for: nodeID).forEach(menu.addItem)
             if let detach = detachContainerMenuItem(for: nodeID) { menu.addItem(detach) }
@@ -886,6 +971,25 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
             }
             return item
         }
+    }
+
+    @objc private func contextRotate(_ sender: NSMenuItem) {
+        guard let angle = sender.representedObject as? Double else { return }
+        if angle == 0 {
+            // A single model command can reset a group with differing angles.
+            onResetNodeRotations?(selectedNodeIDs)
+        } else { onRotateNodes?(selectedNodeIDs,angle) }
+    }
+    var onResetNodeRotations: ((Set<String>) -> Void)?
+    @objc private func contextEdgeFront(_ sender: Any?) { onSetEdgeZIndex?(selection.edgeIDs,nil,true) }
+    @objc private func contextEdgeBack(_ sender: Any?) { onSetEdgeZIndex?(selection.edgeIDs,nil,false) }
+    @objc private func contextEdgeZ(_ sender: Any?) {
+        let alert = NSAlert(); alert.messageText = "Z-index выбранных линий"
+        let field = NSTextField(string: String(selection.edgeIDs.compactMap { edgeByID[$0]?.effectiveZIndex }.first ?? 0))
+        field.frame = NSRect(x: 0,y: 0,width: 240,height: 24); alert.accessoryView = field
+        alert.addButton(withTitle: "Применить"); alert.addButton(withTitle: "Отмена")
+        let ids = selection.edgeIDs
+        if alert.runModal() == .alertFirstButtonReturn,let value = Int(field.stringValue),(-1_000_000...1_000_000).contains(value) { onSetEdgeZIndex?(ids,value,true) }
     }
 
     @objc private func contextEditColor(_ sender: NSMenuItem) {
@@ -1079,6 +1183,13 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
 
     override func mouseDragged(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        if let drag = rotationDrag {
+            let angle = atan2(point.y-drag.center.y,point.x-drag.center.x)*180 / .pi
+            var delta = angle-drag.angle
+            if delta>180 { delta -= 360 }; if delta < -180 { delta += 360 }
+            rotationDelta = event.modifierFlags.contains(.shift) ? (delta/15).rounded()*15 : delta
+            attachmentHandleCache.removeAll(); needsDisplay = true; return
+        }
         if let origin = longPressOrigin, hypot(point.x - origin.x, point.y - origin.y) > 6 {
             cancelLongPress()
         }
@@ -1123,8 +1234,9 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
         }
         if let id = resizingNodeID, let nodeResizeStart, let initialNodeSize {
             if let direction = stretchDirection, let origin = stretchInitialCenter {
-                let deltaX = Double(point.x - nodeResizeStart.x) / Double(scale)
-                let deltaY = Double(point.y - nodeResizeStart.y) / Double(scale)
+                let delta = CanvasGeometry.rotated(NSPoint(x: point.x-nodeResizeStart.x,y: point.y-nodeResizeStart.y),around: .zero,degrees: -(nodeByID[id]?.effectiveRotation ?? 0))
+                let deltaX = Double(delta.x) / Double(scale)
+                let deltaY = Double(delta.y) / Double(scale)
                 var width = direction.x == 0 ? initialNodeSize.width : min(10, max(0.5, initialNodeSize.width + deltaX * Double(direction.x)))
                 var height = direction.y == 0 ? initialNodeSize.height : min(10, max(0.5, initialNodeSize.height + deltaY * Double(direction.y)))
                 if direction.x != 0, direction.y != 0, event.modifierFlags.contains(.shift) {
@@ -1136,8 +1248,8 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
                     height = initialNodeSize.height * bounded
                 }
                 nodeSizePreview[id] = (width, height)
-                dragPreview[id] = NSPoint(x: origin.x + (width - initialNodeSize.width) * direction.x / 2,
-                                          y: origin.y + (height - initialNodeSize.height) * direction.y / 2)
+                let shift = CanvasGeometry.rotated(NSPoint(x: (width-initialNodeSize.width)*direction.x/2,y: (height-initialNodeSize.height)*direction.y/2),around: .zero,degrees: nodeByID[id]?.effectiveRotation ?? 0)
+                dragPreview[id] = NSPoint(x: origin.x+shift.x,y: origin.y+shift.y)
                 didResizeNode = abs(width - initialNodeSize.width) > 0.001 || abs(height - initialNodeSize.height) > 0.001
                 needsDisplay = true
                 return
@@ -1227,6 +1339,7 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
             isCopyDrag = false
         }
         cancelLongPress()
+        if rotationDrag != nil { finishRotation(); return }
         if didTriggerLongPress {
             didTriggerLongPress = false
             return
@@ -1278,7 +1391,7 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
                               width: abs(end.x - start.x), height: abs(end.y - start.y))
             var ids = marqueeBaseSelection
             if hypot(end.x - start.x, end.y - start.y) > 3 {
-                for id in nodeByID.keys where nodeScreenRect(for: id)?.intersects(rect) == true { ids.insert(id) }
+                for id in nodeByID.keys where nodeVisualRect(for: id)?.intersects(rect) == true { ids.insert(id) }
             }
             if ids.isEmpty {
                 var edgeIDs = marqueeBaseEdges
@@ -1527,7 +1640,7 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
     }
 
     private func nodeSelectionBounds(for ids: Set<String>) -> NSRect? {
-        let rects = ids.compactMap { nodeScreenRect(for: $0) }
+        let rects = ids.compactMap { nodeVisualRect(for: $0) }
         guard let first = rects.first else { return nil }
         return rects.dropFirst().reduce(first) { $0.union($1) }.insetBy(dx: -5, dy: -5)
     }
@@ -1559,12 +1672,18 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
         drawResizeGlyph(center: Self.resizeControlCenter(for: rect))
     }
 
+    private func nodeLabelContains(_ point: NSPoint, node: DiagramNode, rect: NSRect) -> Bool {
+        let local = CanvasGeometry.rotated(point,around: .init(x: rect.midX,y: rect.midY),degrees: -node.effectiveRotation)
+        return rect.contains(local) && NodeLabelLayout(node: node,in: rect,scale: scale).contains(local)
+    }
+
     private func hitNode(at point: NSPoint, diagram: DiagramProject, layout: DiagramLayout) -> DiagramNode? {
-        for node in DiagramNodeStackOrder.sorted(diagram.nodes).reversed() {
+        for original in DiagramNodeStackOrder.sorted(diagram.nodes).reversed() {
+            let node = displayedNode(original)
             guard let rect = nodeScreenRect(for: node.id) else { continue }
             let lineWidth = CGFloat(node.style.penwidth)
             if CanvasGeometry.contains(point, node: node, in: rect, tolerance: 3+lineWidth/2)
-                || (rect.contains(point) && NodeLabelLayout(node: node, in: rect, scale: scale).contains(point)) { return node }
+                || nodeLabelContains(point,node: node,rect: rect) { return node }
         }
         return nil
     }
@@ -1617,8 +1736,8 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
             guard let parent = nodeByID[node.id]?.containerId else { continue }
             let center = dragPreview[node.id] ?? NSPoint(x: node.x, y: node.y)
             let size = nodeSizePreview[node.id] ?? (node.width, node.height)
-            members[parent, default: []].append(NSRect(x: center.x-size.width/2, y: center.y-size.height/2,
-                                                       width: size.width, height: size.height))
+            members[parent, default: []].append(CanvasGeometry.visualBounds(NSRect(x: center.x-size.width/2, y: center.y-size.height/2,
+                                                       width: size.width, height: size.height),rotation: nodeByID[node.id].map { displayedNode($0).effectiveRotation } ?? 0))
         }
         let previous = Dictionary(uniqueKeysWithValues: (layout.containers ?? []).map { ($0.id, $0) })
         var emptyFrames: [String: NSRect] = [:]
@@ -1702,8 +1821,29 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
         }
     }
 
+    private func orderedEdgeLayouts(_ layout: DiagramLayout,diagram: DiagramProject) -> [LayoutEdge] {
+        let index = Dictionary(uniqueKeysWithValues: layout.edges.map { ($0.id,$0) })
+        return DiagramEdgeStackOrder.sorted(diagram.edges).compactMap { index[$0.id] }
+    }
+    private func bridgedShafts(diagram: DiagramProject, layout: DiagramLayout) -> [String:[NSPoint]] {
+        let inputs = orderedEdgeLayouts(layout,diagram: diagram).compactMap { geometry -> CrossingInput? in
+            guard let edge = edgeByID[geometry.id] else { return nil }
+            let points = displayedEdgePoints(edge,geometry: geometry,settings: diagram.diagram).map { screenPoint(for: $0) }
+            return CrossingInput(id: edge.id,shaft: drawing(edge,points: points).shaft,radius: max(5,edgeLineWidth(edge)*1.5))
+        }
+        if inputs == crossingInputs { return crossingPaths }
+        crossingInputs = inputs; crossingPaths.removeAll(keepingCapacity: true)
+        var lower: [[NSPoint]] = []
+        for input in inputs {
+            crossingPaths[input.id] = LineCrossings.bridge(input.shaft,over: lower,radius: input.radius)
+            lower.append(input.shaft)
+        }
+        return crossingPaths
+    }
+
     private func drawEdges(diagram: DiagramProject, layout: DiagramLayout) {
-        for edgeLayout in layout.edges {
+        let bridges = bridgedShafts(diagram: diagram,layout: layout)
+        for edgeLayout in orderedEdgeLayouts(layout,diagram: diagram) {
             guard let edge = edgeByID[edgeLayout.id], edgeLayout.points.count >= 2 else { continue }
             let points = displayedEdgePoints(edge, geometry: edgeLayout, settings: diagram.diagram).map { screenPoint(for: $0) }
             guard points.count >= 2 else { continue }
@@ -1715,7 +1855,7 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
                 highlight.lineWidth = max(7, CGFloat(edge.style.penwidth) + 5)
                 highlight.lineCapStyle = .round
                 highlight.lineJoinStyle = .round
-                let highlighted = (drawing.tail.map { [$0.tip] } ?? [])+drawing.shaft+(drawing.head.map { [$0.tip] } ?? [])
+                let highlighted = (drawing.tail.map { [$0.tip] } ?? [])+(bridges[edge.id] ?? drawing.shaft)+(drawing.head.map { [$0.tip] } ?? [])
                 highlight.move(to: highlighted[0])
                 appendEdgeSegments(highlighted, to: highlight)
                 NSColor.controlAccentColor.withAlphaComponent(0.28).setStroke()
@@ -1732,7 +1872,7 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
             }
             NSColor(hex: edge.style.resolved(.stroke, theme: diagram.presentation.theme)).setStroke()
             let dashed = ["dashed", "dotted"].contains(edge.style.lineStyle)
-            var shaft = drawing.shaft
+            var shaft = bridges[edge.id] ?? drawing.shaft
             if dashed {
                 if drawing.head != nil { shaft.removeLast() }
                 if drawing.tail != nil { shaft.removeFirst() }
@@ -1759,7 +1899,7 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
             if !edge.label.isEmpty, let x = edgeLayout.labelX, let y = edgeLayout.labelY {
                 let followsPath = endpointDrag?.id == edge.id || !edge.waypoints.isEmpty || waypointPreview[edge.id] != nil || edge.routing != nil
                     || edge.sourcePort != "auto" || edge.targetPort != "auto" || nodeByID[edge.source]?.icon != nil || nodeByID[edge.target]?.icon != nil
-                    || dragPreview[edge.source] != nil || dragPreview[edge.target] != nil || nodeSizePreview[edge.source] != nil || nodeSizePreview[edge.target] != nil
+                    || rotationIDs.contains(edge.source) || rotationIDs.contains(edge.target) || dragPreview[edge.source] != nil || dragPreview[edge.target] != nil || nodeSizePreview[edge.source] != nil || nodeSizePreview[edge.target] != nil
                 var labelPoint = NSPoint(x: x, y: y)
                 if followsPath { labelPoint = routeMidpoint(points.map { worldPoint(for: $0) }); labelPoint.y += 0.15 }
                 if let position = pdfStyle?.edgeLabels[edge.id] { labelPoint = position }
@@ -1786,7 +1926,7 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
     }
 
     private func drawArrowheads(diagram: DiagramProject, layout: DiagramLayout) {
-        for edgeLayout in layout.edges {
+        for edgeLayout in orderedEdgeLayouts(layout,diagram: diagram) {
             guard let edge = edgeByID[edgeLayout.id] else { continue }
             guard let drawing = edgeDrawing(for: edge.id) else { continue }
             let color = NSColor(hex: edge.style.resolved(.stroke, theme: diagram.presentation.theme))
@@ -1810,12 +1950,17 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
     }
 
     private func drawNodes(diagram: DiagramProject, layout: DiagramLayout, onlyIDs: Set<String>? = nil, showSelection: Bool = true) {
-        for node in DiagramNodeStackOrder.sorted(diagram.nodes) where onlyIDs?.contains(node.id) != false {
+        for original in DiagramNodeStackOrder.sorted(diagram.nodes) where onlyIDs?.contains(original.id) != false {
+            let node = displayedNode(original)
             guard let position = layoutNodeByID[node.id] else { continue }
             let center = dragPreview[node.id] ?? NSPoint(x: CGFloat(position.x), y: CGFloat(position.y))
             let size = nodeSizePreview[node.id] ?? (node.width ?? position.width, node.height ?? position.height)
             let rect = screenRect(center: center, width: size.width, height: size.height)
             let selected = showSelection && selectedNodeIDs.contains(node.id)
+            NSGraphicsContext.saveGraphicsState()
+            let transform = AffineTransform(translationByX: rect.midX,byY: rect.midY)
+            var rotation = transform; rotation.rotate(byDegrees: CGFloat(node.effectiveRotation)); rotation.translate(x: -rect.midX,y: -rect.midY)
+            (rotation as NSAffineTransform).concat()
             let contours = CanvasGeometry.paths(node)
             let closed = node.icon.flatMap { CanvasGeometry.icons[$0]?.closed } ?? [true]
             let fill = NSBezierPath(); fill.windingRule = .nonZero
@@ -1838,6 +1983,7 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
             }
             let color = NSColor(hex: node.style.resolved(.text, theme: diagram.presentation.theme))
             NodeLabelLayout(node: node, in: rect, scale: scale).draw(color: color)
+            NSGraphicsContext.restoreGraphicsState()
             if selected && selectedNodeIDs.count == 1 {
                 for handle in nodeStretchFrames(for: node.id) {
                     let frame = handle.frame.insetBy(dx: 3, dy: 3)
@@ -1845,8 +1991,14 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
                     NSColor.windowBackgroundColor.setFill(); marker.fill()
                     NSColor.controlAccentColor.setStroke(); marker.lineWidth = 1; marker.stroke()
                 }
-                drawResizeGlyph(center: Self.resizeControlCenter(for: rect))
-                drawConnectionGlyph(center: Self.connectionControlCenter(for: rect))
+                let visual = nodeVisualRect(for: node.id) ?? rect
+                drawResizeGlyph(center: Self.resizeControlCenter(for: visual))
+                drawConnectionGlyph(center: Self.connectionControlCenter(for: visual))
+                if let handle = rotationHandle(for: node.id) {
+                    let circle = NSBezierPath(ovalIn: handle); NSColor.windowBackgroundColor.setFill(); circle.fill()
+                    NSColor.controlAccentColor.setStroke(); circle.lineWidth = 1; circle.stroke()
+                    drawText("↻",in: handle,color: .controlAccentColor,size: 17,weight: .medium,alignment: .center)
+                }
                 toolTip = "Маркеры по сторонам и углам растягивают фигуру; Shift на угловом маркере сохраняет пропорции. Круглый значок масштабирует, стрелка создаёт связь. Cmd + перетаскивание копирует, Shift ограничивает перемещение одной осью."
             } else {
                 toolTip = nil
@@ -1867,7 +2019,7 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
     }
 
     func nodeControlFrames(for id: String) -> (resize: NSRect, connection: NSRect)? {
-        guard let rect = nodeScreenRect(for: id) else { return nil }
+        guard let rect = nodeVisualRect(for: id) else { return nil }
         return (Self.controlFrame(center: Self.resizeControlCenter(for: rect)),
                 Self.controlFrame(center: Self.connectionControlCenter(for: rect)))
     }
@@ -1877,8 +2029,8 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
         return [NSPoint(x: -1, y: -1), NSPoint(x: 0, y: -1), NSPoint(x: 1, y: -1),
                 NSPoint(x: -1, y: 0), NSPoint(x: 1, y: 0),
                 NSPoint(x: -1, y: 1), NSPoint(x: 0, y: 1), NSPoint(x: 1, y: 1)].map { direction in
-            let center = NSPoint(x: rect.midX + direction.x * rect.width / 2,
-                                 y: rect.midY + direction.y * rect.height / 2)
+            let center = CanvasGeometry.rotated(NSPoint(x: rect.midX + direction.x * rect.width / 2,
+                                 y: rect.midY + direction.y * rect.height / 2),around: .init(x: rect.midX,y: rect.midY),degrees: nodeByID[id].map { displayedNode($0).effectiveRotation } ?? 0)
             return (direction, NSRect(x: center.x - 6, y: center.y - 6, width: 12, height: 12))
         }
     }
@@ -1942,10 +2094,10 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
                                  arrowtail: "none", constraint: true, weight: 1, minlen: 1),
                 sourcePort: "auto", targetPort: target.port)
             return CanvasGeometry.edgePoints(edge, source: source, target: previewPosition(targetPosition),
-                sourceNode: node, targetNode: targetNode, settings: settings)
+                sourceNode: displayedNode(node), targetNode: displayedNode(targetNode), settings: settings)
         }
         let end = worldPoint(for: pointer)
-        let start = CanvasGeometry.attachment(node, at: source, toward: end, port: "auto")
+        let start = CanvasGeometry.attachment(displayedNode(node), at: source, toward: end, port: "auto")
         return CanvasGeometry.route(start, end, routing: settings.edgeRouting, horizontal: ["LR", "RL"].contains(settings.direction))
     }
 
@@ -1970,8 +2122,9 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
 
     /// Screen-space handles use the same contour attachments as the saved route.
     func attachmentHandles(for id: String) -> [(port: String, center: NSPoint)] {
-        guard let node = nodeByID[id], let position = layoutNodeByID[id], let rect = nodeScreenRect(for: id) else { return [] }
-        if let cached = attachmentHandleCache[id], cached.shape == node.shape, cached.icon == node.icon, cached.rect == rect {
+        guard let original = nodeByID[id], let position = layoutNodeByID[id], let rect = nodeScreenRect(for: id) else { return [] }
+        let node = displayedNode(original)
+        if let cached = attachmentHandleCache[id], cached.shape == node.shape, cached.icon == node.icon, cached.rotation == node.effectiveRotation, cached.rect == rect {
             return cached.handles
         }
         let ports = ["n", "e", "s", "w"] + CanvasGeometry.vertices(node).indices.map { "vertex:\($0)" }
@@ -1984,21 +2137,22 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
                 handles.append((port, center))
             }
         }
-        attachmentHandleCache[id] = AttachmentHandleCache(shape: node.shape, icon: node.icon, rect: rect, handles: handles)
+        attachmentHandleCache[id] = AttachmentHandleCache(shape: node.shape, icon: node.icon, rotation: node.effectiveRotation, rect: rect, handles: handles)
         return handles
     }
 
     private func connectionTarget(at point: NSPoint, excluding excludedID: String? = nil) -> ConnectionTarget? {
         guard let diagram else { return nil }
         // The foremost visible figure wins, including when it covers a port of another figure.
-        for node in DiagramNodeStackOrder.sorted(diagram.nodes).reversed() {
+        for original in DiagramNodeStackOrder.sorted(diagram.nodes).reversed() {
+            let node = displayedNode(original)
             guard let rect = nodeScreenRect(for: node.id) else { continue }
             let radius = attachmentHitRadius(in: rect)
             let tolerance = 3+CGFloat(node.style.penwidth)/2
             let reach = max(radius, tolerance)
-            guard rect.insetBy(dx: -reach, dy: -reach).contains(point) else { continue }
+            guard CanvasGeometry.visualBounds(rect,rotation: node.effectiveRotation).insetBy(dx: -reach, dy: -reach).contains(point) else { continue }
             let hitsBody = CanvasGeometry.contains(point, node: node, in: rect, tolerance: tolerance)
-                || (rect.contains(point) && NodeLabelLayout(node: node, in: rect, scale: scale).contains(point))
+                || nodeLabelContains(point,node: node,rect: rect)
             if node.id == excludedID {
                 if hitsBody { return nil }
                 continue
@@ -2022,21 +2176,21 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
         let target = connectionTarget(at: pointer, excluding: connectingFromNodeID)
         let accent = NSColor.controlAccentColor
         var foreground: [(node: DiagramNode, rect: NSRect)] = []
-        for node in DiagramNodeStackOrder.sorted(diagram.nodes).reversed() {
-            guard let rect = nodeScreenRect(for: node.id), rect.insetBy(dx: -12, dy: -12).intersects(bounds) else { continue }
+        for original in DiagramNodeStackOrder.sorted(diagram.nodes).reversed() {
+            let node = displayedNode(original)
+            guard let rect = nodeScreenRect(for: node.id), CanvasGeometry.visualBounds(rect,rotation: node.effectiveRotation).insetBy(dx: -12, dy: -12).intersects(bounds) else { continue }
             defer { foreground.append((node, rect)) }
             guard node.id != connectingFromNodeID else { continue }
             if target?.nodeID == node.id {
                 let outline = NSBezierPath(); outline.lineWidth = 2; outline.lineJoinStyle = .round
                 for contour in CanvasGeometry.fillPaths(node) {
-                    let points = contour.map { NSPoint(x: rect.minX+$0.x*rect.width, y: rect.minY+$0.y*rect.height) }
+                    let points = contour.map { CanvasGeometry.rotated(NSPoint(x: rect.minX+$0.x*rect.width,y: rect.minY+$0.y*rect.height),around: .init(x: rect.midX,y: rect.midY),degrees: node.effectiveRotation) }
                     if let first = points.first { outline.move(to: first); appendEdgeSegments(points, to: outline); outline.close() }
                 }
                 accent.withAlphaComponent(0.65).setStroke(); outline.stroke()
             }
             for handle in attachmentHandles(for: node.id) {
-                if foreground.contains(where: { $0.rect.contains(handle.center)
-                    && CanvasGeometry.contains(handle.center, node: $0.node, in: $0.rect, tolerance: 0) }) { continue }
+                if foreground.contains(where: { CanvasGeometry.contains(handle.center, node: $0.node, in: $0.rect, tolerance: 0) }) { continue }
                 let active = target?.nodeID == node.id && target?.port == handle.port
                 let radius: CGFloat = active ? 6 : min(4, attachmentHitRadius(in: rect)*0.65)
                 let circle = NSBezierPath(ovalIn: NSRect(x: handle.center.x-radius, y: handle.center.y-radius, width: radius*2, height: radius*2))
@@ -2078,13 +2232,13 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
                 if let source = layoutNodeByID[preview.source], let target = layoutNodeByID[preview.target],
                    let sourceNode = nodeByID[preview.source], let targetNode = nodeByID[preview.target] {
                     return CanvasGeometry.edgePoints(preview, source: previewPosition(source), target: previewPosition(target),
-                        sourceNode: sourceNode, targetNode: targetNode, settings: settings)
+                        sourceNode: displayedNode(sourceNode), targetNode: displayedNode(targetNode), settings: settings)
                 }
             }
             let fixedID = drag.source ? edge.target : edge.source
             if let position = layoutNodeByID[fixedID], let node = nodeByID[fixedID] {
                 let free = worldPoint(for: pointer)
-                let fixed = CanvasGeometry.attachment(node, at: previewPosition(position), toward: free,
+                let fixed = CanvasGeometry.attachment(displayedNode(node), at: previewPosition(position), toward: free,
                     port: drag.source ? edge.targetPort : edge.sourcePort)
                 return CanvasGeometry.route(drag.source ? free : fixed, drag.source ? fixed : free,
                     routing: edge.routing ?? settings.edgeRouting, horizontal: ["LR", "RL"].contains(settings.direction))
@@ -2092,10 +2246,10 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
         }
         guard let source = layoutNodeByID[edge.source], let target = layoutNodeByID[edge.target],
               let sourceNode = nodeByID[edge.source], let targetNode = nodeByID[edge.target] else { return [] }
-        let hasPreview = dragPreview[edge.source] != nil || dragPreview[edge.target] != nil
+        let hasPreview = rotationIDs.contains(edge.source) || rotationIDs.contains(edge.target) || dragPreview[edge.source] != nil || dragPreview[edge.target] != nil
             || nodeSizePreview[edge.source] != nil || nodeSizePreview[edge.target] != nil
         return CanvasGeometry.edgePoints(edge, source: previewPosition(source), target: previewPosition(target),
-            sourceNode: sourceNode, targetNode: targetNode, settings: settings,
+            sourceNode: displayedNode(sourceNode), targetNode: displayedNode(targetNode), settings: settings,
             proposed: hasPreview ? nil : geometry.points.map { NSPoint(x: $0.x, y: $0.y) }, waypoints: waypointPreview[edge.id],
             proposedNormalized: !hasPreview && waypointPreview[edge.id] == nil && geometry.normalized == true)
     }
@@ -2141,11 +2295,12 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
     }
 
     private func hitEdge(at point: NSPoint, diagram: DiagramProject, layout: DiagramLayout) -> String? {
-        for edge in layout.edges.reversed() where edge.points.count >= 2 {
+        let bridges = bridgedShafts(diagram: diagram,layout: layout)
+        for edge in orderedEdgeLayouts(layout,diagram: diagram).reversed() where edge.points.count >= 2 {
             guard let modelEdge = edgeByID[edge.id] else { continue }
             let route = displayedEdgePoints(modelEdge, geometry: edge, settings: diagram.diagram).map { screenPoint(for: $0) }
             let drawing = drawing(modelEdge, points: route)
-            let points = (drawing.tail.map { [$0.tip] } ?? [])+drawing.shaft+(drawing.head.map { [$0.tip] } ?? [])
+            let points = (drawing.tail.map { [$0.tip] } ?? [])+(bridges[edge.id] ?? drawing.shaft)+(drawing.head.map { [$0.tip] } ?? [])
             for pair in zip(points, points.dropFirst()) where distance(point, toSegmentFrom: pair.0, to: pair.1) <= 8 {
                 return edge.id
             }
