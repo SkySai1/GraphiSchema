@@ -52,6 +52,13 @@ def node_bounds(node, position):
 
 
 def outline_paths(node, position) -> list[list[tuple[float, float]]]:
+    if getattr(node,"kind",None) == "__container_endpoint":
+        r = min(11/72,position["width"]/2,position["height"]/2)
+        left,bottom,right,top = node_bounds(node,position)
+        path = []
+        for cx,cy,angle in ((left+r,bottom+r,math.pi),(right-r,bottom+r,math.pi*1.5),(right-r,top-r,0),(left+r,top-r,math.pi/2)):
+            path.extend((cx+r*math.cos(angle+i*math.pi/16),cy+r*math.sin(angle+i*math.pi/16)) for i in range(9))
+        return [path+path[:1]]
     return [[world_point(p, node, position) for p in path] for path in normalized_paths(node)]
 
 
@@ -73,7 +80,12 @@ def attachment(node, position, toward, port="auto") -> tuple[float, float]:
     paths = outline_paths(node, position)
     center = position["x"], position["y"]
     if port.startswith("vertex:"):
-        x, y = vertices(node)[int(port.split(":")[1])]
+        index = int(port.split(":")[1])
+        if getattr(node,"kind",None) == "__container_endpoint":
+            r = min(11/72,position["width"]/2,position["height"]/2)
+            dx,dy = ((-1,-1),(1,-1),(1,1),(-1,1))[index]
+            return center[0]+dx*(position["width"]/2-r+r/math.sqrt(2)),center[1]+dy*(position["height"]/2-r+r/math.sqrt(2))
+        x, y = vertices(node)[index]
         return world_point((x, y), node, position)
     directions = {"n": (0, 1), "ne": (1, 1), "e": (1, 0), "se": (1, -1),
                   "s": (0, -1), "sw": (-1, -1), "w": (-1, 0), "nw": (-1, 1)}
@@ -218,10 +230,11 @@ def normalize_edges(project, layout):
     Graphviz plain ends at the arrow base. Never treat that base as the actual tip.
     Renderer routing also handles ports with ortho, which Graphviz itself ignores.
     """
-    nodes = {n.id: n for n in project.nodes}
-    positions = {n["id"]: n for n in layout["nodes"]}
+    from .endpoints import endpoint_geometries
+    nodes, positions = endpoint_geometries(project, layout)
     model_edges = {e.id: e for e in project.edges}
     horizontal = project.diagram.direction in {"LR", "RL"}
+    container_ids = {item.id for item in project.containers}
     for geometry in layout["edges"]:
         if geometry.get("normalized"):
             continue
@@ -250,7 +263,7 @@ def normalize_edges(project, layout):
             points = [start, *waypoints, end]
         elif edge.source_port != "auto" or edge.target_port != "auto":
             points = route(start, end, routing, horizontal)
-        elif routing == "curved" and edge.source_port == edge.target_port == "auto" and len(geometry["points"]) >= 4:
+        elif routing == "curved" and edge.source_port == edge.target_port == "auto" and edge.source not in container_ids and edge.target not in container_ids and len(geometry["points"]) >= 4:
             old = _source_to_target([(p["x"], p["y"]) for p in geometry["points"]], source, target)
             start = attachment(nodes[edge.source], source, old[1])
             end = attachment(nodes[edge.target], target, old[-2])
@@ -261,7 +274,7 @@ def normalize_edges(project, layout):
                     points.extend(sample_cubic(controls[index:index+4])[1:])
             else:
                 points = sample_cubic((start, old[1], old[-2], end))
-        elif routing == "angled" and edge.routing is None and edge.source_port == edge.target_port == "auto":
+        elif routing == "angled" and edge.routing is None and edge.source_port == edge.target_port == "auto" and edge.source not in container_ids and edge.target not in container_ids:
             old = _source_to_target([(p["x"], p["y"]) for p in geometry["points"]], source, target)
             # Preserve Graphviz obstacle avoidance. Extend from the last control point to the contour.
             start = attachment(nodes[edge.source], source, old[1] if len(old) > 2 else (target["x"], target["y"]))

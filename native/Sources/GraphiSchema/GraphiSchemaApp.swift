@@ -98,6 +98,10 @@ final class AppLifecycle: NSObject, NSApplicationDelegate {
 enum GraphiSchemaApp {
     @MainActor
     static func main() {
+        if ProcessInfo.processInfo.arguments.contains("--png-export-regression-test") {
+            NativePNGExportRegressionTests.run()
+            return
+        }
         if ProcessInfo.processInfo.arguments.contains("--project-regression-test") {
             NativeProjectRegressionTests.run()
             return

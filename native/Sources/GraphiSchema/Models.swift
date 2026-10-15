@@ -16,8 +16,30 @@ struct DiagramProject: Codable, Equatable {
     var edges: [DiagramEdge]
     var presentation: PresentationSettings
     var edgeTypes: [EdgeTypeDefinition]? = nil
+    var groups: [ObjectGroup]? = nil
 
     var effectiveEdgeTypes: [EdgeTypeDefinition] { edgeTypes ?? [] }
+    var effectiveGroups: [ObjectGroup] { groups ?? [] }
+
+    func expandedGroupMembers(_ ids: Set<String>) -> Set<String> {
+        effectiveGroups.reduce(ids) { members, group in
+            Set(group.nodeIds).isDisjoint(with: ids) ? members : members.union(group.nodeIds)
+        }
+    }
+
+    func endpointFigure(_ id: String) -> DiagramNode? {
+        if let node = nodes.first(where: { $0.id == id }) { return node }
+        guard let container = containers.first(where: { $0.id == id }) else { return nil }
+        return DiagramNode(id: id,label: container.label,description: "",kind: "__container_endpoint",shape: "box",containerId: nil,
+            style: NodeStyle(fill: container.style.fill,stroke: container.style.stroke,text: container.style.text,penwidth: container.style.effectivePenwidth),
+            x: container.x,y: container.y,width: container.width,height: container.height)
+    }
+}
+
+struct ObjectGroup: Codable, Equatable, Identifiable {
+    var id: String
+    var label: String
+    var nodeIds: [String]
 }
 
 struct ProjectInfo: Codable, Equatable {

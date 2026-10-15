@@ -145,7 +145,7 @@ enum NativeUISmokeTest {
         checkArrowheadTouchesVisibleNode(starter)
         checkToolbarOverflow(mainWindow: mainWindow, root: root)
         checkPDFOptions(mainWindow: mainWindow)
-        checkLongPressTextEditor(mainWindow: mainWindow, root: root, nodeID: "waf")
+        checkDoubleClickTextEditor(mainWindow: mainWindow, root: root, nodeID: "waf")
         guard NSApp.mainMenu?.items.contains(where: { $0.title == "Файл" }) == true,
               NSApp.mainMenu?.items.contains(where: { $0.title == "Настройки" }) == true,
               NSApp.mainMenu?.items.first(where: { $0.title == "Настройки" })?.submenu?.items.contains(where: { $0.title == "Выделенный объект…" }) == true,
@@ -1205,11 +1205,11 @@ enum NativeUISmokeTest {
         exportWindow.close()
     }
 
-    private static func checkLongPressTextEditor(mainWindow: MainWindowController, root: NSView, nodeID: String) {
+    private static func checkDoubleClickTextEditor(mainWindow: MainWindowController, root: NSView, nodeID: String) {
         guard let window = mainWindow.window,
               let canvas = findView(identifier: "diagram-canvas", in: root) as? DiagramCanvasView,
               let position = canvas.nodePositions.first(where: { $0.id == nodeID }) else {
-            fail("Canvas node position is required for the long-press text-editor test.")
+            fail("Canvas node position is required for the double-click text-editor test.")
         }
         // Edge endpoint controls are tested separately. Clear them before
         // checking a node press on the compact, zoomed-out canvas.
@@ -1217,7 +1217,7 @@ enum NativeUISmokeTest {
         let point = canvas.screenPoint(for: NSPoint(x: position.x, y: position.y))
         let down = NSEvent.mouseEvent(with: .leftMouseDown, location: canvas.convert(point, to: nil),
                                       modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
-                                      context: nil, eventNumber: 31, clickCount: 1, pressure: 1)!
+                                      context: nil, eventNumber: 31, clickCount: 2, pressure: 1)!
         canvas.mouseDown(with: down)
         let deadline = Date().addingTimeInterval(2)
         while Date() < deadline && !NSApp.windows.contains(where: { $0.identifier?.rawValue == "node-text-window" && $0.isVisible && $0.title.contains(nodeID) }) {
@@ -1227,11 +1227,11 @@ enum NativeUISmokeTest {
               editor.isVisible,
               editor.title.contains(nodeID),
               findView(identifier: "node-text-value", in: editor.contentView ?? NSView()) is NSTextView else {
-            fail("Holding the trackpad press on a node must open the text editor: hit=\(String(describing: canvas.nodeID(at: point))), readOnly=\(canvas.isReadOnly), point=\(point), windows=\(NSApp.windows.map { ($0.title, $0.identifier?.rawValue ?? "", $0.isVisible) }).")
+            fail("Double clicking a node must open the text editor: hit=\(String(describing: canvas.nodeID(at: point))), readOnly=\(canvas.isReadOnly), point=\(point), windows=\(NSApp.windows.map { ($0.title, $0.identifier?.rawValue ?? "", $0.isVisible) }).")
         }
         let up = NSEvent.mouseEvent(with: .leftMouseUp, location: canvas.convert(point, to: nil),
                                     modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
-                                    context: nil, eventNumber: 32, clickCount: 1, pressure: 0)!
+                                    context: nil, eventNumber: 32, clickCount: 2, pressure: 0)!
         canvas.mouseUp(with: up)
         editor.close()
     }

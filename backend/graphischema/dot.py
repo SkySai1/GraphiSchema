@@ -3,6 +3,7 @@
 from __future__ import annotations
 import json
 
+from .endpoints import container_anchor_ids
 from .models import DiagramContainer, DiagramNode, DiagramProject
 from .container_layout import FONT_SIZE as CONTAINER_FONT_SIZE
 
@@ -84,6 +85,7 @@ def to_dot(project: DiagramProject, *, include_metadata: bool = True) -> str:
         "gs_edge_types=" + quote(json.dumps([item.model_dump(mode="json") for item in project.edge_types], ensure_ascii=False, separators=(",", ":"))),
         "gs_legend_entries=" + quote(json.dumps([item.model_dump(mode="json") for item in project.presentation.legend_entries], ensure_ascii=False, separators=(",", ":"))),
         "gs_legend_mode=" + quote(project.presentation.legend_mode),
+        "gs_groups=" + quote(json.dumps([item.model_dump(mode="json") for item in project.groups], ensure_ascii=False, separators=(",", ":"))),
         "gs_label_new_elements=" + ("true" if project.presentation.label_new_elements else "false"),
         ])
     if project.diagram.layout_mode == "manual":
@@ -92,6 +94,12 @@ def to_dot(project: DiagramProject, *, include_metadata: bool = True) -> str:
     lines.append('    node [fontname="Arial", fontsize=10, margin="0.16,0.1"];')
     lines.append('    edge [fontname="Arial", fontsize=9];')
     manual_layout = project.diagram.layout_mode == "manual"
+    anchors = container_anchor_ids(project)
+    container_positions = {}
+    if manual_layout and anchors:
+        from .container_layout import container_rects
+        rough = {"minX":0,"minY":0,"nodes":[{"id":node.id,"x":node.x or 0,"y":node.y or 0,"width":node.width or 1.6,"height":node.height or .62} for node in project.nodes]}
+        container_positions = container_rects(project, rough)
 
     nodes_by_container: dict[str | None, list[DiagramNode]] = {}
     for node in project.nodes:
@@ -101,6 +109,12 @@ def to_dot(project: DiagramProject, *, include_metadata: bool = True) -> str:
         containers_by_parent.setdefault(container.parent_id, []).append(container)
 
     def emit_contents(parent_id: str | None, depth: int) -> None:
+        if parent_id in anchors:
+            attrs = {"label":quote(""),"shape":quote("point"),"style":quote("invis"),"width":"0.01","height":"0.01","gs_container":quote(parent_id)}
+            if manual_layout:
+                l,b,r,t = container_positions[parent_id]
+                attrs["pos"] = quote(f"{(l+r)*36:.4f},{(b+t)*36:.4f}!")
+            lines.append("    "*depth+quote(anchors[parent_id])+" ["+", ".join(f"{key}={value}" for key,value in attrs.items())+"];")
         for node in nodes_by_container.get(parent_id, []):
             lines.append("    " * depth + _node_statement(node, manual_layout).strip())
         for container in containers_by_parent.get(parent_id, []):
@@ -144,6 +158,9 @@ def to_dot(project: DiagramProject, *, include_metadata: bool = True) -> str:
         if edge.waypoints:
             attrs["gs_waypoints"] = quote(json.dumps([p.model_dump() for p in edge.waypoints], separators=(",", ":")))
         rendered = ", ".join(f"{key}={value}" for key, value in attrs.items())
-        lines.append(f"    {quote(edge.source)} -> {quote(edge.target)} [{rendered}];")
+        if edge.source in anchors: attrs["ltail"] = quote("cluster_"+edge.source)
+        if edge.target in anchors: attrs["lhead"] = quote("cluster_"+edge.target)
+        rendered = ", ".join(f"{key}={value}" for key,value in attrs.items())
+        lines.append(f"    {quote(anchors.get(edge.source,edge.source))} -> {quote(anchors.get(edge.target,edge.target))} [{rendered}];")
     lines.append("}")
     return "\n".join(lines) + "\n"

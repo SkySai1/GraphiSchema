@@ -218,6 +218,19 @@ class LegendEntry(StrictModel):
         return DiagramNode.valid_icon(value)
 
 
+class ObjectGroup(StrictModel):
+    id: str
+    label: str = Field(default="Группа", max_length=120)
+    node_ids: list[str] = Field(min_length=2, max_length=10000)
+
+    @field_validator("id")
+    @classmethod
+    def valid_id(cls, value: str) -> str:
+        if not _ID_RE.fullmatch(value):
+            raise ValueError("Invalid group ID")
+        return value
+
+
 class DiagramEdge(StrictModel):
     id: str
     source: str
@@ -277,6 +290,7 @@ class DiagramProject(StrictModel):
     edges: list[DiagramEdge] = Field(default_factory=list)
     presentation: PresentationSettings = Field(default_factory=PresentationSettings)
     edge_types: list[EdgeTypeDefinition] = Field(default_factory=list, max_length=256)
+    groups: list[ObjectGroup] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_graph(self) -> DiagramProject:
@@ -297,13 +311,20 @@ class DiagramProject(StrictModel):
             for edge in self.edges:
                 if "label_background_transparent" not in edge.style.model_fields_set:
                     edge.style.label_background_transparent = self.presentation.default_edge_label_background_transparent
-        all_items = [*self.containers, *self.nodes, *self.edges]
+        all_items = [*self.containers, *self.nodes, *self.edges, *self.groups]
         ids = [item.id for item in all_items]
         if len(ids) != len(set(ids)):
-            raise ValueError("IDs must be unique across containers, nodes and edges")
+            raise ValueError("IDs must be unique across containers, nodes, edges and groups")
 
         containers = {item.id: item for item in self.containers}
         nodes = {item.id: item for item in self.nodes}
+        grouped: set[str] = set()
+        for group in self.groups:
+            if len(set(group.node_ids)) != len(group.node_ids) or any(key not in nodes or key in grouped for key in group.node_ids):
+                raise ValueError("Group members must exist, be unique and belong to only one group")
+            if len({nodes[key].container_id for key in group.node_ids}) != 1:
+                raise ValueError("Group members must belong to the same container")
+            grouped.update(group.node_ids)
         legend_ids = [item.id for item in self.presentation.legend_entries]
         if len(legend_ids) != len(set(legend_ids)):
             raise ValueError("Legend row IDs must be unique")
@@ -320,13 +341,14 @@ class DiagramProject(StrictModel):
             if node.container_id and node.container_id not in containers:
                 raise ValueError(f"Node '{node.id}' references missing container '{node.container_id}'")
         for edge in self.edges:
-            if edge.source not in nodes:
+            if edge.source not in nodes and edge.source not in containers:
                 raise ValueError(f"Edge '{edge.id}' references missing source '{edge.source}'")
-            if edge.target not in nodes:
+            if edge.target not in nodes and edge.target not in containers:
                 raise ValueError(f"Edge '{edge.id}' references missing target '{edge.target}'")
             from .geometry import vertices
             for node_id, port in ((edge.source, edge.source_port), (edge.target, edge.target_port)):
-                if port.startswith("vertex:") and int(port.split(":")[1]) >= len(vertices(nodes[node_id])):
+                count = len(vertices(nodes[node_id])) if node_id in nodes else 4
+                if port.startswith("vertex:") and int(port.split(":")[1]) >= count:
                     raise ValueError(f"Edge '{edge.id}' references a missing figure vertex")
 
         for container in self.containers:

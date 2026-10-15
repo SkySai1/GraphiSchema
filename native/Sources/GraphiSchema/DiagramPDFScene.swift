@@ -44,6 +44,17 @@ struct DiagramPDFScene {
             }
             positions[node.id] = position; project.nodes[index] = node
         }
+        if settings.preserveGroups && settings.spacing != 1 {
+            for group in project.effectiveGroups {
+                let originals = group.nodeIds.compactMap { originalPositions[$0] }
+                guard !originals.isEmpty else { continue }
+                let center = NSPoint(x: originals.map(\.x).reduce(0,+)/Double(originals.count),y: originals.map(\.y).reduce(0,+)/Double(originals.count))
+                for id in group.nodeIds {
+                    guard let old = originalPositions[id],var position = positions[id] else { continue }
+                    position.x = old.x+center.x*(settings.spacing-1); position.y = old.y+center.y*(settings.spacing-1); positions[id] = position
+                }
+            }
+        }
         for index in project.containers.indices {
             project.containers[index].style.penwidth = project.containers[index].style.effectivePenwidth*settings.containerStroke
             if settings.contrastText {
@@ -61,10 +72,15 @@ struct DiagramPDFScene {
         }
         let children = Dictionary(grouping: project.containers, by: { $0.parentId ?? "" })
         let members = Dictionary(grouping: project.nodes, by: { $0.containerId ?? "" })
+        let groups = settings.preserveGroups ? project.effectiveGroups : []
+        let groupsByID = Dictionary(uniqueKeysWithValues: groups.map { ($0.id,$0) })
+        let groupedIDs = Set(groups.flatMap(\.nodeIds))
         var overlapCount = 0
         func translate(_ key: String, by delta: NSPoint) {
             if key.hasPrefix("n:"), var node = positions[String(key.dropFirst(2))] {
                 node.x += delta.x; node.y += delta.y; positions[node.id] = node
+            } else if key.hasPrefix("g:"),let group = groupsByID[String(key.dropFirst(2))] {
+                for id in group.nodeIds { translate("n:\(id)",by: delta) }
             } else {
                 let id = String(key.dropFirst(2))
                 if let rect = containerFrames[id] { containerFrames[id] = rect.offsetBy(dx: delta.x, dy: delta.y) }
@@ -77,11 +93,16 @@ struct DiagramPDFScene {
             if key.hasPrefix("n:"), let node = positions[String(key.dropFirst(2))] {
                 return CanvasGeometry.visualBounds(NSRect(x: node.x-node.width/2, y: node.y-node.height/2, width: node.width, height: node.height),rotation: project.nodes.first { $0.id == node.id }?.effectiveRotation ?? 0)
             }
+            if key.hasPrefix("g:"),let group = groupsByID[String(key.dropFirst(2))] {
+                return group.nodeIds.map { frame("n:\($0)") }.reduce(NSRect.null) { $0.union($1) }
+            }
             return containerFrames[String(key.dropFirst(2))] ?? .zero
         }
         func arrange(_ parent: String) {
             for container in children[parent] ?? [] { arrange(container.id) }
-            let keys = (members[parent] ?? []).map { "n:\($0.id)" } + (children[parent] ?? []).map { "c:\($0.id)" }
+            let ownGroups = groups.filter { group in (project.nodes.first { $0.id == group.nodeIds.first }?.containerId ?? "") == parent }
+            let keys = (members[parent] ?? []).filter { !groupedIDs.contains($0.id) }.map { "n:\($0.id)" }
+                + ownGroups.map { "g:\($0.id)" } + (children[parent] ?? []).map { "c:\($0.id)" }
             let gap = settings.gap/72
             if settings.avoidOverlaps, keys.count > 1 {
                 for _ in 0..<32 {
@@ -147,7 +168,9 @@ struct DiagramPDFScene {
                 project.containers[index].x = rect.midX; project.containers[index].y = rect.midY
             }
         }
-        let nodeByID = Dictionary(uniqueKeysWithValues: project.nodes.map { ($0.id,$0) })
+        let originalEndpointPositions = DiagramEndpoints.positions(nodes: originalLayout.nodes,frames: DiagramEndpoints.frames(project: original,nodes: originalLayout.nodes,previous: originalLayout.containers ?? []))
+        let endpointPositions = DiagramEndpoints.positions(nodes: Array(positions.values),frames: containerFrames)
+        let nodeByID = Dictionary(uniqueKeysWithValues: (project.nodes.map(\.id)+project.containers.map(\.id)).compactMap { id in project.endpointFigure(id).map { (id,$0) } })
         let oldEdges = Dictionary(uniqueKeysWithValues: originalLayout.edges.map { ($0.id,$0) })
         var edges: [LayoutEdge] = []
         var routes: [String: [NSPoint]] = [:]
@@ -157,12 +180,15 @@ struct DiagramPDFScene {
             edge.style.fontSize = min(144,max(1,edge.style.effectiveFontSize*settings.edgeText))
             if settings.labelBackground != "project" { edge.style.labelBackgroundTransparent = settings.labelBackground == "transparent" }
             if settings.contrastText { edge.style.text = contrasting(edge.style.resolved(.text, theme: "light"), on: .white); edge.style.textMode = "custom" }
-            guard let source = positions[edge.source], let target = positions[edge.target],
+            guard let source = endpointPositions[edge.source], let target = endpointPositions[edge.target],
                   let sourceNode = nodeByID[edge.source], let targetNode = nodeByID[edge.target] else { continue }
-            let oldSource = originalPositions[edge.source], oldTarget = originalPositions[edge.target]
+            let oldSource = originalEndpointPositions[edge.source], oldTarget = originalEndpointPositions[edge.target]
             let delta = NSPoint(x: ((source.x-(oldSource?.x ?? source.x)*settings.spacing)+(target.x-(oldTarget?.x ?? target.x)*settings.spacing))/2,
                                 y: ((source.y-(oldSource?.y ?? source.y)*settings.spacing)+(target.y-(oldTarget?.y ?? target.y)*settings.spacing))/2)
-            edge.waypoints = edge.waypoints.map { RoutePoint(x: $0.x*settings.spacing+delta.x, y: $0.y*settings.spacing+delta.y) }
+            if settings.preserveGroups,let group = groups.first(where: { $0.nodeIds.contains(edge.source) }),group.nodeIds.contains(edge.target),let a = oldSource,let b = oldTarget {
+                let dx = ((source.x-a.x)+(target.x-b.x))/2,dy = ((source.y-a.y)+(target.y-b.y))/2
+                edge.waypoints = edge.waypoints.map { RoutePoint(x: $0.x+dx,y: $0.y+dy) }
+            } else { edge.waypoints = edge.waypoints.map { RoutePoint(x: $0.x*settings.spacing+delta.x,y: $0.y*settings.spacing+delta.y) } }
             let same = settings.spacing == 1 && source == oldSource && target == oldTarget
             let previous = oldEdges[edge.id]
             let route = CanvasGeometry.edgePoints(edge, source: source, target: target, sourceNode: sourceNode, targetNode: targetNode,
@@ -178,7 +204,7 @@ struct DiagramPDFScene {
         reserved += containerFrames.values.map { NSRect(x: $0.minX, y: $0.maxY-settings.containerHeaderHeight/72,
                                                        width: $0.width,height: settings.containerHeaderHeight/72) }
         var style = DiagramPDFCanvasStyle(containerFontSize: settings.containerFontSize, arrowSize: settings.arrowSize,
-                                          containerFrames: containerFrames)
+                                          containerFrames: containerFrames,showGroups: settings.showGroups)
         var labelConflicts = 0, movedLabels = 0
         var obstacles = PDFObstacleIndex()
         for rect in reserved { obstacles.insert(rect) }

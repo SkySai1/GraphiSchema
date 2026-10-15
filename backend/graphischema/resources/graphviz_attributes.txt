@@ -63,3 +63,6 @@ gs_source_port/gs_target_port (vertex), gs_routing, gs_waypoints: расшире
 - presentation.legend_mode: auto или manual; legend_entries: строки {id,kind,node_id,edge_type_id,icon,shape,description}. kind=node ссылается на объект или фигуру коллекции, kind=edge_type — на общий тип связи. description=null использует описание типа/название объекта, строка задаёт ручную замену.
 - DOT графа: gs_edge_types и gs_legend_entries содержат JSON-массивы; gs_legend_mode задаёт режим. Сторонний Graphviz не интерпретирует эти метаданные.
 - Прямые/прямоугольные маршруты не требуют жёсткого отрезка фиксированной длины у порта. Для дальней стороны строго прямой связи выберите другой порт или маршрут обхода.
+
+- Концы edges.source / edges.target могут ссылаться как на nodes[].id, так и на containers[].id. DOT использует невидимые точки с gs_container внутри кластера и lhead/ltail; приложение возвращает канонический ID контейнера при импорте и рисует связь по его рамке.
+- groups: массив {id,label,node_ids}, минимум две существующие фигуры одного контейнера, каждый узел принадлежит не более одной группе. Группы не являются контейнерами; DOT сохраняет состав в gs_groups. Для операций ИИ доступны add_group, update_group, delete_group.

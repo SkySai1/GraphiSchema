@@ -105,7 +105,7 @@ def health() -> dict[str, str]:
     storage_scope = "config"
     return {
         "status": "ok",
-        "diagram_features": "rotation_types_legend_bridges_v1",
+        "diagram_features": "container_edges_groups_exports_v3",
         "app": "GraphiSchema",
         "revision_merge": "three_way_v1",
         "edge_routing": "graphviz_v1",
@@ -434,31 +434,44 @@ def get_svg() -> Response:
     return Response(svg, media_type="image/svg+xml", headers={"X-GraphiSchema-Layout": engine})
 
 
+@app.get("/api/export.svg", response_class=Response)
+def export_svg(include_legend: bool = True, show_groups: bool = False) -> Response:
+    return _export_project_svg(STORE.load(),include_legend,show_groups)
+
+
+@app.post("/api/export.svg", response_class=Response)
+def export_snapshot_svg(project: DiagramProject, include_legend: bool = True, show_groups: bool = False) -> Response:
+    return _export_project_svg(project,include_legend,show_groups)
+
+
+def _export_project_svg(project,include_legend,show_groups):
+    try:
+        svg,engine = render_svg(project,timeout=20.0,include_legend=include_legend,show_groups=show_groups)
+    except RenderError as exc:
+        raise HTTPException(status_code=422,detail=str(exc)) from exc
+    return Response(svg,media_type="image/svg+xml",headers={"X-GraphiSchema-Layout":engine,"Content-Disposition":'attachment; filename="graphischema-diagram.svg"'})
+
+
 @app.get("/api/export.png", response_class=Response)
-def export_png(
-    scale: float = Query(default=1.0, ge=0.5, le=4.0),
-    background: str = Query(default="#FFFFFF", max_length=11),
-) -> Response:
-    return _export_project_png(STORE.load(), scale, background)
+def export_png(scale: float = Query(default=1.0,ge=0.5,le=4.0),background: str = Query(default="#FFFFFF",max_length=11),
+               width: int | None = Query(default=None,ge=64,le=16384),height: int | None = Query(default=None,ge=64,le=16384),
+               include_legend: bool | None = None,show_groups: bool = False) -> Response:
+    return _export_project_png(STORE.load(),scale,background,width,height,include_legend,show_groups)
 
 
 @app.post("/api/export.png", response_class=Response)
-def export_transient_png(project: DiagramProject,
-                         scale: float = Query(default=1.0, ge=0.5, le=4.0),
-                         background: str = Query(default="#FFFFFF", max_length=11)) -> Response:
-    return _export_project_png(project, scale, background)
+def export_transient_png(project: DiagramProject,scale: float = Query(default=1.0,ge=0.5,le=4.0),background: str = Query(default="#FFFFFF",max_length=11),
+                         width: int | None = Query(default=None,ge=64,le=16384),height: int | None = Query(default=None,ge=64,le=16384),
+                         include_legend: bool | None = None,show_groups: bool = False) -> Response:
+    return _export_project_png(project,scale,background,width,height,include_legend,show_groups)
 
 
-def _export_project_png(project, scale, background):
+def _export_project_png(project,scale,background,width=None,height=None,include_legend=None,show_groups=False):
     try:
-        payload, engine = render_png(project, scale=scale, background=background)
+        payload,engine = render_png(project,scale=scale,background=background,width=width,height=height,include_legend=include_legend,show_groups=show_groups)
     except RenderError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return Response(
-        payload,
-        media_type="image/png",
-        headers={"X-GraphiSchema-Layout": engine, "Content-Disposition": 'attachment; filename="graphischema-diagram.png"'},
-    )
+        raise HTTPException(status_code=422,detail=str(exc)) from exc
+    return Response(payload,media_type="image/png",headers={"X-GraphiSchema-Layout":engine,"Content-Disposition":'attachment; filename="graphischema-diagram.png"'})
 
 
 @app.get("/api/export.json")

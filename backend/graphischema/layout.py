@@ -18,7 +18,7 @@ class LayoutError(RuntimeError):
 def compute_layout(project: DiagramProject, timeout: float = 8.0) -> dict[str, object]:
     """Return normalized node and edge geometry in Graphviz inches."""
     engine = "neato" if project.diagram.layout_mode == "manual" else project.diagram.layout_engine
-    if not project.nodes:
+    if not project.nodes and not project.edges:
         return normalize_edges(project, _fallback_layout(project, engine=engine))
     binary = shutil.which(engine)
     if not binary:
@@ -48,6 +48,9 @@ def compute_layout(project: DiagramProject, timeout: float = 8.0) -> dict[str, o
 
 def _parse_plain(project: DiagramProject, source: str, engine: str) -> dict[str, object]:
     width = height = 0.0
+    from .endpoints import container_anchor_ids
+    anchors = {value:key for key,value in container_anchor_ids(project).items()}
+    container_centers = {}
     nodes: list[dict[str, object]] = []
     edge_ids: dict[tuple[str, str], deque[str]] = defaultdict(deque)
     for edge in project.edges:
@@ -66,15 +69,17 @@ def _parse_plain(project: DiagramProject, source: str, engine: str) -> dict[str,
         if tokens[0] == "graph" and len(tokens) >= 4:
             width, height = float(tokens[2]), float(tokens[3])
         elif tokens[0] == "node" and len(tokens) >= 9:
-            nodes.append({
+            item = {
                 "id": tokens[1],
                 "x": float(tokens[2]),
                 "y": float(tokens[3]),
                 "width": float(tokens[4]),
                 "height": float(tokens[5]),
-            })
+            }
+            if tokens[1] in anchors: container_centers[anchors[tokens[1]]] = item
+            else: nodes.append(item)
         elif tokens[0] == "edge" and len(tokens) >= 7:
-            source_id, target_id = tokens[1], tokens[2]
+            source_id, target_id = anchors.get(tokens[1],tokens[1]), anchors.get(tokens[2],tokens[2])
             point_count = int(tokens[3])
             coordinate_end = 4 + point_count * 2
             if len(tokens) < coordinate_end:
@@ -117,7 +122,9 @@ def _parse_plain(project: DiagramProject, source: str, engine: str) -> dict[str,
         width, height = max_x - min_x, max_y - min_y
     return {"engine": engine, "edgeRouting": project.diagram.edge_routing,
             "width": width, "height": height, "minX": min_x, "minY": min_y,
-            "nodes": nodes, "edges": edges}
+            "nodes": nodes, "edges": edges,
+            "containers": [{"id":item.id,"x":container_centers[item.id]["x"],"y":container_centers[item.id]["y"],"width":item.width,"height":item.height}
+                           for item in project.containers if item.id in container_centers]}
 
 
 def _fallback_layout(project: DiagramProject, engine: str) -> dict[str, object]:
@@ -125,7 +132,7 @@ def _fallback_layout(project: DiagramProject, engine: str) -> dict[str, object]:
     incoming = {node.id: 0 for node in project.nodes}
     outgoing: dict[str, list[str]] = defaultdict(list)
     for edge in project.edges:
-        if edge.direction == "none" or not edge.style.constraint:
+        if edge.source not in incoming or edge.target not in incoming or edge.direction == "none" or not edge.style.constraint:
             continue
         outgoing[edge.source].append(edge.target)
         incoming[edge.target] += 1
@@ -192,11 +199,13 @@ def _fallback_layout(project: DiagramProject, engine: str) -> dict[str, object]:
          "width": node_widths[node.id], "height": node_heights[node.id]}
         for node in project.nodes
     ]
-    by_id = {node["id"]: node for node in nodes}
+    from .endpoints import endpoint_geometries
+    _, by_id = endpoint_geometries(project,{"nodes":nodes,"minX":0,"minY":0})
+    endpoint_positions = {key:(item["x"],item["y"]) for key,item in by_id.items()}
     edges = []
     for edge in project.edges:
-        source = positions[edge.source]
-        target = positions[edge.target]
+        source = endpoint_positions[edge.source]
+        target = endpoint_positions[edge.target]
         start = _clip_to_node(source, target, by_id[edge.source]["width"], by_id[edge.source]["height"])
         end = _clip_to_node(target, source, by_id[edge.target]["width"], by_id[edge.target]["height"])
         points = route_edge_points(start, end, project.diagram.edge_routing, horizontal)

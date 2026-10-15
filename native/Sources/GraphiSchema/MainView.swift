@@ -35,6 +35,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
     private var branchManager: BranchManagerWindowController?
     private var libraryController: DiagramLibraryWindowController?
     private var settingsController: ApplicationSettingsWindowController?
+    private var pngExportWindowController: PNGExportWindowController?
     private(set) var pdfExportWindowController: PDFExportWindowController?
     private let titleField = NSTextField(string: "")
     private let statusLabel = NSTextField(labelWithString: "Подключение…")
@@ -96,7 +97,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         guard var active = notification.object as? NSWindow else { return }
         while let parent = active.sheetParent { active = parent }
         let owned = [window, historyWindowController?.window, branchManager?.window, projectManager?.window,
-                     settingsController?.window, libraryController?.window, styleWindowController?.window, pdfExportWindowController?.window, nodeTextEditorController?.window,
+                     settingsController?.window, libraryController?.window, styleWindowController?.window, pngExportWindowController?.window, pdfExportWindowController?.window, nodeTextEditorController?.window,
                      elementTextEditorController?.window, ollamaWindowController?.window]
             + colorEditors.values.map { $0.window }
         let context = (active.windowController as? ProjectThemedWindow)?.projectModel
@@ -114,6 +115,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         historyWindowController?.close(); historyWindowController = nil
         branchManager?.close(); branchManager = nil
         pdfExportWindowController?.close(); pdfExportWindowController = nil
+        pngExportWindowController?.close(); pngExportWindowController = nil
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -123,6 +125,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         libraryController?.close()
         styleWindowController?.close()
         pdfExportWindowController?.close()
+        pngExportWindowController?.close()
         for editor in colorEditors.values { editor.close() }
         nodeTextEditorController?.close()
         elementTextEditorController?.close()
@@ -269,7 +272,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         sidebar.onAddNode = { [weak self] item in self?.model.addNode(item) }
         sidebar.onAddContainer = { [weak self] in self?.model.addContainer() }
         sidebar.onSelect = { [weak self] selection in
-            self?.model.selection = selection
+            if let self { self.model.selection = self.model.expandedSelection(selection) }
             self?.refreshInspector()
             self?.refreshSidebar()
             if let self { self.refreshCanvas(force: true) }
@@ -277,7 +280,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         sidebar.onShowProperties = { [weak self] in self?.showStyleWindow() }
         workspace.onSelectElement = { [weak self] selection in
             guard let self else { return }
-            self.model.selection = selection
+            self.model.selection = self.model.expandedSelection(selection)
             self.refreshInspector()
             self.refreshSidebar()
             self.refreshCanvas(force: true)
@@ -292,6 +295,8 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         workspace.onMoveNodeInStack = { [weak self] id, front in
             if front { self?.model.moveNodeToFront(id) } else { self?.model.moveNodeToBack(id) }
         }
+        workspace.onGroupSelection = { [weak self] in self?.model.groupSelection() }
+        workspace.onUngroupSelection = { [weak self] in self?.model.ungroupSelection() }
         workspace.onMoveNodes = { [weak self] destinations, containerIDs in
             self?.model.moveNodes(destinations, containerIDs: containerIDs)
         }
@@ -421,6 +426,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
             branchManager?.close(); branchManager = nil
             styleWindowController?.close(); styleWindowController = nil; styleInspector = nil
             pdfExportWindowController?.close(); pdfExportWindowController = nil
+            pngExportWindowController?.close(); pngExportWindowController = nil
             for controller in colorEditors.values { controller.close() }; colorEditors.removeAll()
             nodeTextEditorController?.close(); nodeTextEditorController = nil
             elementTextEditorController?.close(); elementTextEditorController = nil
@@ -544,6 +550,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         file.addItem(.separator())
         file.addItem(menuItem("Импортировать JSON…", #selector(importJSONFromMenu(_:))))
         file.addItem(menuItem("Экспортировать JSON…", #selector(exportJSONFromMenu(_:))))
+        file.addItem(menuItem("Экспортировать SVG…", #selector(exportSVGFromMenu(_:))))
         file.addItem(menuItem("Экспортировать PNG…", #selector(exportPNGFromMenu(_:))))
         file.addItem(menuItem("Экспортировать PDF…", #selector(exportPDFFromMenu(_:))))
         file.addItem(menuItem("История версий…", #selector(showHistoryFromMenu(_:))))
@@ -561,6 +568,9 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         edit.addItem(.separator())
         edit.addItem(NSMenuItem(title: "Дублировать объекты", action: #selector(DiagramCanvasView.duplicate(_:)), keyEquivalent: "d"))
         edit.addItem(NSMenuItem(title: "Удалить объекты", action: #selector(DiagramCanvasView.deleteSelection(_:)), keyEquivalent: ""))
+        edit.addItem(.separator())
+        edit.addItem(menuItem("Сгруппировать",#selector(groupFromMenu(_:)),key: "g",modifiers: .command))
+        edit.addItem(menuItem("Разгруппировать",#selector(ungroupFromMenu(_:)),key: "g",modifiers: [.command,.shift]))
         editRoot.submenu = edit
 
         let viewRoot = NSMenuItem(title: "Вид", action: nil, keyEquivalent: ""); main.addItem(viewRoot)
@@ -706,6 +716,9 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
     @objc private func saveProjectAsFromMenu(_ sender: Any?) { saveProjectAs() }
     @objc private func importJSONFromMenu(_ sender: Any?) { importJSON() }
     @objc private func exportJSONFromMenu(_ sender: Any?) { exportJSON() }
+    @objc private func exportSVGFromMenu(_ sender: Any?) { exportSVG() }
+    @objc private func groupFromMenu(_ sender: Any?) { model.groupSelection() }
+    @objc private func ungroupFromMenu(_ sender: Any?) { model.ungroupSelection() }
     @objc private func exportPNGFromMenu(_ sender: Any?) { exportPNG() }
     @objc private func exportPDFFromMenu(_ sender: Any?) { exportPDF() }
     @objc private func showEdgeTypesFromMenu(_ sender: Any?) { showDiagramLibrary(legend: false) }
@@ -772,6 +785,12 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
     }
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(groupFromMenu(_:)) { if case .nodes(let ids) = model.selection { return ids.count>1 && !model.isEditingLocked }; return false }
+        if item.action == #selector(ungroupFromMenu(_:)) {
+            let ids: Set<String>
+            switch model.selection { case .node(let id): ids = [id]; case .nodes(let values): ids = values; default: return false }
+            return !model.isEditingLocked && model.diagram?.effectiveGroups.contains(where: { !Set($0.nodeIds).isDisjoint(with: ids) }) == true
+        }
         if item.action == #selector(showSelectedStyleFromMenu(_:)) { return hasSelectedElement && !model.isEditingLocked }
         if item.action == #selector(showProjectStyleFromMenu(_:)) { return model.diagram != nil && !model.isEditingLocked }
         if item.action == #selector(showColorFromMenu(_:)), let value = item.representedObject as? String,
@@ -1064,62 +1083,35 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         }
     }
 
-    private func exportPNG() {
-        guard model.activeProposal == nil else {
-            showAlert("Сначала примените или отмените предложение перед экспортом.")
-            return
-        }
-        let scalePopup = NSPopUpButton(frame: .zero, pullsDown: false)
-        scalePopup.addItems(withTitles: ["1×", "1.5×", "2×", "3×"])
-        scalePopup.selectItem(at: 2)
-        let backgroundPopup = NSPopUpButton(frame: .zero, pullsDown: false)
-        backgroundPopup.addItems(withTitles: ["Белый", "Прозрачный", "Светло-серый", "Тёмный"])
-        backgroundPopup.selectItem(at: 0)
-
-        let scaleRow = NSStackView(views: [HelpFieldLabel("Масштаб", explanation: "Множитель разрешения PNG. Большее значение создаёт более чёткое изображение и увеличивает размер файла.", identifier: "png-scale-help"), scalePopup])
-        let backgroundRow = NSStackView(views: [HelpFieldLabel("Фон", explanation: "Задаёт цвет под диаграммой. Прозрачный фон удобен для вставки схемы поверх других материалов.", identifier: "png-background-help"), backgroundPopup])
-        [scaleRow, backgroundRow].forEach {
-            $0.orientation = .horizontal
-            $0.alignment = .centerY
-            $0.distribution = .fill
-            $0.spacing = 12
-        }
-        scaleRow.widthAnchor.constraint(equalToConstant: 250).isActive = true
-        backgroundRow.widthAnchor.constraint(equalToConstant: 250).isActive = true
-        let options = NSStackView(views: [scaleRow, backgroundRow])
-        options.orientation = .vertical
-        options.alignment = .leading
-        options.spacing = 9
-
-        let alert = NSAlert()
-        alert.window.appearance = NSApp.appearance
-        alert.messageText = "Экспорт диаграммы в PNG"
-        alert.informativeText = "Выберите разрешение и фон изображения."
-        alert.accessoryView = options
-        alert.addButton(withTitle: "Продолжить")
-        alert.addButton(withTitle: "Отмена")
-        alert.beginSheetModal(for: window!) { [weak self] response in
-            guard response == .alertFirstButtonReturn, let self else { return }
-            let scales = [1.0, 1.5, 2.0, 3.0]
-            let backgrounds = ["#FFFFFF", "transparent", "#F5F7FA", "#111827"]
-            let scale = scales[min(max(scalePopup.indexOfSelectedItem, 0), scales.count - 1)]
-            let background = backgrounds[min(max(backgroundPopup.indexOfSelectedItem, 0), backgrounds.count - 1)]
-            let panel = NSSavePanel()
-            panel.appearance = NSApp.appearance
-            panel.allowedContentTypes = [.png]
-            panel.nameFieldStringValue = "graphischema-diagram.png"
-            panel.beginSheetModal(for: self.window!) { saveResponse in
-                guard saveResponse == .OK, let url = panel.url else { return }
-                Task { @MainActor in
-                    do {
-                        let data = try await self.model.exportPNG(scale: scale, background: background)
-                        try data.write(to: url, options: .atomic)
-                        self.model.status = "PNG сохранён"
-                        self.refreshHeader()
-                    } catch { self.showAlert(error.localizedDescription) }
-                }
+    private func exportSVG() {
+        guard let project = model.diagram,!model.isEditingLocked,!model.dotDraftIsDirty,!model.jsonDraftIsDirty else { showAlert("Примените или отмените черновик перед экспортом."); return }
+        let panel = NSSavePanel(); panel.allowedContentTypes = [.svg]; panel.nameFieldStringValue = "graphischema-diagram.svg"
+        let options = NSView(frame: NSRect(x: 0,y: 0,width: 320,height: 60))
+        let legend = NSButton(checkboxWithTitle: "Добавить условные обозначения",target: nil,action: nil)
+        legend.state = .on; legend.frame = NSRect(x: 0,y: 32,width: 320,height: 24)
+        let groups = NSButton(checkboxWithTitle: "Показывать рамки групп",target: nil,action: nil)
+        groups.frame = NSRect(x: 0,y: 4,width: 320,height: 24)
+        let legendHelp = HelpFieldLabel("",explanation: "Добавляет автоматическую или ручную легенду проекта в векторный файл SVG.",identifier: "svg-legend-help")
+        let groupHelp = HelpFieldLabel("",explanation: "Показывает тонкие пунктирные рамки постоянных групп; состав группы остаётся в JSON проекта.",identifier: "svg-groups-help")
+        legend.frame.size.width = 285; groups.frame.size.width = 285
+        legendHelp.frame = NSRect(x: 292,y: 32,width: 24,height: 24); groupHelp.frame = NSRect(x: 292,y: 4,width: 24,height: 24)
+        [legend,groups,legendHelp,groupHelp].forEach(options.addSubview); panel.accessoryView = options
+        let workspace = model.workspace
+        panel.beginSheetModal(for: window!) { [weak self] response in
+            guard let self,response == .OK,let url = panel.url,self.model.workspace == workspace else { return }
+            Task { @MainActor [self] in
+                do { let data = try await self.model.exportSVG(project: project,includeLegend: legend.state == .on,showGroups: groups.state == .on); try data.write(to: url,options: .atomic); self.model.status = "SVG сохранён"; self.refreshHeader() }
+                catch { self.showAlert(error.localizedDescription) }
             }
         }
+    }
+
+    private func exportPNG() {
+        guard model.diagram != nil else { return }
+        if pngExportWindowController == nil {
+            pngExportWindowController = PNGExportWindowController(model: model) { [weak self] _ in self?.model.status = "PNG сохранён"; self?.refreshHeader() }
+        }
+        pngExportWindowController?.showNearCursor(self); pngExportWindowController?.reloadSnapshot()
     }
 
     private func exportPDF() {
@@ -1933,7 +1925,7 @@ private final class SidebarView: NSView {
         addArranged(separator(), to: contentStack)
         addArranged(section("СВЯЗИ · \(model.edges.count)"), to: contentStack)
         if model.edges.isEmpty { addArranged(hint("Нет связей"), to: contentStack) }
-        let nodeLabels = Dictionary(uniqueKeysWithValues: model.nodes.map { ($0.id, $0.label.isEmpty ? $0.id : $0.label) })
+        let nodeLabels = Dictionary(uniqueKeysWithValues: model.nodes.map { ($0.id,$0.label.isEmpty ? $0.id : $0.label) }+model.containers.map { ($0.id,$0.label.isEmpty ? $0.id : $0.label) })
         for edge in model.edges {
             let source = nodeLabels[edge.source] ?? edge.source
             let target = nodeLabels[edge.target] ?? edge.target
@@ -2062,6 +2054,8 @@ private final class WorkspaceView: NSView {
     var onSetNodeZIndex: ((String, Int) -> Void)?
     var onSetStyle: ((DiagramSelection, DiagramStyleChange) -> Void)?
     var onMoveNodeInStack: ((String, Bool) -> Void)?
+    var onGroupSelection: (() -> Void)?
+    var onUngroupSelection: (() -> Void)?
     var onMoveNodes: (([String: NSPoint], [String: String]) -> Void)?
     var onResizeNode: ((String, Double, Double) -> Void)?
     var onScaleNodes: ((Set<String>, Double) -> Void)?
@@ -2270,6 +2264,8 @@ private final class WorkspaceView: NSView {
         canvasView.onSetNodeZIndex = { [weak self] id, value in self?.onSetNodeZIndex?(id, value) }
         canvasView.onSetStyle = { [weak self] selection, change in self?.onSetStyle?(selection, change) }
         canvasView.onMoveNodeInStack = { [weak self] id, front in self?.onMoveNodeInStack?(id, front) }
+        canvasView.onGroupSelection = { [weak self] in self?.onGroupSelection?() }
+        canvasView.onUngroupSelection = { [weak self] in self?.onUngroupSelection?() }
         canvasView.onMoveNodes = { [weak self] destinations, containerIDs in self?.onMoveNodes?(destinations, containerIDs) }
         canvasView.onResizeNode = { [weak self] id, width, height in self?.onResizeNode?(id, width, height) }
         canvasView.onResetNodeRotations = { [weak self] ids in self?.onResetNodeRotations?(ids) }
@@ -2710,6 +2706,9 @@ private final class InspectorView: NSView {
         case .nodes(let ids):
             title.stringValue = "\(ids.count) компонентов"
             addSection("ГРУППА")
+            if let group = model.diagram?.effectiveGroups.first(where: { Set($0.nodeIds) == ids }) {
+                addText("Имя группы",value: group.label,tooltip: "Название постоянной группы. Группа хранится в проекте, перемещается и масштабируется совместно; при экспорте можно сохранить её размещение и показать рамку.") { model.renameGroup(group.id,label: $0) }
+            }
             addFullWidth(makeLabel("Компоненты можно перемещать, масштабировать за общий маркер или удалить вместе.", size: 10, weight: .regular, color: .secondaryLabelColor))
             if let node = model.nodes.first(where: { ids.contains($0.id) }) {
                 addColor("Заливка", value: node.style.fill, parameter: .fill)
@@ -2872,7 +2871,7 @@ private final class InspectorView: NSView {
                             tooltip: "Включён: подпись рисуется без фоновой плашки, видны линии и объекты под текстом. Выключен: непрозрачная плашка в цвете текущей темы улучшает читаемость. Применяется сразу на холсте и при экспорте; цвет текста задаётся отдельно.") { value in
                     model.setStyle(.labelBackgroundTransparent(value), for: .edge(id))
                 }
-                let nodes = model.nodes.map { ($0.id, $0.label.isEmpty ? $0.id : $0.label) }
+                let nodes = model.nodes.map { ($0.id, $0.label.isEmpty ? $0.id : $0.label) } + model.containers.map { ($0.id,"Контейнер: \($0.label.isEmpty ? $0.id : $0.label)") }
                 addPopup("Источник", value: item.source, choices: nodes) { value in model.editEdge(id) { $0.source = value; $0.sourcePort = "auto" } }
                 addPopup("Цель", value: item.target, choices: nodes) { value in model.editEdge(id) { $0.target = value; $0.targetPort = "auto" } }
                 addPopup("Направление", value: item.direction, choices: DiagramStyleOptions.directions,
@@ -2880,8 +2879,8 @@ private final class InspectorView: NSView {
                 addPopup("Стиль линии", value: item.style.lineStyle, choices: DiagramStyleOptions.edgeLines,
                          tooltip: "Сплошная, пунктирная или точечная линия. Пресет «Жирная» также устанавливает толщину не менее 3 pt; затем толщину можно задать отдельно.") { value in model.setStyle(.lineStyle(value), for: .edge(id)) }
                 addPopup("Маршрут этой связи", value: item.routing ?? "", choices: DiagramStyleOptions.routes) { value in model.setStyle(.routing(value.isEmpty ? nil : value), for: .edge(id)) }
-                addPopup("Привязка источника", value: item.sourcePort, choices: CanvasGeometry.portChoices(model.nodes.first { $0.id == item.source })) { value in model.editEdge(id) { $0.sourcePort = value } }
-                addPopup("Привязка цели", value: item.targetPort, choices: CanvasGeometry.portChoices(model.nodes.first { $0.id == item.target })) { value in model.editEdge(id) { $0.targetPort = value } }
+                addPopup("Привязка источника", value: item.sourcePort, choices: CanvasGeometry.portChoices(model.diagram?.endpointFigure(item.source))) { value in model.editEdge(id) { $0.sourcePort = value } }
+                addPopup("Привязка цели", value: item.targetPort, choices: CanvasGeometry.portChoices(model.diagram?.endpointFigure(item.target))) { value in model.editEdge(id) { $0.targetPort = value } }
                 addPopup("Наконечник", value: item.style.arrowhead, choices: DiagramStyleOptions.arrows,
                          tooltip: "Форма стрелки у цели. Выбор формы включает стрелку, если направление было выключено.") { value in model.setStyle(.arrowhead(value), for: .edge(id)) }
                 addPopup("Хвост", value: item.style.arrowtail, choices: DiagramStyleOptions.arrows,
@@ -2890,7 +2889,7 @@ private final class InspectorView: NSView {
                 let resetRoute = makeButton("Сбросить точки пути", symbol: "arrow.counterclockwise") { _ in model.editEdge(id) { $0.waypoints = [] } }
                 resetRoute.identifier = NSUserInterfaceItemIdentifier("inspector-reset-route")
                 editableControls.append(resetRoute); addFullWidth(resetRoute)
-                addReadOnly("Точки пути", value: "\(item.waypoints.count) · двойной щелчок по линии добавляет точку")
+                addReadOnly("Точки пути", value: "\(item.waypoints.count) · полые маркеры между точками добавляют новые изгибы; двойной щелчок меняет текст")
                 addColor("Цвет", value: item.style.color, parameter: .stroke)
                 addColor("Текст", value: model.colorSelection(for: .text).color ?? "#172238", parameter: .text)
                 addReadOnly("ID", value: item.id)

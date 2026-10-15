@@ -109,12 +109,22 @@ def test_multisegment_graphviz_curve_preserves_its_middle_joint():
 
 @pytest.mark.parametrize("routing", ["straight", "angled", "orthogonal", "curved"])
 @pytest.mark.parametrize("ports", [("n", "w"), ("e", "n"), ("s", "e"), ("w", "s")])
-def test_fixed_side_leads_are_outside_the_fill_and_enter_normally(routing, ports):
+def test_fixed_ports_keep_exact_attachments_without_mandatory_quarter_inch_stubs(routing, ports):
     value = project(routing)
     value.edges[0].source_port, value.edges[0].target_port = ports
     layout = compute_layout(value)
     points = [(p["x"], p["y"]) for p in layout["edges"][0]["points"]]
     directions = {"n": (0, 1), "e": (1, 0), "s": (0, -1), "w": (-1, 0)}
+    for node, port, tip in [(value.nodes[0], ports[0], points[0]), (value.nodes[1], ports[1], points[-1])]:
+        dx, dy = directions[port]
+        assert tip == pytest.approx((node.x+dx*.7, node.y+dy*.6))
+    if routing == "straight":
+        assert len(points) == 2  # The requested straight path starts at the port itself.
+    elif routing == "angled":
+        assert len(points) == 3
+        assert points[1] == pytest.approx(((points[0][0]+points[-1][0])/2, points[0][1]))
+    elif routing == "orthogonal":
+        assert all(abs(a[0]-b[0])<1e-8 or abs(a[1]-b[1])<1e-8 for a,b in zip(points,points[1:]))
     for port, tip, outside in [(ports[0], points[0], points[1]), (ports[1], points[-1], points[-2])]:
         dx, dy = directions[port]
         if routing == "curved":
@@ -123,16 +133,21 @@ def test_fixed_side_leads_are_outside_the_fill_and_enter_normally(routing, ports
             assert length > 0
             assert (vector[0]*dx+vector[1]*dy)/length > .998
             assert length < .25 # Curvature starts at the port, without a rigid stub.
-        else:
-            assert outside == pytest.approx((tip[0]+.25*dx, tip[1]+.25*dy))
+        elif routing == "orthogonal":
+            assert (outside[0]-tip[0])*dx+(outside[1]-tip[1])*dy > 0
+            # A complete Manhattan leg, rather than a fixed .25" inserted stub.
+            assert math.dist(outside,tip) != pytest.approx(.25)
 
 
 @pytest.mark.parametrize("routing", ["straight", "angled", "orthogonal", "curved"])
-def test_fixed_port_leads_shrink_in_a_narrow_gap(routing):
+def test_fixed_ports_use_a_narrow_gap_without_reversing_the_shaft(routing):
     value = project(routing, source=(1, 2), target=(2.45, 2))
     value.edges[0].source_port, value.edges[0].target_port = "e", "w"
     geometry = compute_layout(value)["edges"][0]
     points = [(p["x"], p["y"]) for p in geometry["points"]]
-    assert 1.7 < points[1][0] < points[-2][0] < 1.75
+    assert points[0] == pytest.approx((1.7,2))
+    assert points[-1] == pytest.approx((1.75,2))
+    assert all(1.7-1e-8<=x<=1.75+1e-8 and abs(y-2)<1e-8 for x,y in points)
+    assert all(a[0]<b[0] for a,b in zip(points,points[1:]))
     drawing = arrow_drawing([(x*72, y*72) for x, y in points], "normal", "normal")
     assert drawing.tail.base[0] < drawing.head.base[0]

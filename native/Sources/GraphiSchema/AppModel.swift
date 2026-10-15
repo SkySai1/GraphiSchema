@@ -301,6 +301,11 @@ final class AppModel: ObservableObject {
                 guard let position = byID[current.nodes[index].id] else { continue }
                 current.nodes[index].x = position.x; current.nodes[index].y = position.y
             }
+            for index in current.containers.indices {
+                if let position = byID[current.containers[index].id] {
+                    current.containers[index].x = position.x; current.containers[index].y = position.y
+                }
+            }
             current.diagram.layoutMode = "manual"
         }
         current.edges[i].waypoints = Array(points.prefix(32))
@@ -310,7 +315,7 @@ final class AppModel: ObservableObject {
 
     func setEdgeEndpoint(_ id: String, source: Bool, nodeID: String, port: String = "auto") {
         guard !isEditingLocked, var current = diagram,
-              let node = current.nodes.first(where: { $0.id == nodeID }),
+              let node = current.endpointFigure(nodeID),
               CanvasGeometry.portChoices(node).contains(where: { $0.0 == port }),
               let index = current.edges.firstIndex(where: { $0.id == id }) else { return }
         let previousNodeID = source ? current.edges[index].source : current.edges[index].target
@@ -376,6 +381,11 @@ final class AppModel: ObservableObject {
             let geometry = layout?.nodes.first { $0.id == id }
             current.nodes[index].width = min(10, max(0.5, geometry?.width ?? 1.6))
             current.nodes[index].height = min(10, max(0.5, geometry?.height ?? 0.62))
+        }
+        if previous.containerId != current.nodes[index].containerId,
+           let group = current.effectiveGroups.first(where: { $0.nodeIds.contains(id) }) {
+            let parent = current.nodes[index].containerId
+            for member in current.nodes.indices where group.nodeIds.contains(current.nodes[member].id) { current.nodes[member].containerId = parent }
         }
         guard previous != current.nodes[index] else { return }
         diagram = current
@@ -788,7 +798,8 @@ final class AppModel: ObservableObject {
             if current.nodes[nodeIndex].x == nil { current.nodes[nodeIndex].x = positions[current.nodes[nodeIndex].id]?.x }
             if current.nodes[nodeIndex].y == nil { current.nodes[nodeIndex].y = positions[current.nodes[nodeIndex].id]?.y }
         }
-        current.nodes[index].containerId = nil
+        let ids = current.expandedGroupMembers([id])
+        for member in current.nodes.indices where ids.contains(current.nodes[member].id) { current.nodes[member].containerId = nil }
         diagram = current
         selection = .node(id)
         changed()
@@ -819,13 +830,14 @@ final class AppModel: ObservableObject {
     func moveNodes(_ destinations: [String: NSPoint], containerIDs: [String: String] = [:]) {
         guard !isEditingLocked, !destinations.isEmpty,
               destinations.values.allSatisfy({ $0.x.isFinite && $0.y.isFinite }), var current = diagram else { return }
+        let original = current,wasAutomatic = current.diagram.layoutMode == "auto"
         let ids = Set(destinations.keys).intersection(Set(current.nodes.map(\.id)))
         guard !ids.isEmpty else { return }
         let positions = Dictionary(uniqueKeysWithValues: (layout?.nodes ?? []).map { ($0.id, $0) })
         let validContainerIDs = Set(current.containers.map(\.id))
         current.diagram.layoutMode = "manual"
         for index in current.nodes.indices {
-            if current.nodes[index].x == nil || current.nodes[index].y == nil,
+            if wasAutomatic || current.nodes[index].x == nil || current.nodes[index].y == nil,
                let position = positions[current.nodes[index].id] {
                 current.nodes[index].x = position.x
                 current.nodes[index].y = position.y
@@ -838,6 +850,7 @@ final class AppModel: ObservableObject {
                 current.nodes[index].containerId = target
             }
         }
+        transportRoutes(&current,from: original)
         diagram = current
         if ids.count == 1, let id = ids.first { selection = .node(id) }
         else { selection = .nodes(ids) }
@@ -868,9 +881,10 @@ final class AppModel: ObservableObject {
     func moveContainer(_ id: String, deltaX: Double, deltaY: Double) {
         guard !isEditingLocked else { return }
         guard var current = diagram, current.containers.contains(where: { $0.id == id }) else { return }
+        let original = current,wasAutomatic = current.diagram.layoutMode == "auto"
         current.diagram.layoutMode = "manual"
         let positions = Dictionary(uniqueKeysWithValues: (layout?.nodes ?? []).map { ($0.id, $0) })
-        for index in current.nodes.indices where current.nodes[index].x == nil || current.nodes[index].y == nil {
+        for index in current.nodes.indices where wasAutomatic || current.nodes[index].x == nil || current.nodes[index].y == nil {
             guard let position = positions[current.nodes[index].id] else { continue }
             current.nodes[index].x = position.x
             current.nodes[index].y = position.y
@@ -893,6 +907,7 @@ final class AppModel: ObservableObject {
             current.containers[index].x = min(1000, max(-1000, (current.containers[index].x ?? position?.x ?? ((layout?.minX ?? 0) + 1.6)) + deltaX))
             current.containers[index].y = min(1000, max(-1000, (current.containers[index].y ?? position?.y ?? ((layout?.minY ?? 0) + 1.2)) + deltaY))
         }
+        transportRoutes(&current,from: original)
         diagram = current
         selection = .container(id)
         changed()
@@ -982,8 +997,8 @@ final class AppModel: ObservableObject {
         let source: DiagramNode?
         let target: DiagramNode?
         if let sourceID, let targetID {
-            source = current.nodes.first(where: { $0.id == sourceID })
-            target = current.nodes.first(where: { $0.id == targetID })
+            source = current.endpointFigure(sourceID)
+            target = current.endpointFigure(targetID)
         } else if current.nodes.count >= 2 {
             source = current.nodes[current.nodes.count - 2]
             target = current.nodes[current.nodes.count - 1]
@@ -1014,6 +1029,60 @@ final class AppModel: ObservableObject {
         changed()
     }
 
+    func expandedSelection(_ target: DiagramSelection) -> DiagramSelection {
+        guard let current = diagram else { return target }
+        let ids: Set<String>
+        switch target { case .node(let id): ids = [id]; case .nodes(let values): ids = values; default: return target }
+        let expanded = current.expandedGroupMembers(ids)
+        return expanded.count>1 ? .nodes(expanded) : target
+    }
+
+    func renameGroup(_ id: String,label: String) {
+        guard !isEditingLocked,label.unicodeScalars.count<=120,var current = diagram,let index = current.effectiveGroups.firstIndex(where: { $0.id == id }) else { return }
+        var groups = current.effectiveGroups; groups[index].label = label; current.groups = groups
+        guard current != diagram else { return }; diagram = current; changed()
+    }
+
+    private func transportRoutes(_ current: inout DiagramProject,from original: DiagramProject) {
+        let oldNodes = layout?.nodes ?? []
+        let old = DiagramEndpoints.positions(nodes: oldNodes,frames: DiagramEndpoints.frames(project: original,nodes: oldNodes,previous: layout?.containers ?? []))
+        let nextNodes = current.nodes.compactMap { node -> LayoutNode? in
+            guard let before = old[node.id] else { return nil }
+            return LayoutNode(id: node.id,x: node.x ?? before.x,y: node.y ?? before.y,width: node.width ?? before.width,height: node.height ?? before.height)
+        }
+        let next = DiagramEndpoints.positions(nodes: nextNodes,frames: DiagramEndpoints.frames(project: current,nodes: nextNodes,previous: layout?.containers ?? []))
+        for index in current.edges.indices where !current.edges[index].waypoints.isEmpty {
+            let edge = current.edges[index]
+            guard let a = old[edge.source],let b = old[edge.target],let c = next[edge.source],let d = next[edge.target] else { continue }
+            let delta = NSPoint(x: c.x-a.x,y: c.y-a.y)
+            guard hypot(delta.x-(d.x-b.x),delta.y-(d.y-b.y))<1e-6 else { continue }
+            current.edges[index].waypoints = edge.waypoints.map { RoutePoint(x: min(1000,max(-1000,$0.x+delta.x)),y: min(1000,max(-1000,$0.y+delta.y))) }
+        }
+    }
+
+    func groupSelection() {
+        guard !isEditingLocked,var current = diagram else { return }
+        let selected: Set<String>
+        switch selection { case .node(let id): selected = [id]; case .nodes(let ids): selected = ids; default: return }
+        let ids = current.expandedGroupMembers(selected)
+        let members = current.nodes.filter { ids.contains($0.id) }
+        guard members.count>1 else { return }
+        guard Set(members.map { $0.containerId ?? "" }).count == 1 else {
+            onAlert?("Объедините компоненты в одном контейнере или извлеките их из контейнеров перед группировкой."); return
+        }
+        var groups = current.effectiveGroups.filter { Set($0.nodeIds).isDisjoint(with: ids) }
+        groups.append(ObjectGroup(id: makeID("group"),label: "Группа",nodeIds: members.map(\.id)))
+        current.groups = groups; diagram = current; selection = .nodes(ids); changed()
+    }
+
+    func ungroupSelection() {
+        guard !isEditingLocked,var current = diagram else { return }
+        let ids: Set<String>
+        switch selection { case .node(let id): ids = [id]; case .nodes(let nodes): ids = nodes; default: return }
+        current.groups = current.effectiveGroups.filter { Set($0.nodeIds).isDisjoint(with: ids) }
+        guard current != diagram else { return }; diagram = current; changed()
+    }
+
     func resetSelectedEdgeRoutes() {
         guard !isEditingLocked, var current = diagram else { return }
         for index in current.edges.indices where selection.edgeIDs.contains(current.edges[index].id) { current.edges[index].waypoints = [] }
@@ -1038,6 +1107,7 @@ final class AppModel: ObservableObject {
         case .container(let id):
             let parent = current.containers.first(where: { $0.id == id })?.parentId
             current.containers.removeAll { $0.id == id }
+            current.edges.removeAll { $0.source == id || $0.target == id }
             for index in current.containers.indices where current.containers[index].parentId == id {
                 current.containers[index].parentId = parent
             }
@@ -1385,6 +1455,29 @@ final class AppModel: ObservableObject {
         return preview
     }
 
+    func exportSVG(project: DiagramProject,includeLegend: Bool = true,showGroups: Bool = false) async throws -> Data {
+        try await renderExport(project: project,format: "svg",queries: [URLQueryItem(name: "include_legend",value: String(includeLegend)),URLQueryItem(name: "show_groups",value: String(showGroups))])
+    }
+
+    func exportPNG(project: DiagramProject,width: Int,height: Int,background: String,includeLegend: Bool,showGroups: Bool) async throws -> Data {
+        try await renderExport(project: project,format: "png",queries: [URLQueryItem(name: "width",value: String(width)),URLQueryItem(name: "height",value: String(height)),URLQueryItem(name: "background",value: background),URLQueryItem(name: "include_legend",value: String(includeLegend)),URLQueryItem(name: "show_groups",value: String(showGroups))])
+    }
+
+    private func renderExport(project: DiagramProject,format: String,queries: [URLQueryItem]) async throws -> Data {
+        guard let base = backend.baseURL,var components = URLComponents(url: base.appending(path: "api/export.\(format)"),resolvingAgainstBaseURL: false) else { throw ClientError.backendUnavailable }
+        components.queryItems = queries
+        guard let url = components.url else { throw ClientError.invalidResponse }
+        let originalWorkspace = workspace
+        var request = URLRequest(url: url,cachePolicy: .reloadIgnoringLocalCacheData); request.httpMethod = "POST"
+        request.httpBody = try encode(project); request.setValue("application/json",forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 60; applyWorkspaceHeaders(&request)
+        let (data,response) = try await session.data(for: request)
+        try check(response: response,data: data)
+        guard workspace == originalWorkspace else { throw ClientError.workspaceChanged }
+        guard (response as? HTTPURLResponse)?.mimeType == (format == "svg" ? "image/svg+xml" : "image/png") else { throw ClientError.invalidResponse }
+        return data
+    }
+
     func exportPNG(scale: Double, background: String) async throws -> Data {
         guard let baseURL = backend.baseURL,
               var components = URLComponents(url: baseURL.appending(path: "api/export.png"), resolvingAgainstBaseURL: false)
@@ -1635,6 +1728,14 @@ final class AppModel: ObservableObject {
     }
 
     private func changed() {
+        if var current = diagram {
+            let existing = Set(current.nodes.map(\.id))
+            current.groups = current.effectiveGroups.compactMap { group in
+                var copy = group; copy.nodeIds = copy.nodeIds.filter(existing.contains)
+                return copy.nodeIds.count>1 ? copy : nil
+            }
+            diagram = current
+        }
         if !jsonDraftIsDirty { jsonDraft = prettyJSON(diagram) }
         status = "Есть изменения"
         onModelChange?()
@@ -1935,7 +2036,10 @@ final class AppModel: ObservableObject {
     }
 
     private func makeID(_ prefix: String) -> String {
-        "\(prefix)_\(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(8))"
+        let used = Set((diagram?.nodes.map(\.id) ?? [])+(diagram?.containers.map(\.id) ?? [])+(diagram?.edges.map(\.id) ?? [])+(diagram?.effectiveGroups.map(\.id) ?? []))
+        var id: String
+        repeat { id = "\(prefix)_\(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(8))" } while used.contains(id)
+        return id
     }
 }
 

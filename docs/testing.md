@@ -10,6 +10,7 @@ uv run pytest -q
 ./scripts/test_native_ui.sh
 ./scripts/test_native_interaction.sh
 ./scripts/test_native_projects.sh
+./scripts/test_native_png.sh
 ./scripts/test_arrows.sh
 ./scripts/build_macos.sh local
 ./dist/GraphiSchema.app/Contents/MacOS/GraphiSchema --startup-smoke-test
@@ -51,6 +52,8 @@ codesign --verify --deep --strict dist/GraphiSchema.app
 | Клавиатура | Delete/Fn+Delete, Cmd+C/V/D, Cmd-drag, Shift-ось, Cmd+Z/Y; редакторы кода/чата сохраняют стандартные действия с текстом | нативные UI/interaction-проверки |
 | DOT | Проверка использует текущее состояние, ничего не откатывает; подтверждение справа; независимые изменения объединяются; конфликты и неизвестные атрибуты не теряются | `test_dot_editor.py`, `test_dot_workflow.py`, `NativeDOTRegressionTests` |
 | Экспорт | SVG/PNG детерминированы; RGBA/иконки/внутренние линии; PDF всегда светлый, легенда и вписывание; фиксированные подписи контейнеров не накладываются; исходный проект не изменён | `test_rendering.py`, `test_layout.py`, нативный UI-прогон |
+| Окно PNG | Изменение пикселей при переключении легенды/групп; ошибки чисел не замораживают предпросмотр; сохранение, отмена диалога, повторное открытие, сбой backend и восстановление; фактические размеры, DPI, альфа; вывод до 16384 px, подгонка больших и вытянутых схем, адаптивное 2×/1×; предпросмотр не превышает 1200 × 900 px; история/проект не меняются | `test_png_export.py`, `test_native_png.sh` |
+| Скорость экспорта | Все комбинации легенды/групп SVG и PNG используют один расчёт геометрии; одновременные запросы объединяются; изменение JSON или ID проекта требует нового расчёта | `test_png_export.py` |
 | Запуск и поставка | Debug/release компилируются; пакет содержит Python/ресурсы; compatible health, реальный Graphviz layout и окно; подпись проверяется | build script, `--startup-smoke-test`, `codesign` |
 
 ## Диагностические материалы

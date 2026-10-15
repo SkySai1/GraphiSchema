@@ -196,12 +196,45 @@ class _Parser:
         return DOTEditError(f"{message} (строка {line}, столбец {column}).")
 
 
+def _resolve_container_anchors(nodes, containers, edges):
+    anchors = {}
+    allowed = {"label","shape","style","width","height","pos","gs_container","fontname","fontsize","margin"}
+    for key, statement in list(nodes.items()):
+        if "gs_container" not in statement.attrs: continue
+        attrs = statement.attrs
+        _check_attrs(attrs,allowed,"служебного узла контейнера")
+        target = attrs["gs_container"]
+        if target not in containers or statement.parent_id != target or attrs.get("style") != "invis" or attrs.get("shape") != "point" or attrs.get("label") != "":
+            raise DOTEditError("Некорректный служебный узел контейнера.")
+        if _number(attrs.get("width","0.01"),"width служебной точки") != .01 or _number(attrs.get("height","0.01"),"height служебной точки") != .01:
+            raise DOTEditError("Размер служебной точки контейнера должен оставаться 0.01. Измените gs_width/gs_height контейнера.")
+        anchors[key] = target
+        del nodes[key]
+    for edge in edges:
+        edge.source, edge.target = anchors.get(edge.source,edge.source), anchors.get(edge.target,edge.target)
+        for attr, endpoint in (("ltail",edge.source),("lhead",edge.target)):
+            value = edge.attrs.pop(attr,None)
+            if value is not None and (endpoint not in containers or value != "cluster_"+endpoint):
+                raise DOTEditError("lhead/ltail должны ссылаться на контейнер соответствующего конца связи.")
+
+
 def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dict[str, list[str]]]:
     """Convert supported DOT into a new canonical project without mutating input."""
     parser = _Parser(source)
     node_statements, container_statements, edge_statements = parser.parse()
+    from .dot import to_dot
+    # Anchor coordinates are generated geometry. Container gs_x/gs_y and node
+    # positions are editable; changing a derived anchor must not be silently lost.
+    if any("gs_container" in item.attrs and "pos" in item.attrs for item in node_statements.values()):
+        original_statements, _, _ = _Parser(to_dot(project)).parse()
+        for key,item in node_statements.items():
+            if "gs_container" not in item.attrs or "pos" not in item.attrs: continue
+            original = original_statements.get(key)
+            if original is None or item.attrs["pos"] != original.attrs.get("pos"):
+                raise DOTEditError("Координаты служебной точки контейнера вычисляются приложением. Измените gs_x/gs_y контейнера или pos его компонентов.")
+    _resolve_container_anchors(node_statements,container_statements,edge_statements)
     graph_attrs = parser.graph_attrs
-    _check_attrs(graph_attrs, {"rankdir", "splines", "bgcolor", "nodesep", "ranksep", "compound", "pad", "notranslate", "gs_edge_types", "gs_legend_entries", "gs_legend_mode", "gs_label_new_elements", "gs_default_edge_label_background_transparent"}, "графа")
+    _check_attrs(graph_attrs, {"rankdir", "splines", "bgcolor", "nodesep", "ranksep", "compound", "pad", "notranslate", "gs_edge_types", "gs_groups", "gs_legend_entries", "gs_legend_mode", "gs_label_new_elements", "gs_default_edge_label_background_transparent"}, "графа")
     default_label_background = graph_attrs.get("gs_default_edge_label_background_transparent", "true" if project.presentation.default_edge_label_background_transparent else "false")
     if default_label_background not in {"true", "false"}:
         raise DOTEditError("gs_default_edge_label_background_transparent должен быть true или false.")
@@ -215,7 +248,8 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
     from .dot import to_dot
 
     try:
-        generated_nodes, generated_containers, _ = _Parser(to_dot(project)).parse()
+        generated_nodes, generated_containers, generated_edges = _Parser(to_dot(project)).parse()
+        _resolve_container_anchors(generated_nodes,generated_containers,generated_edges)
     except DOTEditError:
         generated_nodes, generated_containers = {}, {}
     containers = []
@@ -254,7 +288,7 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
     all_node_statements = dict(node_statements)
     for edge in edge_statements:
         for node_id in (edge.source, edge.target):
-            if node_id not in all_node_statements:
+            if node_id not in all_node_statements and node_id not in container_statements:
                 all_node_statements[node_id] = NodeStatement(None, {})
     for node_id, statement in all_node_statements.items():
         attrs = statement.attrs
@@ -348,6 +382,11 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
     candidate_data["presentation"]["background"] = graph_attrs.get("bgcolor", project.presentation.background)
     candidate_data["presentation"]["default_edge_label_background_transparent"] = default_label_background == "true"
     try:
+        if "gs_groups" in graph_attrs:
+            from .models import ObjectGroup
+            parsed_groups = json.loads(graph_attrs["gs_groups"])
+            if not isinstance(parsed_groups,list): raise ValueError("Expected group array")
+            candidate_data["groups"] = [ObjectGroup.model_validate(item).model_dump() for item in parsed_groups]
         if "gs_edge_types" in graph_attrs:
             from .models import EdgeTypeDefinition
             parsed_types = json.loads(graph_attrs["gs_edge_types"])
@@ -371,6 +410,8 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
     node_ids = {node["id"] for node in nodes}
     type_ids = {item["id"] for item in candidate_data["edge_types"]}
     deleted_nodes = {item.id for item in project.nodes}-node_ids
+    candidate_data["groups"] = [{**item,"node_ids":[key for key in item["node_ids"] if key not in deleted_nodes]} for item in candidate_data["groups"]]
+    candidate_data["groups"] = [item for item in candidate_data["groups"] if len(item["node_ids"])>1]
     deleted_types = {item.id for item in project.edge_types}-type_ids
     for edge in edges:
         if edge["type_id"] in deleted_types: edge["type_id"] = None
@@ -378,8 +419,10 @@ def apply_dot(project: DiagramProject, source: str) -> tuple[DiagramProject, dic
         if item.get("node_id") not in deleted_nodes and item.get("edge_type_id") not in deleted_types]
     if explicit_positions:
         candidate_data["diagram"]["layout_mode"] = "manual"
-    if graph_attrs.get("notranslate", "false").lower() == "true" and not explicit_positions:
-        raise DOTEditError("notranslate=true требует координаты pos у всех узлов")
+    if graph_attrs.get("notranslate", "false").lower() == "true":
+        if nodes and not explicit_positions:
+            raise DOTEditError("notranslate=true требует координаты pos у всех узлов")
+        candidate_data["diagram"]["layout_mode"] = "manual"
 
     try:
         candidate = DiagramProject.model_validate(candidate_data)
@@ -617,6 +660,8 @@ def describe_dot_changes(before: DiagramProject, after: DiagramProject) -> dict[
     settings_changed = []
     if before.diagram != after.diagram:
         settings_changed.append("Настройки компоновки")
+    if before.groups != after.groups:
+        settings_changed.append("Группы объектов")
     if before.edge_types != after.edge_types:
         settings_changed.append("Типы связей")
     if before.presentation != after.presentation:

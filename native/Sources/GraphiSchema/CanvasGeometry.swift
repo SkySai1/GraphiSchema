@@ -172,9 +172,23 @@ enum CanvasGeometry {
 
     static func attachment(_ node: DiagramNode, at position: LayoutNode, toward: NSPoint, port: String) -> NSPoint {
         if port.hasPrefix("vertex:"), let index = Int(port.dropFirst(7)), vertices(node).indices.contains(index) {
+            if node.kind == "__container_endpoint" {
+                let r = min(11.0/72,position.width/2,position.height/2)
+                let sign = [NSPoint(x: -1,y: -1),.init(x: 1,y: -1),.init(x: 1,y: 1),.init(x: -1,y: 1)][index]
+                return .init(x: position.x+sign.x*(position.width/2-r+r/sqrt(2)),y: position.y+sign.y*(position.height/2-r+r/sqrt(2)))
+            }
             return world(vertices(node)[index], node: node, in: position)
         }
-        let contours = paths(node).map { $0.map { world($0, node: node, in: position) } }
+        let contours: [[NSPoint]]
+        if node.kind == "__container_endpoint" {
+            let r = min(11.0/72,position.width/2,position.height/2)
+            let left = position.x-position.width/2,bottom = position.y-position.height/2,right = position.x+position.width/2,top = position.y+position.height/2
+            var points: [NSPoint] = []
+            for (cx,cy,angle) in [(left+r,bottom+r,Double.pi),(right-r,bottom+r,Double.pi*1.5),(right-r,top-r,0),(left+r,top-r,Double.pi/2)] {
+                for index in 0...8 { let t = angle+Double(index) * .pi/16; points.append(.init(x: cx+r*cos(t),y: cy+r*sin(t))) }
+            }
+            contours = [points+[points[0]]]
+        } else { contours = paths(node).map { $0.map { world($0,node: node,in: position) } } }
         let directions: [String: NSPoint] = ["n": .init(x: 0, y: 1), "ne": .init(x: 1, y: 1), "e": .init(x: 1, y: 0), "se": .init(x: 1, y: -1), "s": .init(x: 0, y: -1), "sw": .init(x: -1, y: -1), "w": .init(x: -1, y: 0), "nw": .init(x: -1, y: 1)]
         var aim = toward
         if let direction = directions[port] {

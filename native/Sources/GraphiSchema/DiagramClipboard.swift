@@ -9,6 +9,7 @@ struct DiagramClipboard: Codable {
     var containers: [DiagramContainer]
     var nodes: [DiagramNode]
     var edges: [DiagramEdge]
+    var groups: [ObjectGroup]? = nil
     var edgeTypes: [EdgeTypeDefinition]? = nil
 
     static func capture(_ selection: DiagramSelection, from project: DiagramProject,
@@ -34,6 +35,7 @@ struct DiagramClipboard: Codable {
             }
             nodeIds = Set(project.nodes.filter { $0.containerId.map(containerIds.contains) == true }.map(\.id))
         }
+        nodeIds = project.expandedGroupMembers(nodeIds)
         let positions = Dictionary(uniqueKeysWithValues: (layout?.nodes ?? []).map { ($0.id, $0) })
         let nodes = project.nodes.filter { nodeIds.contains($0.id) }.map { node in
             var result = node
@@ -51,11 +53,11 @@ struct DiagramClipboard: Codable {
             return result
         }
         let edges = project.edges.filter {
-            edgeIds.contains($0.id) || (nodeIds.contains($0.source) && nodeIds.contains($0.target))
+            edgeIds.contains($0.id) || ((nodeIds.contains($0.source) || containerIds.contains($0.source)) && (nodeIds.contains($0.target) || containerIds.contains($0.target)))
         }
         guard !nodes.isEmpty || !containers.isEmpty || !edges.isEmpty else { return nil }
         return DiagramClipboard(projectId: project.project.id, rootContainerIds: roots,
-                                containers: containers, nodes: nodes, edges: edges,
+                                containers: containers, nodes: nodes, edges: edges, groups: project.effectiveGroups.filter { Set($0.nodeIds).isSubset(of: nodeIds) },
                                 edgeTypes: project.effectiveEdgeTypes.filter { type in edges.contains { $0.typeId == type.id } })
     }
 
@@ -67,7 +69,7 @@ struct DiagramClipboard: Codable {
               Set(edges.map(\.id)).count == edges.count,
               !nodes.isEmpty || !containers.isEmpty || !edges.isEmpty else { return nil }
         var result = project
-        var usedIds = Set(project.nodes.map(\.id) + project.containers.map(\.id) + project.edges.map(\.id))
+        var usedIds = Set(project.nodes.map(\.id) + project.containers.map(\.id) + project.edges.map(\.id) + project.effectiveGroups.map(\.id))
         func newId(_ prefix: String) -> String {
             var value: String
             repeat { value = prefix + "_" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased() }
@@ -77,7 +79,7 @@ struct DiagramClipboard: Codable {
         let nodeIds = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, newId("node")) })
         let containerIds = Dictionary(uniqueKeysWithValues: containers.map { ($0.id, newId("zone")) })
         let validContainers = Set(project.containers.map(\.id))
-        let validNodes = Set(project.nodes.map(\.id))
+        let validNodes = Set(project.nodes.map(\.id)+project.containers.map(\.id))
         let sameProject = projectId == project.project.id
         let positions = Dictionary(uniqueKeysWithValues: (layout?.nodes ?? []).map { ($0.id, $0) })
         for index in result.nodes.indices {
@@ -127,14 +129,14 @@ struct DiagramClipboard: Codable {
         result.edgeTypes = types
         var copiedEdges: [DiagramEdge] = []
         for edge in edges {
-            guard let source = nodeIds[edge.source] ?? (sameProject && validNodes.contains(edge.source) ? edge.source : nil),
-                  let target = nodeIds[edge.target] ?? (sameProject && validNodes.contains(edge.target) ? edge.target : nil) else { continue }
+            guard let source = nodeIds[edge.source] ?? containerIds[edge.source] ?? (sameProject && validNodes.contains(edge.source) ? edge.source : nil),
+                  let target = nodeIds[edge.target] ?? containerIds[edge.target] ?? (sameProject && validNodes.contains(edge.target) ? edge.target : nil) else { continue }
             var copy = edge
             copy.id = newId("edge")
             copy.typeId = edge.typeId.flatMap { typeIDs[$0] ?? (sameProject && types.contains(where: { $0.id == edge.typeId }) ? $0 : nil) }
             copy.source = source
             copy.target = target
-            if nodeIds[edge.source] != nil && nodeIds[edge.target] != nil {
+            if (nodeIds[edge.source] != nil || containerIds[edge.source] != nil) && (nodeIds[edge.target] != nil || containerIds[edge.target] != nil) {
                 copy.waypoints = edge.waypoints.map {
                     RoutePoint(x: translated($0.x, by: delta.x), y: translated($0.y, by: delta.y))
                 }
@@ -146,6 +148,11 @@ struct DiagramClipboard: Codable {
         result.containers += copiedContainers
         result.nodes += copiedNodes
         result.edges += copiedEdges
+        result.groups = result.effectiveGroups + (groups ?? []).compactMap { group in
+            let members = group.nodeIds.compactMap { nodeIds[$0] }
+            guard members.count == group.nodeIds.count else { return nil }
+            return ObjectGroup(id: newId("group"),label: group.label,nodeIds: members)
+        }
         let selection: DiagramSelection
         if let root = rootContainerIds.first.flatMap({ containerIds[$0] }) { selection = .container(root) }
         else if copiedNodes.count == 1 { selection = .node(copiedNodes[0].id) }

@@ -104,7 +104,7 @@ async def edit_operations(request: OllamaTaskRequest, current: DiagramProject) -
     system = _system_prompt(
         request.settings,
         "Верни только объект {\"operations\":[...]}. Допустимые op: add_node, update_node, delete_node, "
-        "add_container, update_container, delete_container, add_edge, update_edge, delete_edge, add_edge_type, update_edge_type, delete_edge_type, "
+        "add_container, update_container, delete_container, add_edge, update_edge, delete_edge, add_edge_type, update_edge_type, delete_edge_type, add_group, update_group, delete_group, "
         "update_diagram, update_presentation. Для update передавай changes только с полями канонической модели. "
         "Не возвращай полный проект."
     )
@@ -167,6 +167,7 @@ def apply_operations(project: DiagramProject, operations: list[dict[str, Any]]) 
         "container": ("containers", {"label", "parent_id", "style", "padding"}),
         "edge": ("edges", {"source", "target", "label", "direction", "style", "source_port", "target_port", "routing", "waypoints", "z_index", "type_id"}),
         "edge_type": ("edge_types", {"name", "description", "style", "direction", "routing"}),
+        "group": ("groups", {"label", "node_ids"}),
     }
     for index, operation in enumerate(operations):
         if not isinstance(operation, dict) or not isinstance(operation.get("op"), str):
@@ -226,6 +227,9 @@ def apply_operations(project: DiagramProject, operations: list[dict[str, Any]]) 
     except ValidationError as exc:
         raise OllamaError("Операции не применены: " + _validation_message(exc)) from exc
     node_ids = {item["id"] for item in data["nodes"]}
+    removed_nodes = {item.id for item in project.nodes}-node_ids
+    data["groups"] = [{**group,"node_ids":[key for key in group["node_ids"] if key not in removed_nodes]} for group in data["groups"]]
+    data["groups"] = [group for group in data["groups"] if len(group["node_ids"])>1]
     type_ids = {item["id"] for item in data["edge_types"]}
     deleted_nodes = {item.id for item in project.nodes}-node_ids
     deleted_types = {item.id for item in project.edge_types}-type_ids

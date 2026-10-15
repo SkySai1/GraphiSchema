@@ -51,7 +51,7 @@ final class PDFExportWindowController: NSWindowController, NSWindowDelegate, Pro
             do {
                 let snapshot = try await model.pdfExportSnapshot(relayout: relayout)
                 guard !Task.isCancelled else { return }
-                self.snapshot = snapshot; loadingSnapshot = false
+                self.snapshot = snapshot; settings.branchName = model.branchName; loadingSnapshot = false
                 window?.title = "Экспорт PDF — \(snapshot.diagram.project.title)"
                 scheduleRender()
             } catch {
@@ -79,7 +79,9 @@ final class PDFExportWindowController: NSWindowController, NSWindowDelegate, Pro
             self.addNumber("Поля, мм",key: \.marginMM,range: 3...40,help: "Свободная полоса по краям бумаги. Не обрезает фигуры: схема заново вписывается в оставшуюся область.")
             self.addNumber("Заполнение области, %",key: \.occupancy,range: 0.4...1,multiplier: 100,help: "Общий размер диаграммы в доступной области. Все фигуры, подписи, линии и наконечники масштабируются пропорционально. 100% занимает всю область без обрезки.")
             self.addCheckbox("Заголовок проекта",key: \.includeTitle,help: "Резервирует отдельную строку над диаграммой; заголовок не накладывается на схему.")
-            self.addCheckbox("Номера страниц",key: \.pageNumbers,help: "Добавляет название приложения и номер страницы в отдельную нижнюю полосу.")
+            self.addCheckbox("Номера страниц",key: \.pageNumbers,help: "Показывает номер страницы независимо от водяного знака приложения.")
+            self.addCheckbox("Имя ветки",key: \.includeBranch,help: "Добавляет имя текущей ветки под заголовком проекта, в отдельной строке.")
+            self.addCheckbox("Watermark GraphiSchema",key: \.watermark,help: "Показывает название приложения в нижней полосе. Отключается независимо от нумерации страниц.")
             self.addSection("УСЛОВНЫЕ ОБОЗНАЧЕНИЯ")
             self.addCheckbox("Добавить условные обозначения",id: "pdf-include-legend",key: \.includeLegend,
                              help: "Формирует легенду из фигур и стилей связей экспортной копии. Длинная легенда продолжается на следующих страницах без потери строк.")
@@ -87,6 +89,7 @@ final class PDFExportWindowController: NSWindowController, NSWindowDelegate, Pro
                              help: "Освобождает всю первую страницу под схему. При выключении для легенды резервируется колонка справа; её продолжение печатается отдельно.")
         }
         addTab("Стиль",to: tabs) {
+            self.addCheckbox("Показывать рамки групп",key: \.showGroups,help: "Рисует тонкую пунктирную рамку вокруг каждой постоянной группы. Группы не превращаются в контейнеры.")
             self.addSection("ТОЛЩИНА И НАКОНЕЧНИКИ")
             self.addNumber("Границы фигур, %",key: \.nodeStroke,range: 0.25...3,multiplier: 100,help: "Умножает толщину внешних и внутренних линий фигур только в PDF. Интервалы штрихов и точек изменяются вместе с толщиной.")
             self.addNumber("Границы контейнеров, %",key: \.containerStroke,range: 0.25...3,multiplier: 100,help: "Множитель толщины рамок контейнеров в экспортной копии.")
@@ -102,6 +105,7 @@ final class PDFExportWindowController: NSWindowController, NSWindowDelegate, Pro
         }
         addTab("Размещение",to: tabs) {
             self.addSection("ЧИТАЕМОСТЬ")
+            self.addCheckbox("Сохранять группы",key: \.preserveGroups,help: "При увеличении интервалов и устранении наложений перемещает группу целиком, сохраняя взаимное положение её объектов. При выключении объекты экспортной копии можно раздвигать независимо.")
             self.addCheckbox("Раздвигать пересекающиеся объекты",key: \.avoidOverlaps,help: "Устраняет пересечения соседних фигур и групп в экспортной копии. Контейнеры перемещаются вместе с содержимым; вложенность сохраняется. Неразрешённые пересечения отмечаются под предпросмотром.")
             self.addNumber("Интервалы между центрами, %",key: \.spacing,range: 1...2.5,multiplier: 100,help: "Раздвигает центры объектов, сохраняя размеры фигур. Рамки контейнеров и маршруты пересчитываются в экспортной копии.")
             self.addNumber("Минимальный промежуток, pt",key: \.gap,range: 0...72,help: "Желаемый промежуток между соседними фигурами и контейнерами до общего масштабирования страницы. Используется при включённом раздвижении.")
@@ -120,7 +124,7 @@ final class PDFExportWindowController: NSWindowController, NSWindowDelegate, Pro
         preset.addItems(withTitles: ["Сбалансированный","Крупнее и свободнее","Компактный","Без коррекции размещения"])
         let presetAction = ControlAction { [weak self] sender in
             guard let self, let control = sender as? NSPopUpButton else { return }
-            settings = DiagramPDFSettings()
+            settings = DiagramPDFSettings(); settings.branchName = model.branchName
             switch control.indexOfSelectedItem {
             case 1: settings.format = "a3"; settings.nodeText = 1.15; settings.edgeText = 1.15; settings.gap = 18; settings.legendOnSeparatePage = true
             case 2: settings.nodeText = 0.85; settings.edgeText = 0.85; settings.gap = 6; settings.nodeStroke = 0.8; settings.edgeStroke = 0.8

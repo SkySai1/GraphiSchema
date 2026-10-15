@@ -98,7 +98,7 @@ enum DiagramPDFRenderer {
     static func makeCanvas(_ scene: DiagramPDFScene) -> DiagramCanvasView {
         let canvas = DiagramCanvasView(frame: .zero)
         canvas.isReadOnly = true; canvas.isGridVisible = false; canvas.exportBackground = "#FFFFFF"
-        canvas.appearance = NSAppearance(named: .aqua); canvas.pdfStyle = scene.style
+        canvas.appearance = NSAppearance(named: .aqua); canvas.pdfStyle = scene.style; canvas.showsGroupFrames = scene.style.showGroups
         canvas.update(diagram: scene.project, layout: scene.layout, selection: .project)
         return canvas
     }
@@ -184,6 +184,9 @@ final class DiagramPDFExportView: NSView {
             text(scene == nil ? "\(title) — условные обозначения" : title,
                  in: NSRect(x: settings.margin,y: bounds.height-settings.margin-25,width: contentRect.width,height: 25),size: 17,weight: .semibold)
         }
+        if settings.includeBranch {
+            text("Ветка: \(settings.branchName)",in: NSRect(x: settings.margin,y: bounds.height-settings.margin-(settings.includeTitle ? 43 : 18),width: contentRect.width,height: 15),size: 10,color: "#64748B")
+        }
         if let scene, let context = NSGraphicsContext.current?.cgContext {
             let box = scene.bounds(for: .mediaBox), scale = diagramScale
             let area = diagramRect
@@ -200,8 +203,10 @@ final class DiagramPDFExportView: NSView {
                               width: width,height: contentRect.height)
             drawLegend(in: rect)
         }
-        if settings.pageNumbers {
+        if settings.watermark {
             text("GraphiSchema",in: NSRect(x: settings.margin,y: settings.margin,width: 120,height: 12),size: 8,color: "#64748B")
+        }
+        if settings.pageNumbers {
             text("\(pageIndex) / \(pageCount)",in: NSRect(x: bounds.width-settings.margin-70,y: settings.margin,width: 70,height: 12),size: 8,color: "#64748B",alignment: .right)
         }
     }

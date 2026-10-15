@@ -10,6 +10,11 @@ struct DiagramPDFSettings: Equatable {
     var marginMM = 10.0
     var occupancy = 0.96
     var includeTitle = true
+    var includeBranch = false
+    var branchName = ""
+    var watermark = true
+    var preserveGroups = true
+    var showGroups = false
     var includeLegend = true
     var legendOnSeparatePage = false
     var pageNumbers = true
@@ -29,8 +34,8 @@ struct DiagramPDFSettings: Equatable {
     var labelBackground = "opaque"
     var contrastText = true
 
-    var headerHeight: CGFloat { includeTitle ? 38 : 0 }
-    var footerHeight: CGFloat { pageNumbers ? 18 : 0 }
+    var headerHeight: CGFloat { (includeTitle ? 38 : 0)+(includeBranch ? 18 : 0) }
+    var footerHeight: CGFloat { pageNumbers || watermark ? 18 : 0 }
     var margin: CGFloat { CGFloat(marginMM)*72/25.4 }
     var containerHeaderHeight: CGFloat { max(28, CGFloat(containerFontSize)*1.3+12) }
 
@@ -61,5 +66,6 @@ struct DiagramPDFCanvasStyle {
     var containerFrames: [String: NSRect] = [:]
     var edgeLabels: [String: NSPoint] = [:]
     var labelLeaders: [String: NSPoint] = [:]
+    var showGroups = false
     var containerHeaderHeight: CGFloat { max(28, containerFontSize*1.3+12) }
 }

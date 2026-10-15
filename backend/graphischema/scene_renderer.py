@@ -18,7 +18,7 @@ def _node_border_dash(style):
     return f' stroke-dasharray="{lengths}"'
 
 
-def render_scene(project, layout, background=None):
+def render_scene(project, layout, background=None, *, include_legend=None, show_groups=False):
     from .colors import resolved_project
     project = resolved_project(project)
     pad = 28
@@ -38,7 +38,9 @@ def render_scene(project, layout, background=None):
         dark = .2126*red+.7152*green+.0722*blue < .5
     text = "#FFFFFF" if dark else "#172238"
     legend = []
-    if project.presentation.legend_mode == "manual" and project.presentation.legend_entries:
+    if include_legend and project.presentation.legend_mode == "auto":
+        project = _automatic_legend(project)
+    if include_legend is not False and project.presentation.legend_mode == "manual" and project.presentation.legend_entries:
         legend, legend_height = _manual_legend(project, width+14, pad)
         width += 280+pad
         height = max(height,legend_height+pad*2)
@@ -65,6 +67,15 @@ def render_scene(project, layout, background=None):
         out.append(f'<clipPath id="{clip_id}"><rect x="{x+LABEL_INSET_X:.4f}" y="{y+LABEL_INSET_TOP:.4f}" width="{label_width:.4f}" height="{LABEL_HEIGHT}"/></clipPath>')
         caption_text = elide_text(c.label, label_width, FONT_SIZE*1.08)
         out.append(f'<text data-container-label="{c.id}" clip-path="url(#{clip_id})" x="{x+LABEL_INSET_X:.4f}" y="{y+LABEL_INSET_TOP+FONT_SIZE:.4f}" fill="{caption}" fill-opacity="{text_alpha:.4f}" font-family="Arial,sans-serif" font-size="{FONT_SIZE}" font-weight="700"><title>{html.escape(c.label)}</title>{html.escape(caption_text)}</text>')
+    if show_groups:
+        from .geometry import node_bounds
+        for group in project.groups:
+            boxes = [node_bounds(node,positions[node.id]) for node in project.nodes if node.id in group.node_ids]
+            if not boxes: continue
+            left,bottom = min(box[0] for box in boxes)-.1,min(box[1] for box in boxes)-.1
+            right,top = max(box[2] for box in boxes)+.1,max(box[3] for box in boxes)+.1
+            gx,gy = point(left,top)
+            out.append(f'<rect data-group="{group.id}" x="{gx}" y="{gy}" width="{(right-left)*72}" height="{(top-bottom)*72}" rx="5" fill="none" stroke="{text}" stroke-opacity="0.45" stroke-width="0.75" stroke-dasharray="4 3"><title>{html.escape(group.label)}</title></rect>')
     edges = {e.id: e for e in project.edges}
     arrow_elements = []
     lower_paths = []
@@ -233,3 +244,30 @@ def _manual_legend(project, x, y, width=280):
         cursor += height
     output.append(f'<path d="M {x} {cursor} H {x+width}" stroke="{divider}" stroke-width="0.5"/></g>')
     return output, cursor-y
+
+
+def _automatic_legend(project):
+    from .models import EdgeTypeDefinition, LegendEntry
+    from collections import defaultdict
+    copy = project.model_copy(deep=True)
+    rows, nodes, edges = [],defaultdict(list),defaultdict(list)
+    for node in copy.nodes:
+        nodes[(node.kind,node.icon,node.shape,node.style.fill,node.style.stroke)].append(node)
+    for edge in copy.edges:
+        edges[(edge.type_id,edge.label,edge.direction,edge.style.model_dump_json())].append(edge)
+    for index,items in enumerate(nodes.values()):
+        node = items[0]
+        rows.append(LegendEntry(id=f"legend_node_{index}",kind="node",node_id=node.id,description=f"{node.kind or node.label or node.shape} · {len(items)} шт."))
+    definitions = {item.id:item for item in copy.edge_types}
+    for index,items in enumerate(edges.values()):
+        edge = items[0]
+        definition = definitions.get(edge.type_id)
+        if definition is None:
+            key = f"legend_edge_{index}"
+            while key in definitions: key += "x"
+            definition = EdgeTypeDefinition(id=key,name=edge.label or "Связь",description=edge.label or "Связь",style=edge.style,direction=edge.direction,routing=edge.routing)
+            copy.edge_types.append(definition); definitions[key] = definition
+        rows.append(LegendEntry(id=f"legend_link_{index}",kind="edge_type",edge_type_id=definition.id,description=f"{definition.description or definition.name} · {len(items)} шт."))
+    copy.presentation.legend_mode = "manual"
+    copy.presentation.legend_entries = rows
+    return copy

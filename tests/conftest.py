@@ -4,6 +4,8 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def isolated_application_storage(tmp_path, monkeypatch):
+    from graphischema.rendering import _render_geometry_slot
+    _render_geometry_slot.cache_clear()
     from graphischema import api
     from graphischema.storage import ProjectStore, REQUEST_SCOPE
     from graphischema.application.controller import ApplicationController
@@ -18,3 +20,4 @@ def isolated_application_storage(tmp_path, monkeypatch):
         yield store
     finally:
         REQUEST_SCOPE.reset(token)
+        _render_geometry_slot.cache_clear()

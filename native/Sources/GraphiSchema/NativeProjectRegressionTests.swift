@@ -21,7 +21,7 @@ enum NativeProjectRegressionTests {
                 let starter = try decoder.decode(DiagramProject.self, from: Data(contentsOf: root.appendingPathComponent("examples/starter.json")))
                 stage("smooth routes"); try checkSmoothRoutes(starter)
                 stage("54 rasterized fills"); try checkEveryFigureFill(starter)
-                stage("canvas selection and long press"); try await checkCanvasSelectionAndLongPress(starter)
+                stage("canvas selection and double click"); try await checkCanvasSelectionAndDoubleClick(starter)
                 stage("startup and transient canvases"); try await checkStartupAndTransientProjects(backend)
                 stage("real projects and windows"); try await checkProjectsAndWindows(backend)
                 stage("project trash and permanent removal"); try await checkProjectTrash(backend)
@@ -143,10 +143,10 @@ enum NativeProjectRegressionTests {
             else {try expect(fills==0,"Wire-only icons must not acquire a false body: \(icon).")}
         }
     }
-    private static func event(_ type: NSEvent.EventType, _ point: NSPoint, _ canvas: DiagramCanvasView, _ window: NSWindow, flags: NSEvent.ModifierFlags=[]) throws -> NSEvent {
-        guard let event=NSEvent.mouseEvent(with:type,location:canvas.convert(point,to:nil),modifierFlags:flags,timestamp:ProcessInfo.processInfo.systemUptime,windowNumber:window.windowNumber,context:nil,eventNumber:1,clickCount:1,pressure:1) else {throw Failure(message:"Mouse event unavailable")};return event
+    private static func event(_ type: NSEvent.EventType, _ point: NSPoint, _ canvas: DiagramCanvasView, _ window: NSWindow, flags: NSEvent.ModifierFlags=[], clicks: Int=1) throws -> NSEvent {
+        guard let event=NSEvent.mouseEvent(with:type,location:canvas.convert(point,to:nil),modifierFlags:flags,timestamp:ProcessInfo.processInfo.systemUptime,windowNumber:window.windowNumber,context:nil,eventNumber:1,clickCount:clicks,pressure:1) else {throw Failure(message:"Mouse event unavailable")};return event
     }
-    private static func checkCanvasSelectionAndLongPress(_ starter: DiagramProject) async throws {
+    private static func checkCanvasSelectionAndDoubleClick(_ starter: DiagramProject) async throws {
         var p=starter;p.diagram.layoutMode="manual";p.diagram.edgeRouting="straight";p.containers=[]
         var a=p.nodes[0],b=a,c=a;a.id="a";b.id="b";c.id="c"
         for node in [a,b,c] {try expect(!node.label.isEmpty,"Fixture labels")}
@@ -172,17 +172,17 @@ enum NativeProjectRegressionTests {
         try expect(selected == .edges(["ab","ac"]) && menu?.items.contains(where:{$0.title=="Наконечник у цели"}) == true,"Context actions must preserve and edit the edge group.")
         for (target,point) in [(DiagramSelection.edge("ab"),first),(.node("a"),canvas.screenPoint(for:.zero))] {
             edited=nil;canvas.update(diagram:p,layout:layout,selection:.project)
-            canvas.mouseDown(with:try event(.leftMouseDown,point,canvas,window))
+            canvas.mouseDown(with:try event(.leftMouseDown,point,canvas,window,clicks:2))
             for _ in 0..<30 { if edited != nil { break }; try await Task.sleep(for:.milliseconds(100)) }
-            try expect(edited==target,"Long press must edit \(target); selected=\(selected), edited=\(String(describing: edited)), point=\(point), route=\(canvas.edgePoints(for: "ab")).")
+            try expect(edited==target,"Double click must edit \(target); selected=\(selected), edited=\(String(describing: edited)), point=\(point), route=\(canvas.edgePoints(for: "ab")).")
             canvas.mouseUp(with:try event(.leftMouseUp,point,canvas,window))
         }
         canvas.update(diagram:p,layout:layout,selection:.edge("ab"))
-        edited=nil;canvas.mouseDown(with:try event(.leftMouseDown,first,canvas,window))
+        edited=nil;canvas.mouseDown(with:try event(.leftMouseDown,first,canvas,window,clicks:2))
         for _ in 0..<30 { if edited != nil { break }; try await Task.sleep(for:.milliseconds(100)) }
-        try expect(edited == .edge("ab"), "Holding a selected edge's route handle must edit text without adding a waypoint.")
+        try expect(edited == .edge("ab"), "Double clicking a selected edge's route handle must edit text without adding a waypoint.")
         canvas.mouseUp(with:try event(.leftMouseUp,first,canvas,window))
-        try expect(waypointCommits==0,"Holding a route handle must not create a waypoint.")
+        try expect(waypointCommits==0,"Double clicking a route handle must not create a waypoint.")
         edited=nil;canvas.mouseDown(with:try event(.leftMouseDown,first,canvas,window))
         let routeDrag=NSPoint(x:first.x+20,y:first.y+30)
         canvas.mouseDragged(with:try event(.leftMouseDragged,routeDrag,canvas,window))
@@ -192,10 +192,10 @@ enum NativeProjectRegressionTests {
         canvas.update(diagram:p,layout:layout,selection:.container("empty"))
         guard let frame=canvas.containerScreenFrame(for:"empty") else {throw Failure(message:"No empty frame")}
         let point=NSPoint(x:frame.midX,y:frame.midY)
-        edited=nil;canvas.mouseDown(with:try event(.leftMouseDown,point,canvas,window))
+        edited=nil;canvas.mouseDown(with:try event(.leftMouseDown,point,canvas,window,clicks:2))
         for _ in 0..<30 { if edited != nil { break }; try await Task.sleep(for:.milliseconds(100)) }
-        try expect(edited == .container("empty"),"Long press must edit a container.")
-        canvas.mouseUp(with:try event(.leftMouseUp,point,canvas,window));try expect(moves==0,"Long press must not move the container.")
+        try expect(edited == .container("empty"),"Double click must edit a container.")
+        canvas.mouseUp(with:try event(.leftMouseUp,point,canvas,window));try expect(moves==0,"Double click must not move the container.")
         edited=nil;canvas.mouseDown(with:try event(.leftMouseDown,point,canvas,window))
         let moved=NSPoint(x:point.x+30,y:point.y+20);canvas.mouseDragged(with:try event(.leftMouseDragged,moved,canvas,window));try await Task.sleep(for:.milliseconds(720))
         try expect(edited==nil,"Dragging must cancel delayed text editing.");canvas.mouseUp(with:try event(.leftMouseUp,moved,canvas,window))
