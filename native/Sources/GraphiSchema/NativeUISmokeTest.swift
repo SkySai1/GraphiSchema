@@ -1189,23 +1189,20 @@ enum NativeUISmokeTest {
               let action = export.action else { fail("PDF export menu action is missing.") }
         _ = NSApp.sendAction(action, to: export.target, from: export)
         RunLoop.main.run(until: Date().addingTimeInterval(0.15))
-        guard let alert = mainWindow.pendingPDFExportAlert,
-              let options = alert.accessoryView,
-              let alertContent = alert.window.contentView else {
-            fail("PDF export must create a settings alert before the save panel.")
+        guard let exportWindow = mainWindow.pdfExportWindowController?.window,
+              let options = exportWindow.contentView else {
+            fail("PDF export must open a preview and settings window before saving.")
         }
         options.layoutSubtreeIfNeeded()
         let page = findView(identifier: "pdf-page-format", in: options) as? NSPopUpButton
-        let helpWidth = findView(identifier: "pdf-page-size-help", in: options)?.frame.width ?? 0
         let legend = findView(identifier: "pdf-include-legend", in: options) as? NSButton
-        let cancel = findButton(title: "Отмена", in: alertContent)
-        guard options.frame.width >= 360, options.frame.height >= 100,
-              page?.itemArray.count == 3, helpWidth > 0, legend != nil, cancel != nil else {
-            fail("PDF options sheet must expose page format and legend controls. options=\(options.frame), pageItems=\(page?.itemArray.count ?? -1), help=\(helpWidth), legend=\(legend?.frame ?? .zero), cancel=\(cancel?.title ?? "missing").")
+        let preview = findView(identifier: "pdf-preview", in: options)
+        let save = findView(identifier: "pdf-export-save", in: options) as? NSButton
+        guard page?.itemArray.count == DiagramPDFSettings.formats.count,
+              legend != nil, preview != nil, save != nil else {
+            fail("PDF export must expose page format, legend, preview and an explicit save button.")
         }
-        perform(cancel!)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
-        if window.attachedSheet != nil { window.endSheet(alert.window, returnCode: .alertSecondButtonReturn) }
+        exportWindow.close()
     }
 
     private static func checkLongPressTextEditor(mainWindow: MainWindowController, root: NSView, nodeID: String) {

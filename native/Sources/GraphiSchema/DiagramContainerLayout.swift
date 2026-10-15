@@ -12,7 +12,7 @@ enum DiagramContainerLayout {
     static let minimumEmptyHeight: CGFloat = 36
 
     static func frames(containers: [DiagramContainer], members: [String: [CGRect]], emptyFrames: [String: CGRect],
-                       scale: CGFloat, paddingOverrides: [String: Double] = [:]) -> [String: CGRect] {
+                       scale: CGFloat, paddingOverrides: [String: Double] = [:], headerHeight: CGFloat = DiagramContainerLayout.headerHeight) -> [String: CGRect] {
         let byID = Dictionary(uniqueKeysWithValues: containers.map { ($0.id, $0) })
         var children: [String: [String]] = [:]
         for container in containers {

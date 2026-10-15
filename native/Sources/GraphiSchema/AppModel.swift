@@ -1270,6 +1270,29 @@ final class AppModel: ObservableObject {
         return (try? encode(diagram)) ?? Data()
     }
 
+    /// Render a canonical snapshot without registering/saving a project or creating a version.
+    func pdfExportSnapshot(relayout: Bool = false) async throws -> ProjectPreviewResponse {
+        guard activeProposal == nil, !jsonDraftIsDirty, !dotDraftIsDirty else {
+            throw NSError(domain: "GraphiSchema.PDF",code: 2,userInfo: [NSLocalizedDescriptionKey:
+                "Перед предпросмотром примените или отмените черновик кода и предложенные изменения."])
+        }
+        guard let current = diagram else { throw ClientError.invalidResponse }
+        let requestedWorkspace = workspace
+        var copy = current
+        if relayout {
+            copy.diagram.layoutMode = "auto"
+            for index in copy.nodes.indices { copy.nodes[index].x = nil; copy.nodes[index].y = nil }
+            for index in copy.edges.indices { copy.edges[index].waypoints = [] }
+        }
+        let preview: ProjectPreviewResponse = try await request("api/projects/preview",method: "POST",body: encode(copy),timeout: 45)
+        guard workspace == requestedWorkspace else { throw ClientError.workspaceChanged }
+        guard diagram == current else {
+            throw NSError(domain: "GraphiSchema.PDF",code: 3,userInfo: [NSLocalizedDescriptionKey:
+                "Схема изменилась во время подготовки. Нажмите «Обновить из текущей схемы»."])
+        }
+        return preview
+    }
+
     func exportPNG(scale: Double, background: String) async throws -> Data {
         guard let baseURL = backend.baseURL,
               var components = URLComponents(url: baseURL.appending(path: "api/export.png"), resolvingAgainstBaseURL: false)

@@ -34,15 +34,16 @@ enum ArrowGeometry {
     private static let epsilon: CGFloat = 1e-9
     private static let depths: [String: CGFloat] = ["normal": 8, "diamond": 8, "box": 6, "dot": 6, "tee": 0, "vee": 8, "crow": 8]
 
-    static func make(_ input: [NSPoint], head: String = "normal", tail: String = "none", lineWidth: CGFloat = 2) -> EdgeDrawingGeometry {
+    static func make(_ input: [NSPoint], head: String = "normal", tail: String = "none", lineWidth: CGFloat = 2,
+                     markerScale: CGFloat = 1) -> EdgeDrawingGeometry {
         let points = clean(input)
         guard points.count >= 2 else { return EdgeDrawingGeometry(shaft: points, head: nil, tail: nil) }
         let total = zip(points, points.dropFirst()).reduce(CGFloat.zero) { $0 + distance($1.0, $1.1) }
         let count = (head == "none" ? 0 : 1)+(tail == "none" ? 0 : 1)
         guard count > 0 else { return EdgeDrawingGeometry(shaft: points, head: nil, tail: nil) }
         let budget = total * (count == 2 ? 0.45 : 0.9)
-        let end = head == "none" ? nil : marker(points, kind: head, budget: budget, lineWidth: lineWidth)
-        let start = tail == "none" ? nil : marker(Array(points.reversed()), kind: tail, budget: budget, lineWidth: lineWidth)
+        let end = head == "none" ? nil : marker(points, kind: head, budget: budget, lineWidth: lineWidth, sizeScale: markerScale)
+        let start = tail == "none" ? nil : marker(Array(points.reversed()), kind: tail, budget: budget, lineWidth: lineWidth, sizeScale: markerScale)
         let endCut = end?.cut ?? 0, startCut = start?.cut ?? 0
         let withoutEnd = prefix(points, length: total-endCut)
         let middle = Array(prefix(Array(withoutEnd.reversed()), length: total-endCut-startCut).reversed())
@@ -51,13 +52,13 @@ enum ArrowGeometry {
         return EdgeDrawingGeometry(shaft: shaft, head: end?.marker, tail: start?.marker)
     }
 
-    private static func marker(_ points: [NSPoint], kind: String, budget: CGFloat, lineWidth: CGFloat) -> (marker: ArrowMarkerGeometry, cut: CGFloat)? {
+    private static func marker(_ points: [NSPoint], kind: String, budget: CGFloat, lineWidth: CGFloat, sizeScale: CGFloat) -> (marker: ArrowMarkerGeometry, cut: CGFloat)? {
         let tip = points[points.count-1], previous = points[points.count-2]
         let length = distance(tip, previous)
         let unit = NSPoint(x: (tip.x-previous.x)/length, y: (tip.y-previous.y)/length)
         let local = prefix(Array(points.reversed()), length: budget)
         func back(_ p: NSPoint) -> CGFloat { (tip.x-p.x)*unit.x+(tip.y-p.y)*unit.y }
-        let grow = max(1, lineWidth/2)
+        let grow = max(1, lineWidth/2)*max(0.1, sizeScale)
         let depth = (depths[kind] ?? 8)*grow, lead = max(4, lineWidth*2)
         let offset = min(depth+lead, (local.map(back).max() ?? 0)*0.9)
         let factor = offset/(depth+lead)

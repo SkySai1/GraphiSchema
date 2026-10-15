@@ -121,6 +121,7 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
     private var alignmentVertical: CGFloat?
     private var alignmentHorizontal: CGFloat?
     var exportBackground: String?
+    var pdfStyle: DiagramPDFCanvasStyle?
 
     var isGridVisible = true { didSet { needsDisplay = true } }
     var isReadOnly = false
@@ -386,6 +387,47 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
         zoom(by: factor, around: NSPoint(x: bounds.midX, y: bounds.midY))
     }
 
+    /// Build a vector scene at 72 pt/in. Page fitting happens once, outside the
+    /// canvas, so labels, strokes, arrowheads and containers keep their ratios.
+    func pdfSceneData() -> Data {
+        scale = 72; offset = .zero; shouldFitOnLayout = false
+        guard let diagram, let layout = diagramLayout else { return Data() }
+        var frame = NSRect.null
+        for node in diagram.nodes {
+            if let rect = nodeScreenRect(for: node.id) { frame = frame.union(rect) }
+        }
+        for rect in containerWorldRects(diagram: diagram, layout: layout, atScale: 72).values {
+            frame = frame.union(NSRect(x: rect.minX*72, y: rect.minY*72, width: rect.width*72, height: rect.height*72))
+        }
+        for edge in diagram.edges {
+            let points = edgePoints(for: edge.id).map { screenPoint(for: $0) }
+            for point in points { frame = frame.union(NSRect(x: point.x, y: point.y, width: 0.01, height: 0.01)) }
+            if let drawing = edgeDrawing(for: edge.id) {
+                for marker in [drawing.head, drawing.tail].compactMap({ $0 }) {
+                    frame = frame.union(NSRect(x: marker.tip.x-8*marker.scale, y: marker.tip.y-8*marker.scale,
+                                              width: 16*marker.scale, height: 16*marker.scale))
+                }
+            }
+            guard !edge.label.isEmpty else { continue }
+            let geometry = layout.edges.first { $0.id == edge.id }
+            let center = pdfStyle?.edgeLabels[edge.id]
+                ?? NSPoint(x: geometry?.labelX ?? 0, y: geometry?.labelY ?? 0)
+            let size = (edge.label as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: edge.style.effectiveFontSize, weight: .medium)])
+            frame = frame.union(NSRect(x: center.x*72-size.width/2-5, y: center.y*72-max(16,size.height+4)/2,
+                                      width: size.width+10, height: max(16,size.height+4)))
+        }
+        if frame.isNull || frame.isEmpty { frame = NSRect(x: 0, y: 0, width: 180, height: 120) }
+        let pen = max(diagram.nodes.map(\.style.penwidth).max() ?? 1,
+                      diagram.edges.map(\.style.penwidth).max() ?? 1,
+                      diagram.containers.map { $0.style.effectivePenwidth }.max() ?? 1)
+        frame = frame.insetBy(dx: -max(8, pen), dy: -max(8, pen))
+        offset = NSPoint(x: -frame.minX, y: -frame.minY)
+        setFrameSize(frame.size)
+        bounds = NSRect(origin: .zero, size: frame.size)
+        layoutSubtreeIfNeeded()
+        return dataWithPDF(inside: bounds)
+    }
+
     func fitToContent(minimumScale: CGFloat = 16, maximumScale: CGFloat = 220) {
         guard let diagram, let layout = diagramLayout, layout.width > 0, layout.height > 0, bounds.width > 1, bounds.height > 1 else {
             shouldFitOnLayout = true
@@ -536,7 +578,8 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
 
     private func drawing(_ edge: DiagramEdge, points: [NSPoint]) -> EdgeDrawingGeometry {
         ArrowGeometry.make(points, head: ["forward", "both"].contains(edge.direction) ? edge.style.arrowhead : "none",
-                           tail: edge.direction == "both" ? edge.style.arrowtail : "none", lineWidth: edgeLineWidth(edge))
+                           tail: edge.direction == "both" ? edge.style.arrowtail : "none", lineWidth: edgeLineWidth(edge),
+                           markerScale: pdfStyle?.arrowSize ?? 1)
     }
 
     var nodePositions: [LayoutNode] { diagramLayout?.nodes ?? [] }
@@ -1567,6 +1610,7 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
     }
 
     private func containerWorldRects(diagram: DiagramProject, layout: DiagramLayout, atScale: CGFloat? = nil) -> [String: NSRect] {
+        if let style = pdfStyle { return style.containerFrames }
         guard !diagram.containers.isEmpty else { return [:] }
         var members: [String: [NSRect]] = [:]
         for node in layout.nodes {
@@ -1587,7 +1631,8 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
                                               width: size.width, height: size.height)
         }
         return DiagramContainerLayout.frames(containers: diagram.containers, members: members, emptyFrames: emptyFrames,
-                                             scale: atScale ?? scale, paddingOverrides: containerPaddingPreview)
+                                             scale: atScale ?? scale, paddingOverrides: containerPaddingPreview,
+                                             headerHeight: pdfStyle?.containerHeaderHeight ?? DiagramContainerLayout.headerHeight)
     }
 
     private func containerScreenRect(_ id: String, diagram: DiagramProject, layout: DiagramLayout) -> NSRect? {
@@ -1639,12 +1684,15 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
             path.lineWidth = isDropTarget ? max(2.4, CGFloat(container.style.effectivePenwidth)) : CGFloat(container.style.effectivePenwidth)
             path.fill()
             path.stroke()
-            let titleFrame = DiagramContainerLayout.labelFrame(in: rect)
+            let titleFrame = pdfStyle.map {
+                NSRect(x: rect.minX+10, y: rect.maxY-6-($0.containerHeaderHeight-12),
+                       width: max(0, rect.width-20), height: $0.containerHeaderHeight-12)
+            } ?? DiagramContainerLayout.labelFrame(in: rect)
             NSGraphicsContext.saveGraphicsState()
             NSBezierPath(rect: titleFrame).addClip()
             let title = container.label.components(separatedBy: .newlines).joined(separator: " ")
             drawText(title, in: titleFrame, color: NSColor(hex: container.style.resolved(.text, theme: diagram.presentation.theme)),
-                     size: DiagramContainerLayout.fontSize, weight: .bold, alignment: .left)
+                     size: pdfStyle?.containerFontSize ?? DiagramContainerLayout.fontSize, weight: .bold, alignment: .left)
             NSGraphicsContext.restoreGraphicsState()
             if showSelection && selection == .container(container.id) {
                 let handleRect = NSRect(x: rect.maxX - 5, y: rect.maxY - 5, width: 10, height: 10)
@@ -1676,9 +1724,10 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
             path.lineWidth = edgeLineWidth(edge)
             path.lineCapStyle = .round
             path.lineJoinStyle = .round
+            let dashScale = pdfStyle == nil ? 1 : CGFloat(edge.style.penwidth)/1.5
             switch edge.style.lineStyle {
-            case "dashed": setDash([6, 4], on: path)
-            case "dotted": setDash([1.5, 3], on: path)
+            case "dashed": setDash([6*dashScale, 4*dashScale], on: path)
+            case "dotted": setDash([1.5*dashScale, 3*dashScale], on: path)
             default: break
             }
             NSColor(hex: edge.style.resolved(.stroke, theme: diagram.presentation.theme)).setStroke()
@@ -1713,12 +1762,19 @@ final class DiagramCanvasView: NSView, NSMenuItemValidation {
                     || dragPreview[edge.source] != nil || dragPreview[edge.target] != nil || nodeSizePreview[edge.source] != nil || nodeSizePreview[edge.target] != nil
                 var labelPoint = NSPoint(x: x, y: y)
                 if followsPath { labelPoint = routeMidpoint(points.map { worldPoint(for: $0) }); labelPoint.y += 0.15 }
+                if let position = pdfStyle?.edgeLabels[edge.id] { labelPoint = position }
                 let center = screenPoint(for: labelPoint)
                 let fontSize = CGFloat(edge.style.effectiveFontSize)
                 let textSize = (edge.label as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: fontSize, weight: .medium)])
                 let labelHeight = max(16, textSize.height + 4)
                 let rect = NSRect(x: center.x - textSize.width / 2 - 5, y: center.y - labelHeight / 2,
                                   width: textSize.width + 10, height: labelHeight)
+                if let anchor = pdfStyle?.labelLeaders[edge.id] {
+                    let leader = NSBezierPath(); leader.lineWidth = 0.5
+                    leader.move(to: screenPoint(for: anchor)); leader.line(to: center)
+                    NSColor(hex: edge.style.resolved(.stroke, theme: "light")).withAlphaComponent(0.45).setStroke()
+                    leader.stroke()
+                }
                 if !edge.style.effectiveLabelBackgroundTransparent {
                     let pill = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
                     NSColor(hex: diagram.presentation.theme == "dark" ? "#352C43" : "#FFFFFF").setFill()

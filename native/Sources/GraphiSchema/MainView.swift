@@ -34,7 +34,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
     private var projectManager: ProjectManagerWindowController?
     private var branchManager: BranchManagerWindowController?
     private var settingsController: ApplicationSettingsWindowController?
-    private(set) var pendingPDFExportAlert: NSAlert?
+    private(set) var pdfExportWindowController: PDFExportWindowController?
     private let titleField = NSTextField(string: "")
     private let statusLabel = NSTextField(labelWithString: "Подключение…")
     private var undoButton: NSButton?
@@ -95,7 +95,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         guard var active = notification.object as? NSWindow else { return }
         while let parent = active.sheetParent { active = parent }
         let owned = [window, historyWindowController?.window, branchManager?.window, projectManager?.window,
-                     settingsController?.window, styleWindowController?.window, nodeTextEditorController?.window,
+                     settingsController?.window, styleWindowController?.window, pdfExportWindowController?.window, nodeTextEditorController?.window,
                      elementTextEditorController?.window, ollamaWindowController?.window]
             + colorEditors.values.map { $0.window }
         let context = (active.windowController as? ProjectThemedWindow)?.projectModel
@@ -110,6 +110,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         displayedWorkspace = model.workspace
         historyWindowController?.close(); historyWindowController = nil
         branchManager?.close(); branchManager = nil
+        pdfExportWindowController?.close(); pdfExportWindowController = nil
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -117,6 +118,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
         historyWindowController?.close()
         branchManager?.close()
         styleWindowController?.close()
+        pdfExportWindowController?.close()
         for editor in colorEditors.values { editor.close() }
         nodeTextEditorController?.close()
         elementTextEditorController?.close()
@@ -409,6 +411,7 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
             historyWindowController?.close(); historyWindowController = nil
             branchManager?.close(); branchManager = nil
             styleWindowController?.close(); styleWindowController = nil; styleInspector = nil
+            pdfExportWindowController?.close(); pdfExportWindowController = nil
             for controller in colorEditors.values { controller.close() }; colorEditors.removeAll()
             nodeTextEditorController?.close(); nodeTextEditorController = nil
             elementTextEditorController?.close(); elementTextEditorController = nil
@@ -1102,92 +1105,18 @@ final class MainWindowController: NSWindowController, NSSplitViewDelegate, NSMen
     }
 
     private func exportPDF() {
-        guard model.activeProposal == nil else {
-            showAlert("Сначала примените или отмените предложение перед экспортом.")
-            return
-        }
-        let pagePopup = NSPopUpButton(frame: .zero, pullsDown: false)
-        pagePopup.identifier = NSUserInterfaceItemIdentifier("pdf-page-format")
-        for (value, title) in [("a4-landscape", "A4 · альбомная"), ("a4-portrait", "A4 · книжная"), ("a3-landscape", "A3 · альбомная")] {
-            pagePopup.addItem(withTitle: title)
-            pagePopup.lastItem?.representedObject = value
-        }
-        let pageRow = NSStackView(views: [
-            HelpFieldLabel("Размер страницы", explanation: "Формат страницы PDF. Диаграмма автоматически масштабируется и размещается в доступной области.", identifier: "pdf-page-size-help"),
-            pagePopup,
-        ])
-        pageRow.orientation = .vertical
-        pageRow.alignment = .leading
-        pageRow.spacing = 4
-        pagePopup.widthAnchor.constraint(equalToConstant: 235).isActive = true
-        pagePopup.selectItem(at: 0)
-
-        let legend = NSButton(checkboxWithTitle: "Добавить условные обозначения", target: nil, action: nil)
-        legend.identifier = NSUserInterfaceItemIdentifier("pdf-include-legend")
-        legend.state = .on
-        let legendRow = NSStackView(views: [legend, HelpIconButton(
-            "Формирует блок обозначений по типам компонентов и стилям связей, присутствующим в текущей схеме.",
-            identifier: "pdf-legend-help")])
-        legendRow.orientation = .horizontal
-        legendRow.alignment = .centerY
-        legendRow.spacing = 5
-        let options = NSStackView(views: [pageRow, legendRow])
-        options.orientation = .vertical
-        options.alignment = .leading
-        options.spacing = 12
-        options.widthAnchor.constraint(greaterThanOrEqualToConstant: 360).isActive = true
-        options.heightAnchor.constraint(greaterThanOrEqualToConstant: 104).isActive = true
-        options.layoutSubtreeIfNeeded()
-        let accessorySize = options.fittingSize
-        options.frame = NSRect(x: 0, y: 0,
-                               width: max(360, accessorySize.width),
-                               height: max(104, accessorySize.height))
-        options.layoutSubtreeIfNeeded()
-
-        let alert = NSAlert()
-        alert.window.appearance = NSApp.appearance
-        alert.messageText = "Экспорт диаграммы в PDF"
-        alert.informativeText = "PDF всегда создаётся в светлом оформлении на белом фоне. Диаграмма будет вписана в выбранный формат страницы."
-        alert.accessoryView = options
-        alert.addButton(withTitle: "Продолжить")
-        alert.addButton(withTitle: "Отмена")
-        pendingPDFExportAlert = alert
-        alert.beginSheetModal(for: window!) { [weak self] response in
-            guard let self else { return }
-            self.pendingPDFExportAlert = nil
-            guard response == .alertFirstButtonReturn else { return }
-            let page = pagePopup.selectedItem?.representedObject as? String ?? "a4-landscape"
-            let pageSize: NSSize = switch page {
-            case "a4-portrait": NSSize(width: 595, height: 842)
-            case "a3-landscape": NSSize(width: 1191, height: 842)
-            default: NSSize(width: 842, height: 595)
+        guard model.diagram != nil else { return }
+        let controller: PDFExportWindowController
+        if let existing = pdfExportWindowController { controller = existing }
+        else {
+            controller = PDFExportWindowController(model: model) { [weak self] url in
+                self?.model.status = "PDF сохранён · \(url.lastPathComponent)"
+                self?.refreshHeader()
             }
-            let panel = NSSavePanel()
-            panel.appearance = NSApp.appearance
-            panel.allowedContentTypes = [.pdf]
-            let projectTitle = self.model.diagram?.project.title ?? ""
-            let safeTitle = projectTitle.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
-            panel.nameFieldStringValue = "\(safeTitle.isEmpty ? "graphischema-diagram" : safeTitle).pdf"
-            panel.beginSheetModal(for: self.window!) { saveResponse in
-                guard saveResponse == .OK, let url = panel.url else { return }
-                Task { @MainActor in
-                    do {
-                        if self.model.jsonDraftIsDirty { try await self.model.applyJSONDraft() }
-                        guard let project = self.model.diagram, let layout = self.model.layout else {
-                            throw NSError(domain: "GraphiSchema.PDF", code: 1,
-                                          userInfo: [NSLocalizedDescriptionKey: "Не удалось получить компоновку диаграммы для PDF."])
-                        }
-                        let pageView = DiagramPDFExportView(project: project, layout: layout, pageSize: pageSize,
-                                                            includeLegend: legend.state == .on)
-                        pageView.layoutSubtreeIfNeeded()
-                        let data = pageView.dataWithPDF(inside: pageView.bounds)
-                        try data.write(to: url, options: .atomic)
-                        self.model.status = "PDF сохранён"
-                        self.refreshAll()
-                    } catch { self.showAlert("Не удалось экспортировать PDF: \(error.localizedDescription)") }
-                }
-            }
+            pdfExportWindowController = controller
         }
+        controller.showNearCursor(self)
+        controller.reloadSnapshot()
     }
 
     private func showHistory() {
@@ -2863,7 +2792,7 @@ private final class InspectorView: NSView {
                     .map { ($0.id, $0.label) }
                 addPopup("Родитель", value: item.parentId ?? "", choices: parents) { value in model.editContainer(id) { $0.parentId = value.isEmpty ? nil : value } }
                 addText("Отступ, pt", value: String(format: "%.1f", item.padding),
-                        tooltip: "Отступ рамки от содержимого в пунктах (4–48). Для названия дополнительно резервируется отдельная полоса 28 pt. Размер названия всегда 11 pt и не меняется при вписывании схемы или экспорте PDF.") { value in
+                        tooltip: "Отступ рамки от содержимого в пунктах (4–48). На холсте название имеет размер 11 pt и отдельную полосу 28 pt. В окне PDF-экспорта размер и отступы можно переопределить для экспортной копии; вся сцена затем масштабируется пропорционально.") { value in
                     guard let padding = Double(value) else { return }
                     model.editContainer(id) { $0.padding = min(48, max(4, padding)) }
                 }
@@ -3212,7 +3141,7 @@ private final class InspectorView: NSView {
     }
 }
 
-private final class ControlAction: NSObject, NSTextFieldDelegate {
+final class ControlAction: NSObject, NSTextFieldDelegate {
     private let handler: (NSControl) -> Void
     var onEditingBegin: ((NSTextField) -> Void)?
     var onTextChange: ((NSTextField) -> Void)?

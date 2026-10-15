@@ -82,7 +82,7 @@ enum NativeBorderRegressionTests {
                     NSGraphicsContext.saveGraphicsState(); NSGraphicsContext.current = context
                     rep.draw(in: pdf.bounds)
                     NSGraphicsContext.restoreGraphicsState()
-                    try observe(bitmap, pointsPerPixel: 1, style: lineStyle, width: width, label: "pdf", folder: folder)
+                    try observe(bitmap, pointsPerPixel: 1/pdf.diagramScale, style: lineStyle, width: width, label: "pdf", folder: folder)
                     if width == 10 { try data.write(to: folder.appendingPathComponent("\(lineStyle)-10pt.pdf")) }
                 }
             }
