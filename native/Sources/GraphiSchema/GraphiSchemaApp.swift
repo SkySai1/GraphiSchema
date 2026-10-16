@@ -2,6 +2,45 @@ import AppKit
 import Darwin
 
 @MainActor
+private final class BackendStartupWindowController: NSWindowController {
+    init() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 150),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "GraphiSchema"
+        window.isReleasedWhenClosed = false
+
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 150))
+        let spinner = NSProgressIndicator(frame: NSRect(x: 30, y: 66, width: 24, height: 24))
+        spinner.style = .spinning
+        spinner.controlSize = .regular
+        spinner.startAnimation(nil)
+
+        let heading = NSTextField(labelWithString: "Запускаем локальный backend…")
+        heading.font = .systemFont(ofSize: 14, weight: .semibold)
+        heading.frame = NSRect(x: 68, y: 78, width: 320, height: 22)
+
+        let detail = NSTextField(wrappingLabelWithString: "Проверяем готовность сервера и загружаем проект.")
+        detail.font = .systemFont(ofSize: 12)
+        detail.textColor = .secondaryLabelColor
+        detail.frame = NSRect(x: 68, y: 48, width: 320, height: 30)
+
+        content.addSubview(spinner)
+        content.addSubview(heading)
+        content.addSubview(detail)
+        window.contentView = content
+
+        super.init(window: window)
+        window.center()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+}
+
+@MainActor
 final class AppLifecycle: NSObject, NSApplicationDelegate {
     private let backend = BackendService()
     private var editors: [(AppModel, MainWindowController)] = []
@@ -23,6 +62,7 @@ final class AppLifecycle: NSObject, NSApplicationDelegate {
         let model = AppModel(backend: backend, workspace: target, blankCanvas: blankCanvas)
         let controller = MainWindowController(model: model)
         editors.append((model, controller))
+        let startupWindow = backend.isReady ? nil : BackendStartupWindowController()
         controller.onOpenBlankCanvas = { [weak self] in self?.openProjectWindow(blankCanvas: true) }
         controller.onOpenWorkspace = { [weak self, weak controller, weak model] workspace, newWindow in
             guard let self else { return }
@@ -34,10 +74,18 @@ final class AppLifecycle: NSObject, NSApplicationDelegate {
                 }
             }
         }
-        controller.showWindow(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        if let startupWindow {
+            startupWindow.showWindow(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        } else {
+            controller.showWindow(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
         Task {
             await model.bootstrap(fallbackToBlank: fallbackToBlank)
+            startupWindow?.close()
+            controller.showWindow(nil)
+            NSApp.activate(ignoringOtherApps: true)
             controller.refreshAll()
             await controller.loadStarterTemplateIfNeeded()
             if ProcessInfo.processInfo.arguments.contains("--startup-smoke-test") {
@@ -47,7 +95,7 @@ final class AppLifecycle: NSObject, NSApplicationDelegate {
                     : "Native startup smoke test failed: \(model.status), \(model.backend.status), \(model.alertMessage ?? "no details")\n"
                 (passed ? FileHandle.standardOutput : FileHandle.standardError).write(Data(message.utf8))
                 try? await model.saveNow()
-                backend.stop()
+                await backend.shutdown()
                 if !passed { exit(EXIT_FAILURE) }
                 NSApp.terminate(nil)
             }
@@ -74,6 +122,7 @@ final class AppLifecycle: NSObject, NSApplicationDelegate {
         Task {
             do {
                 for (model, _) in editors { try await model.saveNow() }
+                await backend.shutdown()
                 NSApp.reply(toApplicationShouldTerminate: true)
             } catch {
                 isTerminating = false

@@ -8,9 +8,12 @@ final class BackendService: ObservableObject {
     private(set) var baseURL: URL?
 
     private let preferredPort = 8765
+    private let lifecycleClientID = UUID().uuidString.lowercased()
+    private let keepaliveIntervalSeconds: Int64 = 20
     private let isStartupSmoke = ProcessInfo.processInfo.arguments.contains("--startup-smoke-test")
     private let isIsolatedTest = ProcessInfo.processInfo.arguments.contains { $0.hasSuffix("-test") }
     private var process: Process?
+    private var keepaliveTask: Task<Void, Never>?
     private var expectedDataDirectory: URL?
     private(set) var projectRoot: URL?
 
@@ -37,10 +40,9 @@ final class BackendService: ObservableObject {
         expectedDataDirectory = SettingsStore.shared.directory.appendingPathComponent("projects", isDirectory: true)
         let preferredAddress = URL(string: "http://127.0.0.1:\(preferredPort)")!
 
-        if !isIsolatedTest, await respondsToHealthCheck(at: preferredAddress) {
-            baseURL = preferredAddress
-            isReady = true
-            status = "Backend готов"
+        if !isIsolatedTest, !isStartupSmoke,
+           await respondsToHealthCheck(at: preferredAddress),
+           await didConnect(to: preferredAddress) {
             return
         }
         guard let port = findFreePort(), let address = URL(string: "http://127.0.0.1:\(port)") else {
@@ -72,8 +74,8 @@ final class BackendService: ObservableObject {
             server.executableURL = uv
             server.arguments = [
                 "run", "--project", root.path,
-                "python", "-m", "uvicorn", "graphischema.api:app",
-                "--app-dir", "backend", "--host", "127.0.0.1", "--port", String(port),
+                "python", "-m", "graphischema.server",
+                "--host", "127.0.0.1", "--port", String(port),
             ]
             server.currentDirectoryURL = root
             var environmentVariables = ProcessInfo.processInfo.environment
@@ -82,6 +84,12 @@ final class BackendService: ObservableObject {
             environmentVariables["UV_PROJECT_ENVIRONMENT"] = environment.path
             environmentVariables["GRAPHI_SCHEMA_DATA_DIR"] = dataDirectory.path
             environmentVariables["GRAPHI_SCHEMA_CONFIG_DIR"] = SettingsStore.shared.directory.path
+            let backendPath = root.appendingPathComponent("backend", isDirectory: true).path
+            let existingPythonPath = environmentVariables["PYTHONPATH"]
+            environmentVariables["PYTHONPATH"] = [backendPath, existingPythonPath]
+                .compactMap { $0 }
+                .filter { !$0.isEmpty }
+                .joined(separator: ":")
             if isIsolatedTest { environmentVariables["GRAPHI_SCHEMA_DISABLE_MIGRATION"] = "1" }
             environmentVariables["PYTHONDONTWRITEBYTECODE"] = "1"
             server.environment = environmentVariables
@@ -94,9 +102,7 @@ final class BackendService: ObservableObject {
             process = server
 
             for _ in 0..<60 {
-                if await respondsToHealthCheck(at: address) {
-                    isReady = true
-                    status = "Backend готов"
+                if await respondsToHealthCheck(at: address), await didConnect(to: address) {
                     return
                 }
                 try? await Task.sleep(for: .milliseconds(200))
@@ -108,7 +114,88 @@ final class BackendService: ObservableObject {
         }
     }
 
+    private func didConnect(to address: URL) async -> Bool {
+        baseURL = address
+        guard await sendLifecycleRequest("api/lifecycle/keepalive") != nil else {
+            baseURL = nil
+            return false
+        }
+        isReady = true
+        status = "Backend готов"
+        startKeepalive()
+        return true
+    }
+
+    private func startKeepalive() {
+        keepaliveTask?.cancel()
+        keepaliveTask = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(self.keepaliveIntervalSeconds))
+                guard !Task.isCancelled else { return }
+                _ = await self.sendLifecycleRequest("api/lifecycle/keepalive")
+            }
+        }
+    }
+
+    private func sendLifecycleRequest(_ path: String) async -> [String: Any]? {
+        guard let baseURL else { return nil }
+        do {
+            var request = URLRequest(url: baseURL.appending(path: path), cachePolicy: .reloadIgnoringLocalCacheData)
+            request.httpMethod = "POST"
+            request.timeoutInterval = 3
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: ["client_id": lifecycleClientID])
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200..<300).contains(httpResponse.statusCode),
+                  let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return nil }
+            return payload
+        } catch {
+            return nil
+        }
+    }
+
+    func shutdown() async {
+        if let keepaliveTask {
+            keepaliveTask.cancel()
+            await keepaliveTask.value
+        }
+        keepaliveTask = nil
+
+        let release = isReady ? await sendLifecycleRequest("api/lifecycle/release") : nil
+        let activeClients = release?["activeClients"] as? Int
+        let shouldWaitForServer = activeClients == 0 || release == nil
+
+        if let process {
+            if process.isRunning && shouldWaitForServer {
+                // Uvicorn is configured to drain active requests for up to ten seconds.
+                for _ in 0..<120 {
+                    if !process.isRunning { break }
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+                if process.isRunning {
+                    process.terminate()
+                    for _ in 0..<20 {
+                        if !process.isRunning { break }
+                        try? await Task.sleep(for: .milliseconds(100))
+                    }
+                }
+            }
+            // If another frontend still holds a lease, let the backend outlive
+            // this app process. It will exit after the final lease is released.
+            self.process = nil
+        }
+
+        isReady = false
+        baseURL = nil
+        status = "Backend остановлен"
+    }
+
     func stop() {
+        keepaliveTask?.cancel()
+        keepaliveTask = nil
         if let process, process.isRunning {
             process.terminate()
         }
@@ -143,6 +230,7 @@ final class BackendService: ObservableObject {
                 && payload["container_headers"] == "fixed_11pt_v1"
                 && payload["workspaces"] == "projects_branches_v4"
                 && payload["prompt_templates"] == "jinja_v1"
+                && payload["lifecycle"] == "leases_v1"
                 && payload["storage_scope"] == "config"
                 && Self.matchesDataDirectory(payload["data_directory"], expected: expectedDataDirectory ?? SettingsStore.shared.directory.appendingPathComponent("projects"))
         } catch {

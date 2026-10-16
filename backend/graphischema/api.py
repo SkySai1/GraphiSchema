@@ -35,6 +35,11 @@ from .storage import ProjectStore, RevisionConflict, VersionNotFound, ProjectNot
 from .paths import data_directory
 from .validation import validate_diagram
 from .prompt_templates import DEFAULT_VARIABLES, PromptPreviewRequest, PromptTemplateError, render_system_prompt
+from .lifecycle import (
+    BackendLifecycle,
+    IDLE_CHECK_INTERVAL_SECONDS,
+    request_server_shutdown,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -54,17 +59,31 @@ async def cleanup_project_trash():
 @asynccontextmanager
 async def lifespan(_app):
     await cleanup_project_trash()
+    lifecycle = BackendLifecycle()
+    _app.state.backend_lifecycle = lifecycle
+
     async def sweep():
         while True:
             await asyncio.sleep(TRASH_SWEEP_INTERVAL_SECONDS)
             await cleanup_project_trash()
-    task = asyncio.create_task(sweep())
+
+    async def watch_frontend_leases():
+        while True:
+            await asyncio.sleep(IDLE_CHECK_INTERVAL_SECONDS)
+            if lifecycle.should_shutdown():
+                logging.getLogger(__name__).info("Нет активных frontend-клиентов; завершаю backend.")
+                request_server_shutdown()
+                return
+
+    tasks = [asyncio.create_task(sweep()), asyncio.create_task(watch_frontend_leases())]
     try:
         yield
     finally:
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            with suppress(asyncio.CancelledError):
+                await task
 
 
 app = FastAPI(title="GraphiSchema", version="0.1.0", description="Локальный редактор архитектурных диаграмм", lifespan=lifespan)
@@ -121,9 +140,35 @@ def health() -> dict[str, str]:
         "container_headers": "fixed_11pt_v1",
         "workspaces": "projects_branches_v4",
         "prompt_templates": "jinja_v1",
+        "lifecycle": "leases_v1",
         "storage_scope": storage_scope,
         "data_directory": str(STORE.data_dir.resolve()),
     }
+
+
+class BackendLeaseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    client_id: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9._-]+$")
+
+
+@app.post("/api/lifecycle/keepalive")
+def keepalive(request: Request, lease: BackendLeaseRequest) -> dict[str, Any]:
+    lifecycle = getattr(request.app.state, "backend_lifecycle", None)
+    if lifecycle is None:
+        raise HTTPException(status_code=503, detail="Lifecycle backend недоступен.")
+    active_clients = lifecycle.keepalive(lease.client_id)
+    if active_clients is None:
+        raise HTTPException(status_code=503, detail="Backend уже завершает работу.")
+    return {"activeClients": active_clients, "leaseSeconds": 60}
+
+
+@app.post("/api/lifecycle/release")
+def release_frontend(request: Request, lease: BackendLeaseRequest) -> dict[str, Any]:
+    lifecycle = getattr(request.app.state, "backend_lifecycle", None)
+    if lifecycle is None:
+        raise HTTPException(status_code=503, detail="Lifecycle backend недоступен.")
+    active_clients, shutdown_scheduled = lifecycle.release(lease.client_id)
+    return {"activeClients": active_clients, "shutdownScheduled": shutdown_scheduled}
 
 
 @app.get("/api/diagram")
